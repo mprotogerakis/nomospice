@@ -10,7 +10,8 @@ export type Tool =
   | { k: "delete" };
 
 export type Dialog =
-  | { k: "edit"; index: number }
+  /** raw: a directive as plain text, even when a form could edit it */
+  | { k: "edit"; index: number; raw?: boolean }
   | { k: "new"; item: Item; at?: [number, number] }
   | { k: "sim" }
   /** `replace`: choose a model for that part instead of placing a new one */

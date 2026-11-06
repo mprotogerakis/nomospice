@@ -1,4 +1,7 @@
 import type { Item, Shape, SymbolDef } from "./types";
+import { si } from "./spice";
+
+export { si }; // SI formatting lives with the other number helpers
 
 export const GRID = 16;
 export type Pt = [number, number];
@@ -198,11 +201,3 @@ export const vexpr = (net: string) => `v("${net}")`;
 /** LTspice-style label for a current probe (the expression comes from the backend: Netlist.probes). */
 export const currentLabel = (inst: string) => `${{ q: "Ic", m: "Id", j: "Id" }[inst[0]?.toLowerCase()] ?? "I"}(${inst})`;
 
-/** SI formatting for readouts: 1.234m, 4.7k ... */
-export function si(v: number, unit = "", digits = 4): string {
-  if (!isFinite(v)) return String(v);
-  if (v === 0) return `0${unit}`;
-  const p = ["f", "p", "n", "µ", "m", "", "k", "M", "G", "T"];
-  const e = Math.max(-5, Math.min(4, Math.floor(Math.log10(Math.abs(v)) / 3)));
-  return `${+(v / 10 ** (3 * e)).toPrecision(digits)}${p[e + 5]}${unit}`;
-}

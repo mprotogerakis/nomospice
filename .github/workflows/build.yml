@@ -46,6 +46,7 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec tsc --noEmit
+      - run: node scripts/spice-check.ts
       - name: Rust tests (netlister, ngspice FFI, MCP, git)
         working-directory: src-tauri
         run: cargo test

@@ -13,6 +13,10 @@ files — with a modern UI, ngspice as the engine, a Rust core and a React front
   checked against 2,321 LTspice example files). Symbols from a local LTspice install are used for
   parts nomospice does not ship. LTspice-only syntax is translated or reported (`.tran 1m`, `SINE`,
   `Rser=`/`Lser=`/`Rpar=`/`Cpar=`, diode `N=`, `ako:` models, `MISC\JUMPER`, `.step` …).
+- **Forms instead of syntax**: sources (sine, pulse, exp, FM, PWL with a waveform preview, AC, Rser/Cpar),
+  every analysis, `.param`, `.model` (parameters explained), `.meas`, `.ic`, `.temp`, `.include` are edited
+  in forms that show the SPICE text they write; number fields show how SPICE reads them and catch
+  `1M` (milli, not mega) and `10F` (femto). Typing SPICE directly still works everywhere.
 - **Analyses**: `.tran`, `.ac` (Bode: magnitude + phase panes), `.dc` (nested sweeps as curve
   families), `.op`, `.noise` (spectrum + totals), `.tf`, `.pz`, `.sens`; Live mode re-runs on every edit.
 - **Waveforms** (uPlot): one pane per unit, synced zoom, cursors A/B with Δ and 1/Δx, expressions in

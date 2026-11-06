@@ -1,0 +1,62 @@
+// Self-check of src/spice.ts (the form editors' SPICE parsing/formatting): node scripts/spice-check.ts
+import assert from "node:assert/strict";
+import {
+  formatAnalysis, formatIc, formatInclude, formatMeas, formatModel, formatParams, formatSource, numInfo, parseAnalysis,
+  parseIc, parseInclude, parseMeas, parseModel, parseParams, parseSource, sample, spiceNum, directiveKind,
+} from "../src/spice.ts";
+
+// numbers and the classic pitfalls
+assert.equal(spiceNum("4.7k"), 4700);
+assert.equal(spiceNum("1Meg"), 1e6);
+assert.equal(spiceNum("10uF"), 10e-6);
+assert.equal(spiceNum("1MHz"), 1e-3); // SPICE reads M as milli
+assert.equal(spiceNum("{R*2}"), null);
+assert.match(numInfo("1MHz", "Hz")!.warn!, /milli/);
+assert.equal(numInfo("1Meg", "Hz")!.warn, undefined);
+assert.match(numInfo("10F", "F")!.warn!, /femto/);
+assert.match(numInfo("abc!")!.warn!, /not a number/);
+
+// sources: LTspice's three attributes in, the same out
+const s = parseSource("SINE(0 10m 1k)", "AC 1", "Rser=50");
+assert.deepEqual([s.func, s.args, s.acMag, s.rser], ["SINE", ["0", "10m", "1k"], "1", "50"]);
+assert.deepEqual(formatSource(s), { Value: "SINE(0 10m 1k)", Value2: "AC 1", SpiceLine: "Rser=50" });
+assert.deepEqual(formatSource(parseSource("SINE(0 10m 1k) AC 1")), { Value: "SINE(0 10m 1k)", Value2: "AC 1", SpiceLine: "" });
+assert.deepEqual(formatSource(parseSource("AC 1")), { Value: "AC 1", Value2: "", SpiceLine: "" });
+assert.deepEqual(formatSource(parseSource("5")), { Value: "5", Value2: "", SpiceLine: "" });
+// a gap is filled with the default, trailing blanks are dropped; unknown parts survive
+const p = parseSource("PULSE(0 5) foo=1");
+p.args[5] = "2m";
+assert.equal(formatSource(p).Value, "PULSE(0 5 0 1n 1n 2m)");
+assert.equal(formatSource(p).SpiceLine, "foo=1");
+// preview: a 1 kHz sine of amplitude 1 peaks near 1
+const w = sample(parseSource("SINE(0 1 1k)"))!;
+assert.ok(Math.abs(Math.max(...w.map(([, y]) => y)) - 1) < 0.01);
+assert.equal(sample(parseSource("SINE(0 {A} 1k)")), null);
+
+// analyses round-trip
+for (const l of [".tran 1m", ".tran 0 5m 0 1u uic", ".ac dec 100 10 1Meg", ".dc V1 0 5 10m V2 0 3 1", ".noise V(out) V1 dec 10 10 1Meg",
+  ".tf V(out,in) V1", ".tf I(V2) V1", ".pz in 0 out 0 vol pz", ".sens V(out)", ".sens I(V1) ac dec 10 10 1Meg", ".op"]) {
+  const { kind, f } = parseAnalysis(l);
+  assert.equal(formatAnalysis(kind, f), l, l);
+}
+assert.equal(formatAnalysis("tran", { ...parseAnalysis(".tran 1m startup").f }), ".tran 1m startup"); // LTspice options kept
+
+// directives
+assert.deepEqual(parseParams(".param R = 1k C={1/(2*pi*R*f)}"), [["R", "1k"], ["C", "{1/(2*pi*R*f)}"]]);
+assert.equal(formatParams([["R", "1k"], ["", ""]]), ".param R=1k");
+assert.deepEqual(parseIc(".ic V(out)=1 v(n2) = 0"), [["out", "1"], ["n2", "0"]]);
+assert.equal(formatIc([["out", "1"]]), ".ic V(out)=1");
+assert.deepEqual(parseInclude('.lib "my lib.lib" fast'), { lib: true, path: "my lib.lib", section: "fast" });
+assert.equal(formatInclude(false, "models/x.mod", ""), '.include "models/x.mod"');
+const m = parseModel(".model D1 D(Is=1n N = 1.8)")!;
+assert.deepEqual(m, { name: "D1", type: "D", params: [["Is", "1n"], ["N", "1.8"]] });
+assert.equal(formatModel(m.name, m.type, m.params), ".model D1 D(IS=1n N=1.8)");
+assert.equal(parseModel(".model X VDMOS(Rd=1)"), null); // not in the form: edited as text
+for (const l of [".meas tran vavg AVG V(out) FROM=1m TO=2m", ".meas ac f3db WHEN V(out)=0.707 FALL=1", ".meas tran v1m FIND V(out) AT=1m",
+  ".meas tran tpd TRIG V(in) VAL=0.5 RISE=1 TARG V(out) VAL=0.5 FALL=1"]) {
+  assert.equal(formatMeas(parseMeas(l)!), l, l);
+}
+assert.equal(directiveKind(".param a=1"), "param");
+assert.equal(directiveKind(".param a=1\n.param b=2"), "text");
+assert.equal(directiveKind(".meas tran x DERIV V(out) AT=1m"), "text");
+console.log("spice-check: ok");

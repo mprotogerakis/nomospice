@@ -7,58 +7,15 @@ import { addTrace, commit, loadSymbols, placePart, placeSymbol, refreshLibrarySy
 import { defOf, vexpr } from "./geom";
 import { Button } from "./ui/button";
 import { FIELD_BASE, FIELD_FOCUS } from "./ui/focus";
+import { closeDialog, Field, FIELD, Modal, numHelp, TextField } from "./ui/dialog";
+import { SourceEditor } from "./SourceEditor";
+import { SimDialog } from "./SimDialog";
+import { DirectiveDialog } from "./DirectiveDialog";
+import { ANALYSIS, tokens } from "./spice";
 import { cn, keys } from "@/lib/utils";
 import thirdParty from "./third-party.json";
 
-const close = () => useS.setState({ dialog: null });
-const FIELD = cn(FIELD_BASE, FIELD_FOCUS, "h-[26px] w-full px-2 font-mono");
-
-function Modal({ title, children, onSubmit, wide, ok = "OK", cancel = true }: { title: string; children: React.ReactNode; onSubmit: () => void; wide?: boolean | "xl"; ok?: string; cancel?: boolean }) {
-  const ref = useRef<HTMLDialogElement>(null);
-  useEffect(() => {
-    const d = ref.current!;
-    d.showModal();
-    // React runs autoFocus while the dialog is still closed (no effect), and showModal() then
-    // focuses the first control: focus the intended field now, text selected for overwriting
-    const f = d.querySelector<HTMLElement>("[data-autofocus]") ?? d.querySelector<HTMLElement>("button[type=submit]");
-    f?.focus();
-    if (f instanceof HTMLInputElement) f.select();
-  }, []);
-  return (
-    <dialog
-      ref={ref}
-      onClose={close}
-      className={cn("m-auto rounded-float border border-menu-border bg-menu-bg p-0 text-text shadow-dialog backdrop:bg-scrim", wide === "xl" ? "w-[860px]" : wide ? "w-[560px]" : "w-[420px]")}
-    >
-      <form onSubmit={(e) => { e.preventDefault(); onSubmit(); }}>
-        <header className="border-b border-border px-3 py-2 text-sm font-medium text-text-strong">{title}</header>
-        <div className="flex flex-col gap-2.5 p-3">{children}</div>
-        <footer className="flex justify-end gap-2 border-t border-border px-3 py-2">
-          {cancel && <Button type="button" variant="ghost" onClick={close}>Cancel</Button>}
-          <Button type="submit" variant="primary">{ok}</Button>
-        </footer>
-      </form>
-    </dialog>
-  );
-}
-
-function Field({ label, children, hint }: { label: string; children: React.ReactNode; hint?: string }) {
-  return (
-    <label className="grid grid-cols-[110px_1fr] items-center gap-2 text-xs text-text-secondary">
-      <span>{label}</span>
-      {children}
-      {hint && <span className="col-start-2 text-2xs text-text-tertiary">{hint}</span>}
-    </label>
-  );
-}
-
-const SOURCE_PRESETS: [string, string][] = [
-  ["DC", "5"],
-  ["SINE", "SINE(0 1 1k)"],
-  ["PULSE", "PULSE(0 5 0 1n 1n 0.5m 1m)"],
-  ["AC", "AC 1"],
-  ["PWL", "PWL(0 0 1m 1 2m 0)"],
-];
+const close = closeDialog;
 
 /** Edits an item; `onDone` receives the result (commit in place, or start placing it). */
 function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: (it: Item) => void }) {
@@ -75,24 +32,25 @@ function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: 
     } else onDone(it);
   };
   const def = it.t === "sym" ? defOf(lib, it) : undefined;
+  // independent sources (V, I; not the controlled E/G/F/H) get the waveform form
+  const source = it.t === "sym" && /^[VI]$/i.test(def?.prefix ?? "");
+  // R, C, L: show how SPICE reads a single value (1M is a milliohm, 10F ten femtofarad)
+  const unit = ({ R: "Ω", C: "F", L: "H" } as Record<string, string>)[def?.prefix?.[0]?.toUpperCase() ?? ""];
+  const valueHelp = unit && !/\s/.test(attr("Value").trim()) ? numHelp(attr("Value"), unit, (v) => setAttr("Value", v)) : null;
   return (
-    <Modal title={title} onSubmit={done} wide={it.t === "text"}>
+    <Modal title={title} onSubmit={done} wide={source ? "xl" : it.t === "text"}>
       {it.t === "sym" && (
         <>
           <div className="text-2xs text-text-tertiary">{def?.desc ?? it.sym} · {it.sym}</div>
-          <Field label="Instance name"><input className={FIELD} value={attr("InstName")} onChange={(e) => setAttr("InstName", e.target.value)} /></Field>
-          <Field label="Value" hint={def?.prefix === "V" || def?.prefix === "I" ? "SPICE syntax: 5 · SINE(off amp freq) · PULSE(v1 v2 td tr tf ton per) · AC 1" : undefined}>
-            <input data-autofocus className={FIELD} value={attr("Value")} onChange={(e) => setAttr("Value", e.target.value)} />
-          </Field>
-          {(def?.prefix === "V" || def?.prefix === "I") && (
-            <div className="ml-[118px] flex flex-wrap gap-1">
-              {SOURCE_PRESETS.map(([name, v]) => (
-                <Button key={name} type="button" size="sm" onClick={() => setAttr("Value", name === "AC" ? `${attr("Value").replace(/\s*AC\s+\S+/i, "")} AC 1`.trim() : v)}>{name}</Button>
-              ))}
-            </div>
+          <TextField label="Instance name" value={attr("InstName")} set={(v) => setAttr("InstName", v)} />
+          {source ? <SourceEditor attrs={it.attrs} setAttrs={(attrs) => setIt({ ...it, attrs })} current={def?.prefix?.[0]?.toUpperCase() === "I"} /> : (
+            <>
+              <TextField label="Value" value={attr("Value")} set={(v) => setAttr("Value", v)} autofocus unit={unit}
+                {...(valueHelp ?? {})} hint={unit ? "e.g. 4.7k, 100n, 1Meg; LTspice extras like Rser=0.1 may follow" : undefined} />
+              <TextField label="Value2" value={attr("Value2")} set={(v) => setAttr("Value2", v)} />
+              <TextField label="SpiceLine" value={attr("SpiceLine")} set={(v) => setAttr("SpiceLine", v)} placeholder={def?.spice_line} />
+            </>
           )}
-          <Field label="Value2"><input className={FIELD} value={attr("Value2")} onChange={(e) => setAttr("Value2", e.target.value)} /></Field>
-          <Field label="SpiceLine"><input className={FIELD} value={attr("SpiceLine")} placeholder={def?.spice_line} onChange={(e) => setAttr("SpiceLine", e.target.value)} /></Field>
         </>
       )}
       {it.t === "flag" && (
@@ -117,109 +75,6 @@ function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: 
           </label>
         </>
       )}
-    </Modal>
-  );
-}
-
-const ANALYSIS = /^\.(tran|ac|dc|op|noise)\b/i;
-/** Numbers and parameter expressions ({T}, 'T*2') are values; `uic` & co. are not. */
-const isNum = (t: string) => /^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?[a-zµμ]*$/i.test(t) || /^[{']/.test(t);
-/** Whitespace tokens, but `{a * b}` / `'a * b'` stay whole (same rule as schematic.rs). */
-const tokens = (s: string) => s.match(/\{[^}]*\}|'[^']*'|[^\s(]*\([^)]*\)|\S+/g) ?? [];
-
-function SimDialog() {
-  const items = useS((s) => s.items);
-  const idx = items.findIndex((it) => it.t === "text" && it.directive && it.text.split("\n").some((l) => ANALYSIS.test(l.trim())));
-  const lines = idx >= 0 && items[idx].t === "text" ? items[idx].text.split("\n") : [];
-  const li = lines.findIndex((l) => ANALYSIS.test(l.trim()));
-  const tok = tokens(li >= 0 ? lines[li].trim() : ".tran 1m");
-  const kind0 = (tok[0] ?? ".tran").slice(1).toLowerCase();
-  const [kind, setKind] = useState(kind0);
-  const [f, setF] = useState<Record<string, string>>((): Record<string, string> => {
-    const t = tok.slice(1);
-    if (kind0 === "tran") {
-      const n = t.findIndex((x) => !isNum(x));
-      const nums = n < 0 ? t : t.slice(0, n), rest = (n < 0 ? [] : t.slice(n)).join(" ");
-      return nums.length === 1 ? { stop: nums[0], rest } : { step: nums[0] ?? "", stop: nums[1] ?? "", start: nums[2] ?? "", max: nums[3] ?? "", rest };
-    }
-    if (kind0 === "ac") return { sweep: t[0] ?? "dec", pts: t[1] ?? "", fstart: t[2] ?? "", fstop: t[3] ?? "", rest: t.slice(4).join(" ") };
-    if (kind0 === "dc") return { src: t[0] ?? "", dstart: t[1] ?? "", dstop: t[2] ?? "", incr: t[3] ?? "", rest: t.slice(4).join(" ") };
-    if (kind0 === "noise") return { out: t[0] ?? "", nsrc: t[1] ?? "", sweep: t[2] ?? "dec", pts: t[3] ?? "", fstart: t[4] ?? "", fstop: t[5] ?? "", rest: t.slice(6).join(" ") };
-    return {};
-  });
-  const v = (k: string, d = "") => f[k] || d;
-  const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setF({ ...f, [k]: e.target.value });
-  const rest = kind === kind0 ? v("rest") : ""; // e.g. `uic`, a nested .dc sweep: keep what the form does not show
-  const line = [
-    kind === "tran" ? [".tran", v("step") || (v("start") || v("max") ? "0" : ""), v("stop", "1m"), v("start") || (v("max") ? "0" : ""), v("max")].filter(Boolean).join(" ")
-    : kind === "ac" ? `.ac ${v("sweep", "dec")} ${v("pts", "100")} ${v("fstart", "10")} ${v("fstop", "1Meg")}`
-    : kind === "dc" ? `.dc ${v("src", "V1")} ${v("dstart", "0")} ${v("dstop", "5")} ${v("incr", "10m")}`
-    : kind === "noise" ? `.noise ${v("out", "v(out)")} ${v("nsrc", "V1")} ${v("sweep", "dec")} ${v("pts", "10")} ${v("fstart", "10")} ${v("fstop", "1Meg")}`
-    : ".op",
-    rest,
-  ].filter(Boolean).join(" ");
-  const submit = () => {
-    if (idx >= 0) {
-      const it = items[idx] as Extract<Item, { t: "text" }>;
-      commit(items.map((x, i) => (i === idx ? { ...it, text: lines.map((l, j) => (j === li ? line : l)).join("\n") } : x)));
-      close();
-    } else useS.setState({ dialog: null, tool: { k: "place", item: { t: "text", x: 0, y: 0, text: line, directive: true } } });
-  };
-  const tabs = [["tran", "Transient"], ["ac", "AC Analysis"], ["dc", "DC Sweep"], ["noise", "Noise"], ["op", "DC op pnt"]];
-  return (
-    <Modal title="Edit Simulation Command" onSubmit={submit} wide>
-      <div role="tablist" className="flex border-b border-border">
-        {tabs.map(([k, label]) => (
-          <button key={k} type="button" role="tab" aria-selected={kind === k} onClick={() => setKind(k)}
-            className={cn("-mb-px border-b-2 px-3 py-1 text-xs", kind === k ? "border-selection text-text-strong" : "border-transparent text-text-secondary hover:text-text-strong")}>
-            {label}
-          </button>
-        ))}
-      </div>
-      {kind === "tran" && (
-        <>
-          <Field label="Stop time"><input data-autofocus className={FIELD} value={v("stop")} placeholder="1m" onChange={set("stop")} /></Field>
-          <Field label="Time step" hint="optional; default stop/1000"><input className={FIELD} value={v("step")} onChange={set("step")} /></Field>
-          <Field label="Start saving"><input className={FIELD} value={v("start")} placeholder="0" onChange={set("start")} /></Field>
-          <Field label="Max timestep"><input className={FIELD} value={v("max")} onChange={set("max")} /></Field>
-        </>
-      )}
-      {kind === "ac" && (
-        <>
-          <Field label="Sweep">
-            <select className={FIELD} value={v("sweep", "dec")} onChange={set("sweep")}>
-              <option value="dec">Decade</option><option value="oct">Octave</option><option value="lin">Linear</option>
-            </select>
-          </Field>
-          <Field label="Points"><input data-autofocus className={FIELD} value={v("pts")} placeholder="100" onChange={set("pts")} /></Field>
-          <Field label="Start freq"><input className={FIELD} value={v("fstart")} placeholder="10" onChange={set("fstart")} /></Field>
-          <Field label="Stop freq"><input className={FIELD} value={v("fstop")} placeholder="1Meg" onChange={set("fstop")} /></Field>
-        </>
-      )}
-      {kind === "dc" && (
-        <>
-          <Field label="Source"><input data-autofocus className={FIELD} value={v("src")} placeholder="V1" onChange={set("src")} /></Field>
-          <Field label="Start"><input className={FIELD} value={v("dstart")} placeholder="0" onChange={set("dstart")} /></Field>
-          <Field label="Stop"><input className={FIELD} value={v("dstop")} placeholder="5" onChange={set("dstop")} /></Field>
-          <Field label="Increment"><input className={FIELD} value={v("incr")} placeholder="10m" onChange={set("incr")} /></Field>
-        </>
-      )}
-      {kind === "noise" && (
-        <>
-          <Field label="Output"><input data-autofocus className={FIELD} value={v("out")} placeholder="v(out)" onChange={set("out")} /></Field>
-          <Field label="Input source"><input className={FIELD} value={v("nsrc")} placeholder="V1" onChange={set("nsrc")} /></Field>
-          <Field label="Sweep">
-            <select className={FIELD} value={v("sweep", "dec")} onChange={set("sweep")}>
-              <option value="dec">Decade</option><option value="oct">Octave</option><option value="lin">Linear</option>
-            </select>
-          </Field>
-          <Field label="Points"><input className={FIELD} value={v("pts")} placeholder="10" onChange={set("pts")} /></Field>
-          <Field label="Start freq"><input className={FIELD} value={v("fstart")} placeholder="10" onChange={set("fstart")} /></Field>
-          <Field label="Stop freq"><input className={FIELD} value={v("fstop")} placeholder="1Meg" onChange={set("fstop")} /></Field>
-        </>
-      )}
-      {kind === "op" && <p className="text-xs text-text-secondary">Find the DC operating point; hover nets to read voltages.</p>}
-      <code className="rounded-control bg-surface-raised px-2 py-1 font-mono text-xs text-text-strong">{line}</code>
     </Modal>
   );
 }
@@ -481,11 +336,18 @@ export const Dialogs = memo(function Dialogs() {
     case "edit": {
       const it = items[dialog.index];
       if (!it) return null;
+      const commitIt = (next: Item) => (commit(items.map((x, i) => (i === dialog.index ? next : x))), close());
+      if (it.t === "text" && it.directive) {
+        if (!dialog.raw && it.text.split("\n").some((l) => ANALYSIS.test(l.trim()))) return <SimDialog key={dialog.index} index={dialog.index} />;
+        return <DirectiveDialog key={`${dialog.index}${dialog.raw ? "raw" : ""}`} item={it} title="SPICE Directive" raw={dialog.raw} onDone={commitIt} />;
+      }
       return <ItemForm key={dialog.index} item={it} title={it.t === "sym" ? `Edit ${it.attrs.InstName ?? it.sym}` : it.t === "flag" ? "Net Name" : "Edit Text"}
         onDone={(next) => (commit(items.map((x, i) => (i === dialog.index ? next : x))), close())} />;
     }
     case "new": {
       const at = dialog.at;
+      const place = (it: Item) => (at && it.t !== "wire" && it.t !== "raw" ? (commit([...items, { ...it, x: at[0], y: at[1] }]), close()) : useS.setState({ dialog: null, tool: { k: "place", item: it } }));
+      if (dialog.item.t === "text" && dialog.item.directive) return <DirectiveDialog item={dialog.item} title="SPICE Directive" onDone={place} />;
       return <ItemForm item={dialog.item} title={dialog.item.t === "flag" ? "Net Name" : dialog.item.t === "text" && dialog.item.directive ? "SPICE Directive" : "Comment"}
         onDone={(it) => at && it.t !== "wire" && it.t !== "raw" ? (commit([...items, { ...it, x: at[0], y: at[1] }]), close()) : useS.setState({ dialog: null, tool: { k: "place", item: it } })} />;
     }

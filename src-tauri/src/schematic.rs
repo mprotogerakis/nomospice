@@ -1214,6 +1214,23 @@ mod tests {
     }
 
     #[test]
+    fn form_directives_simulate() {
+        // what the directive forms write: .meas results reach the log, .pz and .tf give result tables
+        let _s = SIM.lock();
+        let bode = EXAMPLES.iter().find(|e| e.0 == "rc_bode").unwrap().1;
+        let with = |d: &str| bode.replace(".ac dec 50 10 1Meg", d);
+        let tran = with(".tran 5m\\n.meas tran vmax MAX V(out)").replace("SYMATTR Value AC 1", "SYMATTR Value PULSE(0 1 0 1n 1n 10m 20m)");
+        let run = crate::ngspice::run(&prepare(&netlist(&parse_asc(&tran), &mut Library::builtin()).text, None, &mut vec![])).unwrap();
+        assert!(run.log.iter().any(|l| l.to_lowercase().contains("vmax")), "{:?}", run.log);
+        let pz = crate::ngspice::run(&prepare(&netlist(&parse_asc(&with(".pz in 0 out 0 vol pz")), &mut Library::builtin()).text, None, &mut vec![])).unwrap();
+        // RC low-pass: one real pole at -1/(RC) = -10000 rad/s
+        let pole = pz.op.iter().find(|o| o.0.starts_with("pole")).expect("a pole");
+        assert!((pole.1 + 1e4).abs() < 1.0 && pole.2.abs() < 1e-6, "{:?}", pz.op);
+        let tf = crate::ngspice::run(&prepare(&netlist(&parse_asc(&with(".tf V(out) V1")), &mut Library::builtin()).text, None, &mut vec![])).unwrap();
+        assert!(tf.op.iter().any(|o| o.0.to_lowercase().contains("transfer_function") && (o.1 - 1.0).abs() < 1e-6), "{:?}", tf.op);
+    }
+
+    #[test]
     fn sym_key_handles_multibyte_names() {
         assert_eq!(sym_key("Opamps\\µA741x"), "µa741x");
         assert_eq!(sym_key("abcdeµfgh"), "abcdeµfgh"); // byte 7 inside `µ`: no panic
