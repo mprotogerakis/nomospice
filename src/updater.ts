@@ -12,7 +12,7 @@ export const useUpdate = create<{ update: Update | null; busy: string }>(() => (
 export async function checkForUpdate(manual = false) {
   if (import.meta.env.DEV && !manual) return; // dev builds are not the released app
   if (useUpdate.getState().busy || asking) {
-    if (manual) await message("An update is being installed.", { title: "nomospice" });
+    if (manual) await message(useUpdate.getState().busy === RESTART ? "The update is installed: restart nomospice to use it." : "An update is being installed.", { title: "nomospice" });
     return; // confirming or installing: the current handle is in use
   }
   try {
@@ -33,11 +33,13 @@ export async function checkForUpdate(manual = false) {
   }
 }
 
+const RESTART = "Restart to finish";
 let asking = false; // a second click while the confirmation is open must not start a second install
 
 /** Downloads, verifies (the updater's public key) and installs the update, then restarts. */
 export async function installUpdate() {
   const { update, busy } = useUpdate.getState();
+  if (busy === RESTART) return void relaunch().catch((e) => message(`Restart nomospice to finish the update. (${e})`, { title: "nomospice" }));
   if (!update || busy || asking) return;
   asking = true;
   const notes = update.body?.trim() ? `\n\n${update.body.trim().slice(0, 600)}` : "";
@@ -67,7 +69,7 @@ export async function installUpdate() {
     return void (await message(`The update failed: ${e}`, { title: "nomospice", kind: "error" }));
   }
   // installed: from here on a failure is only the restart (do not offer the same update again)
-  useUpdate.setState({ busy: "Restart to finish" });
+  useUpdate.setState({ busy: RESTART });
   try {
     await relaunch(); // Windows: the installer has already closed the app
   } catch (e) {

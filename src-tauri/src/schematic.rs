@@ -406,21 +406,31 @@ struct DeckLine<'a> {
     low: String,
     /// outside `.subckt … .ends`
     top: bool,
-    /// a `.param` line or a `+` continuation of one (comment and blank lines in between allowed)
-    param: bool,
+    /// a comment or blank line (SPICE skips these, also between a line and its `+` continuations)
+    skip: bool,
+    /// lowercase first token of the statement this line belongs to (`.param` for its `+` lines too)
+    head: String,
+}
+
+impl DeckLine<'_> {
+    fn param(&self) -> bool {
+        !self.skip && self.head == ".param"
+    }
 }
 
 fn deck_lines(text: &str) -> Vec<DeckLine<'_>> {
-    let (mut sub, mut in_param, mut at) = (0, false, 0);
+    let (mut sub, mut head, mut at) = (0, String::new(), 0);
     text.split_inclusive('\n').map(|piece| {
         let (start, line) = (at, piece.trim_end_matches(['\n', '\r']));
         at += piece.len();
         let low = line.to_ascii_lowercase();
         let first = low.split_whitespace().next().unwrap_or("").to_string();
         match first.as_str() { ".subckt" => sub += 1, ".ends" => sub = (sub - 1).max(0), _ => {} } // a stray .ends must not hide the rest
-        let skip = first.is_empty() || first.starts_with('*'); // SPICE skips these inside a continuation
-        in_param = first == ".param" || (in_param && (first.starts_with('+') || skip));
-        DeckLine { start, line, low, top: sub == 0 && first != ".ends", param: in_param && !skip }
+        let skip = first.is_empty() || first.starts_with('*');
+        if !skip && !first.starts_with('+') {
+            head = first.clone();
+        }
+        DeckLine { start, line, low, top: sub == 0 && first != ".ends", skip, head: head.clone() }
     }).collect()
 }
 
@@ -475,7 +485,7 @@ pub fn vary_spans(text: &str, target: &str) -> Option<Vec<(usize, usize)>> {
         return None;
     }
     let lines = deck_lines(text);
-    let defs: Vec<(usize, usize)> = lines.iter().filter(|l| l.top && l.param)
+    let defs: Vec<(usize, usize)> = lines.iter().filter(|l| l.top && l.param())
         .flat_map(|l| param_defs(l.line, &l.low).into_iter().filter(|(n, _)| n.eq_ignore_ascii_case(t)).map(move |(_, (a, e))| (l.start + a, l.start + e)))
         .collect();
     // a .param of that name wins over a part of the same name (pz_sallen_key: `.param Rb`, part Rb = {Rb})
@@ -492,7 +502,7 @@ pub fn vary_spans(text: &str, target: &str) -> Option<Vec<(usize, usize)>> {
 /// netlister's parasitics such as `RC1_rser`).
 pub fn sweepable(text: &str, placed: &[String]) -> Vec<String> {
     let lines = deck_lines(text);
-    let params = lines.iter().filter(|l| l.top && l.param).flat_map(|l| param_defs(l.line, &l.low).into_iter().map(|(n, _)| n.to_string()));
+    let params = lines.iter().filter(|l| l.top && l.param()).flat_map(|l| param_defs(l.line, &l.low).into_iter().map(|(n, _)| n.to_string()));
     let parts = lines.iter().filter(|l| l.top && part_value(l.line).is_some()).filter_map(|l| l.line.split_whitespace().next())
         .filter(|n| placed.iter().any(|p| p.eq_ignore_ascii_case(n))).map(str::to_string);
     let mut out: Vec<String> = vec![];
@@ -507,16 +517,19 @@ pub fn sweepable(text: &str, placed: &[String]) -> Vec<String> {
 /// The first `.pz` statement in `text`, lowercase, its `+` continuation lines joined (comment
 /// lines between them skipped).
 pub fn pz_statement(text: &str) -> Option<String> {
-    let mut lines = text.lines().map(str::trim_start).skip_while(|l| !l.split_whitespace().next().is_some_and(|t| t.eq_ignore_ascii_case(".pz")));
-    let first = lines.next()?;
-    let more = lines.take_while(|l| l.is_empty() || l.starts_with(['+', '*'])).filter_map(|l| l.strip_prefix('+'));
-    Some(std::iter::once(first).chain(more).collect::<Vec<_>>().join(" ").to_ascii_lowercase())
+    let lines = deck_lines(text);
+    let i = lines.iter().position(|l| l.head == ".pz")?;
+    let more = lines[i + 1..].iter().take_while(|l| l.skip || l.low.trim_start().starts_with('+'));
+    Some(std::iter::once(&lines[i]).chain(more).filter(|l| !l.skip).map(|l| l.low.trim_start().trim_start_matches('+')).collect::<Vec<_>>().join(" "))
 }
 
 /// `text` with every span replaced by `value` (the rest byte for byte as it was).
 pub fn splice(text: &str, spans: &[(usize, usize)], value: f64) -> String {
     let (v, mut out, mut at) = (format!("{value:e}"), String::with_capacity(text.len()), 0);
     for &(a, e) in spans {
+        if a < at {
+            continue; // inside the span before (`.param a= a=1`: the first value is `a=1`)
+        }
         out.push_str(&text[at..a]);
         out.push_str(&v);
         at = e;
@@ -646,14 +659,9 @@ impl Prepared {
     /// or `.meas` would run every step for nothing).
     pub fn only_pz(&self) -> Prepared {
         const OTHER: [&str; 14] = [".tran", ".ac", ".dc", ".op", ".noise", ".tf", ".sens", ".four", ".meas", ".measure", ".disto", ".pss", ".sp", ".hb"];
-        let mut off = false; // in such a statement: its `+` continuation lines go too
-        let text = self.0.lines().map(|l| {
-            let first = l.split_whitespace().next().unwrap_or("").to_ascii_lowercase();
-            let skip = first.is_empty() || first.starts_with('*');
-            if !skip && !first.starts_with('+') {
-                off = OTHER.contains(&first.as_str());
-            }
-            if off && !skip { format!("* {l}") } else { l.to_string() }
+        // with their `+` continuation lines
+        let text = deck_lines(&self.0).iter().map(|l| {
+            if !l.skip && OTHER.contains(&l.head.as_str()) { format!("* {}", l.line) } else { l.line.to_string() }
         }).collect::<Vec<_>>().join("\n") + "\n";
         Prepared(text, self.1.clone())
     }
@@ -1439,6 +1447,7 @@ mod tests {
         assert!(vary("R1 a b -1k\n", "R1", 2.0).unwrap().contains("R1 a b 2e0"), "signed value");
         assert_eq!(pz_statement("R1 a b 1k\n.PZ in 0 out 0 vol\n* c\n+ zer\nR2 b 0 1k\n+ x\n").as_deref(), Some(".pz in 0 out 0 vol  zer"));
         assert_eq!(pz_statement(".tran 1m\n.pzx 1\n"), None);
+        assert_eq!(vary(".param a= a=1\n", "a", 2.0).unwrap(), ".param a= 2e0\n", "nested spans: no panic");
         // a sweep step runs only .pz: other analyses go, with their continuation lines
         let only = prepare(".param a=1\n.meas tran x AVG V(out)\n* c\n+ FROM=1m TO=2m\n.pz in 0 out 0 vol pz\n+ \n", None, &mut vec![]).only_pz();
         assert!(only.text().contains("* + FROM=1m") && only.text().contains("\n.pz in 0") && !only.text().contains("* .pz"), "{}", only.text());

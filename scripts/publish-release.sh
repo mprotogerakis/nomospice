@@ -14,7 +14,7 @@ OUT=src-tauri/target/release/bundle/release
 MAC=$OUT/nomospice_${VERSION}_aarch64.app.tar.gz
 [ -f "$OUT/nomospice_${VERSION}_aarch64.dmg" ] && [ -f "$MAC.sig" ] || { echo "run scripts/macos-release.sh for $VERSION first" >&2; exit 1; }
 [ "$(git rev-parse "@{u}")" = "$SHA" ] || { echo "push $SHA first" >&2; exit 1; }
-[ "$(cat "$OUT/built-from" 2>/dev/null)" = "$SHA" ] && [ -z "$(git status --porcelain --untracked-files=no)" ] \
+[ "$(cat "$OUT/built-from" 2>/dev/null)" = "$SHA" ] && [ -z "$(git status --porcelain)" ] \
   || { echo "the macOS build is not from $SHA (or the tree has changes): run scripts/macos-release.sh again" >&2; exit 1; }
 
 # Windows installers from the newest completed CI run of this commit (the Windows job uploads them

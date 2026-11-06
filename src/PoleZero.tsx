@@ -158,9 +158,13 @@ function Sidebar({ poles, zeros, hasLocus, setLocus, error, setError }: {
   // what the sweep can vary (the backend lists it with each simulation, from the deck that ran)
   const targets = useS((s) => s.sim?.sweepable ?? NONE);
   const [f, setF] = useState({ target: targets[0] ?? "", from: "", to: "", steps: "40", scale: "log" });
-  // a new run: a name no longer in the circuit (renamed, deleted) gives way to the first one
+  // a new run: a listed name no longer in the circuit (renamed, deleted) gives way to the first one;
+  // a typed one (a .param from an included file) stays
+  const listed = useRef(targets);
   useEffect(() => {
-    if (targets[0]) setF((x) => (targets.some((t) => t.toLowerCase() === x.target.trim().toLowerCase()) ? x : { ...x, target: targets[0] }));
+    const before = listed.current, has = (l: string[], n: string) => l.some((t) => t.toLowerCase() === n.trim().toLowerCase());
+    listed.current = targets;
+    if (targets[0]) setF((x) => (!x.target.trim() || (has(before, x.target) && !has(targets, x.target)) ? { ...x, target: targets[0] } : x));
   }, [targets]);
 
   const reqRef = useRef(0); // Clear drops the result of a sweep still running

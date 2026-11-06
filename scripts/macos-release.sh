@@ -11,7 +11,7 @@ ID=$(security find-identity -v -p codesigning | grep -o '"Developer ID Applicati
 VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
 # the commit this build is made from, noted now (a commit or checkout during the build must not count)
 FROM=$(git rev-parse HEAD)
-[ -z "$(git status --porcelain --untracked-files=no)" ] || FROM="$FROM-dirty"
+[ -z "$(git status --porcelain)" ] || FROM="$FROM-dirty"
 NGV=47
 NG=$PWD/src-tauri/target/ngspice-macos
 NGLIB=$NG/out/opt/nomospice-ngspice/lib
