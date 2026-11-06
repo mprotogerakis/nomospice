@@ -51,29 +51,19 @@ static BG_DONE: AtomicBool = AtomicBool::new(true);
 /// Counts runs: each one destroys the results of the one before (see `Run::id`, `trace`).
 static RUNS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// Counts Halt presses. An operation (a simulation, a root locus) notes the count when it begins
-/// (`begin`) and is halted once the count moves on: a Halt stops what was running when it was
-/// pressed, never something started afterwards, and no later start can undo it. Only the run
-/// thread acts on it (`bg_halt`), so libngspice is never entered concurrently.
+/// (`begin`) and is halted once the count moves on (`halted_since`): a Halt stops what was running
+/// when it was pressed, never something started afterwards, and no later start can undo it. Only
+/// the run thread acts on it (`bg_halt`, see `run_until`), so libngspice is never entered concurrently.
 static HALTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-thread_local! {
-    /// The Halt count the operation on this thread began with (see `enter`); none: not haltable.
-    static OP: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
-}
 
 /// An operation begins (call it before netlisting, so a Halt during that counts too).
 pub fn begin() -> u64 {
     HALTS.load(Ordering::SeqCst)
 }
 
-/// Runs on this thread belong to the operation that began at `op` until the guard is dropped.
-pub fn enter(op: u64) -> impl Drop {
-    struct Leave(Option<u64>);
-    impl Drop for Leave {
-        fn drop(&mut self) {
-            OP.with(|o| o.set(self.0));
-        }
-    }
-    Leave(OP.with(|o| o.replace(Some(op))))
+/// Whether Halt was pressed since the operation that began at `op`.
+pub fn halted_since(op: u64) -> bool {
+    HALTS.load(Ordering::SeqCst) != op
 }
 
 extern "C" fn on_char(s: *const c_char, _: c_int, _: *mut c_void) -> c_int {
@@ -308,6 +298,11 @@ fn read(api: &Api, name: &str) -> Option<Trace> {
 /// Load a netlist, run it to completion (background thread, so `halt` can stop it).
 /// Takes a [`Prepared`] netlist only: includes inlined, `.control`/`*#` removed (see `schematic::prepare`).
 pub fn run(netlist: &Prepared) -> Result<Run, Vec<String>> {
+    run_until(netlist, &|| false)
+}
+
+/// [`run`], stopped (`bg_halt`, partial data) as soon as `stop()` says so: polled while it runs.
+pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec<String>> {
     let sensors = netlist.sensors().to_vec();
     let netlist = netlist.text();
     let g = engine()?;
@@ -322,7 +317,7 @@ pub fn run(netlist: &Prepared) -> Result<Run, Vec<String>> {
     if unsafe { (api.circ)(ptrs.as_ptr()) } != 0 {
         return Err(take_log());
     }
-    if halted() {
+    if stop() {
         return Err(vec!["simulation halted".into()]);
     }
     BG_DONE.store(false, Ordering::SeqCst);
@@ -333,7 +328,7 @@ pub fn run(netlist: &Prepared) -> Result<Run, Vec<String>> {
     let mut halted = false;
     // BG_DONE comes from the callback; ngSpice_running() covers a thread that never started.
     while !BG_DONE.load(Ordering::SeqCst) && (started.elapsed() < Duration::from_millis(500) || unsafe { (api.running)() }) {
-        if !halted && self::halted() {
+        if !halted && stop() {
             halted = true;
             api.command("bg_halt");
         }
@@ -427,15 +422,9 @@ pub fn trace(expr: &str, scale: &str, run: u64) -> Result<Trace, String> {
     Ok(t)
 }
 
-/// Request a stop of whatever runs now; `run` sends `bg_halt` from its own thread.
+/// Request a stop of whatever runs now; `run_until` sends `bg_halt` from its own thread.
 pub fn halt() {
     HALTS.fetch_add(1, Ordering::SeqCst);
-}
-
-/// Whether Halt was pressed since the operation on this thread began (loops of runs, such as a
-/// root locus, stop there). Outside an operation (tests, MCP): never.
-pub fn halted() -> bool {
-    OP.with(|o| o.get()).is_some_and(|op| HALTS.load(Ordering::SeqCst) != op)
 }
 
 /// Tests that run simulations share the one ngspice engine: they take this lock.

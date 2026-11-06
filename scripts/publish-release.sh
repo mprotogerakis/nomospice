@@ -17,11 +17,11 @@ MAC=$OUT/nomospice_${VERSION}_aarch64.app.tar.gz
 [ "$(cat "$OUT/built-from" 2>/dev/null)" = "$SHA" ] && [ -z "$(git status --porcelain)" ] \
   || { echo "the macOS build is not from $SHA (or the tree has changes): run scripts/macos-release.sh again" >&2; exit 1; }
 
-# Windows installers from the newest completed CI run of this commit (the Windows job uploads them
-# when it succeeds, even if another OS's job failed)
-# the push build of this very commit (a pull_request run builds a merge with another base)
-RUN=$(gh run list -R $REPO --commit "$SHA" --workflow build.yml --event push --status success --json databaseId --jq '.[0].databaseId')
-[ -n "$RUN" ] && [ "$RUN" != null ] || { echo "no successful CI push run for $SHA (yet)" >&2; exit 1; }
+# Windows installers from the newest completed push run of build.yml for this commit (a pull_request
+# run builds a merge with another base; the Windows job uploads them when it succeeds, even if
+# another OS's job failed)
+RUN=$(gh run list -R $REPO --commit "$SHA" --workflow build.yml --event push --status completed --json databaseId --jq '.[0].databaseId')
+[ -n "$RUN" ] && [ "$RUN" != null ] || { echo "no completed CI push run for $SHA (yet)" >&2; exit 1; }
 WIN=$(mktemp -d)
 trap 'rm -rf "$WIN"' EXIT
 gh run download "$RUN" -R $REPO -n nomospice-windows-latest -D "$WIN" || { echo "run $RUN has no Windows installers" >&2; exit 1; }

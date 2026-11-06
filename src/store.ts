@@ -178,8 +178,9 @@ function freeSlot(traces: Trace[]) {
 
 async function fetchTrace(t: Trace): Promise<Trace> {
   const run = get().sim?.run;
+  if (!run) return { ...t, data: undefined, error: "no simulation results: run the simulation" };
   try {
-    return { ...t, data: await invoke<TraceData>("trace", { expr: t.expr, scale: run?.scale ?? "", run: run?.id ?? 0 }), error: undefined };
+    return { ...t, data: await invoke<TraceData>("trace", { expr: t.expr, scale: run.scale, run: run.id }), error: undefined };
   } catch (e) {
     return { ...t, data: undefined, error: String(e) };
   }

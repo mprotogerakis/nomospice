@@ -164,13 +164,6 @@ struct Sim {
     sweepable: Vec<String>,
 }
 
-/// The deck ngspice runs: the netlist with current sensors, includes inlined and filtered (`prepare`).
-/// Simulation and root locus share it, so the locus runs the circuit the plot shows. It reads the
-/// .include/.lib files (can be slow): call it on a blocking thread, without the library lock.
-fn prepare_deck(sim: Netlist, dir: Option<&str>, warnings: &mut Vec<String>) -> schematic::Prepared {
-    schematic::prepare(&sim.text, dir.map(std::path::Path::new), warnings).with_sensors(sim.sensors)
-}
-
 /// A root locus loads one .pz deck after another. A sweep holds this lock for its whole run, so a
 /// simulation (which stops it via SWEEP_GEN) waits for it; traces check the run id instead.
 static SWEEP: Mutex<()> = Mutex::new(());
@@ -190,11 +183,10 @@ async fn simulate(items: Vec<Item>, dir: Option<String>, lib: tauri::State<'_, L
     // the newer request wins: a running root locus stops at its next step, then this runs
     SWEEP_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     tauri::async_runtime::spawn_blocking(move || {
-        let prepared = prepare_deck(sim, dir.as_deref(), &mut netlist.warnings);
+        let prepared = sim.prepared(dir.as_deref().map(std::path::Path::new), &mut netlist.warnings);
         let simulated = prepared.text().to_string();
         let _sweep = SWEEP.lock().unwrap_or_else(|e| e.into_inner());
-        let _op = ngspice::enter(op);
-        let res = ngspice::run(&prepared);
+        let res = ngspice::run_until(&prepared, &|| ngspice::halted_since(op));
         // for the s-plane view's root locus; from the user's deck, not the libraries
         let pz = res.as_ref().is_ok_and(|r| r.plot.starts_with("pz"));
         let sweepable = if pz { schematic::sweepable(&netlist.text, &netlist.insts) } else { vec![] };
@@ -213,9 +205,10 @@ async fn root_locus(items: Vec<Item>, dir: Option<String>, target: String, value
     let op = ngspice::begin();
     let gen = SWEEP_GEN.load(std::sync::atomic::Ordering::SeqCst); // at once: a cancel while netlisting counts
     let sim = schematic::netlist_for_sim(&items, &mut lib.0.lock().unwrap_or_else(|e| e.into_inner()));
-    let stop = move || ngspice::halted() || SWEEP_GEN.load(std::sync::atomic::Ordering::SeqCst) != gen;
+    // Halt, a new simulation or the panel's Halt: also mid-step (bg_halt)
+    let stop = move || ngspice::halted_since(op) || SWEEP_GEN.load(std::sync::atomic::Ordering::SeqCst) != gen;
     tauri::async_runtime::spawn_blocking(move || {
-        let deck = prepare_deck(sim, dir.as_deref(), &mut vec![]);
+        let deck = sim.prepared(dir.as_deref().map(std::path::Path::new), &mut vec![]);
         match schematic::pz_statement(deck.text()) {
             None => return Err("the schematic has no .pz analysis (Simulation command → Poles/zeros)".into()),
             // the type (pz, pol, zer) is the last token before an inline comment
@@ -226,7 +219,6 @@ async fn root_locus(items: Vec<Item>, dir: Option<String>, target: String, value
         let deck = deck.only_pz();
         let spans = deck.spans(&target).ok_or_else(|| format!("`{target}` is neither a .param nor an R, C or L with a numeric value in the schematic"))?;
         let _sweep = SWEEP.lock().unwrap_or_else(|e| e.into_inner());
-        let _op = ngspice::enter(op);
         let (mut steps, mut first_error, mut stopped) = (vec![], None, false);
         for &v in &values {
             if stop() {
@@ -234,7 +226,7 @@ async fn root_locus(items: Vec<Item>, dir: Option<String>, target: String, value
                 break;
             }
             let step = deck.at(&spans, v);
-            match ngspice::run(&step) {
+            match ngspice::run_until(&step, &stop) {
                 // interrupted by Halt (bg_halt ends the run with partial data) or cancelled: not a step
                 _ if stop() => {
                     stopped = true;

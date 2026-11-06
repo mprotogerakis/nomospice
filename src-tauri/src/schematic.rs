@@ -694,6 +694,15 @@ pub struct Sensor {
 ///   so ngspice never opens a file itself;
 /// - `.control` blocks and `*#` lines are dropped everywhere (ngspice executes them on load,
 ///   including `shell`), in the schematic and in included files alike.
+impl Netlist {
+    /// The deck ngspice runs for this (simulation) netlist: includes inlined and filtered, its
+    /// current sensors known. The GUI's simulation and root locus and MCP all run this. It reads the
+    /// .include/.lib files (can be slow): call it on a blocking thread, without the library lock.
+    pub fn prepared(&self, dir: Option<&std::path::Path>, warnings: &mut Vec<String>) -> Prepared {
+        prepare(&self.text, dir, warnings).with_sensors(self.sensors.clone())
+    }
+}
+
 pub fn prepare(text: &str, dir: Option<&std::path::Path>, warnings: &mut Vec<String>) -> Prepared {
     let mut x = Expander { warnings, out: String::new(), seen: HashSet::new(), read: true, diode: None, behavioural: vec![] };
     x.expand(text, dir, None, 0);
@@ -1459,6 +1468,19 @@ mod tests {
         let run = crate::ngspice::run(&p.at(&p.spans("R1").unwrap(), 2000.0)).unwrap();
         let pole = run.op.iter().find(|o| o.0.starts_with("pole")).unwrap();
         assert!((pole.1 + 5000.0).abs() < 1.0, "{:?}", run.op);
+    }
+
+    #[test]
+    fn run_until_stops_mid_run() {
+        let _s = SIM.lock();
+        // a coarse print step (little memory), a tiny max step: it would run for hours
+        let long = prepare("* long\nV1 a 0 SINE(0 1 1k)\nR1 a b 1k\nC1 b 0 1u\n.tran 1m 10 0 1n\n.end\n", None, &mut vec![]);
+        assert!(crate::ngspice::run_until(&long, &|| true).is_err(), "stopped before it starts");
+        let t = std::time::Instant::now();
+        let r = crate::ngspice::run_until(&long, &|| t.elapsed() > std::time::Duration::from_millis(200));
+        assert!(t.elapsed() < std::time::Duration::from_secs(10), "bg_halt mid-run: {:?}", t.elapsed());
+        assert!(r.is_ok_and(|r| r.aborted), "partial data, marked as such");
+        assert!(crate::ngspice::run(&prepare("* ok\nR1 a 0 1k\nI1 0 a 1m\n.op\n.end\n", None, &mut vec![])).is_ok(), "the next run works");
     }
 
     #[test]
