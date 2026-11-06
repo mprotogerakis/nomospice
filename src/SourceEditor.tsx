@@ -34,10 +34,12 @@ export function SourceEditor({ attrs: given, setAttrs, current, spiceLine }: { a
     setMore(null);
     // a new function starts with every value written out: the line, the fields and the preview agree
     const args = func ? kept[func]?.args ?? (func === "PWL" ? ["0", "0", "1m", "1"] : FUNCS[func].map((d) => d.def)) : [];
-    // options after the function (Rpar=…) go along, except PWL's own (r=0, td=1m)
+    // options after the function (Rpar=…) go along as they are now; PWL's own (r=0, td=1m) stay with PWL
     setKept({ ...kept, [src.func]: { args: src.args, vrest: src.vrest } });
-    const vrest = src.func === "PWL" ? src.vrest.replace(/\b(r|td)\s*=\s*\S+/gi, "").replace(/\s+/g, " ").trim() : src.vrest;
-    update({ ...src, func, args, vrest: kept[func]?.vrest ?? vrest });
+    const own = /\b(?:r|td)\s*=\s*\S+/gi;
+    const common = (src.func === "PWL" ? src.vrest.replace(own, "") : src.vrest).replace(/\s+/g, " ").trim();
+    const pwl = func === "PWL" ? kept.PWL?.vrest.match(own) ?? [] : [];
+    update({ ...src, func, args, vrest: [...pwl, common].filter(Boolean).join(" ") });
   };
   const out = formatSource(src);
   const lastArg = lastFilled(src.args); // empty fields after it: SPICE's defaults

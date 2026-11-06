@@ -73,7 +73,10 @@ export const dirOf = (path: string | null) => (path ? path.replace(/[\\/][^\\/]*
 /** `p` relative to the open schematic's folder when inside it (as LTspice writes includes). */
 export const relToDoc = (p: string) => {
   const dir = dirOf(useS.getState().path);
-  return dir && (p.startsWith(`${dir}/`) || p.startsWith(`${dir}\\`)) ? p.slice(dir.length + 1) : p; // slashes: portablePaths at commit
+  if (!dir) return p;
+  // Windows paths compare without case (a dialog may return c:\ for C:\); slashes: portablePaths at commit
+  const [d, q] = /^[a-z]:/i.test(dir) ? [dir.toLowerCase(), p.toLowerCase()] : [dir, p];
+  return q.startsWith(`${d}/`) || q.startsWith(`${d}\\`) ? p.slice(dir.length + 1) : p;
 };
 
 /** Live netlist only if it belongs to the current items (it lags edits by a debounce + IPC). */

@@ -13,6 +13,7 @@ import { cn } from "@/lib/utils";
 type P = { re: number; im: number };
 const NONE: string[] = [];
 type Hit = P & { kind: "pole" | "zero" | "locus"; param?: number };
+const finite = (o: [unknown, number, number, ...unknown[]]) => Number.isFinite(o[1]) && Number.isFinite(o[2]);
 const dist = (a: P, b: P) => Math.hypot(a.re - b.re, a.im - b.im);
 const lastOf = <T,>(a: (T | null)[]) => { for (let i = a.length - 1; i >= 0; i--) if (a[i]) return a[i]; return null; };
 /** ω₀ = |s|, f₀ = ω₀/2π, ζ = −σ/|s| (for the readout and the table) */
@@ -41,8 +42,9 @@ function branches(steps: P[][]): (P | null)[][] {
 const tickStep = (span: number) => { const e = 10 ** Math.floor(Math.log10(span / 6)); return [1, 2, 5, 10].map((m) => m * e).find((s) => span / s <= 8) ?? 10 * e; };
 
 export const PoleZero = memo(function PoleZero({ run }: { run: Run }) {
-  const poles = useMemo(() => run.op.filter((o) => o[0].startsWith("pole")).map(([, re, im]) => ({ re, im })), [run]);
-  const zeros = useMemo(() => run.op.filter((o) => o[0].startsWith("zero")).map(([, re, im]) => ({ re, im })), [run]);
+  // ngspice's NaN/inf arrive as null (JSON): left out, not drawn at the origin
+  const poles = useMemo(() => run.op.filter((o) => o[0].startsWith("pole") && finite(o)).map(([, re, im]) => ({ re, im })), [run]);
+  const zeros = useMemo(() => run.op.filter((o) => o[0].startsWith("zero") && finite(o)).map(([, re, im]) => ({ re, im })), [run]);
   const [locus, setLocus] = useState<{ values: number[]; steps: P[][]; target: string } | null>(null);
   const paths = useMemo(() => (locus ? branches(locus.steps) : []), [locus]);
   // a new run (edited circuit, live mode): an old locus and zoom would describe another circuit
@@ -193,9 +195,9 @@ function Sidebar({ poles, zeros, hasLocus, setLocus, error, setError }: {
       const steps = await invoke<([number, number][] | null)[]>("root_locus", { items, dir: dirOf(path), target: f.target.trim(), values });
       if (docId() !== gen || req !== reqRef.current) return; // another document opened meanwhile, or Clear
       if (useS.getState().sim !== sim0) return setError("The circuit was simulated again meanwhile: draw the locus again."); // live mode, Run
-      const failed = steps.filter((x) => !x?.length).length; // failed, or ran without poles
+      const failed = steps.filter((x) => !x?.some((p) => finite([0, ...p]))).length; // failed, or ran without poles
       setError([failed && `${failed} of ${steps.length} steps found no poles (gaps in the paths).`, steps.length < values.length && `Halted after ${steps.length} of ${values.length} steps.`].filter(Boolean).join(" "));
-      setLocus({ values: values.slice(0, steps.length), target: f.target.trim(), steps: steps.map((s) => (s ?? []).map(([re, im]) => ({ re, im }))) });
+      setLocus({ values: values.slice(0, steps.length), target: f.target.trim(), steps: steps.map((s) => (s ?? []).filter((p) => finite([0, ...p])).map(([re, im]) => ({ re, im }))) });
     } catch (e) {
       if (req === reqRef.current) setError(String(e));
     } finally {

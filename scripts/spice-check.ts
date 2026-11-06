@@ -38,7 +38,7 @@ assert.equal(sample(parseSource("SINE(0 {A} 1k)")), null);
 
 // analyses round-trip
 for (const l of [".tran 1m", ".tran 0 5m 0 1u uic", ".ac dec 100 10 1Meg", ".dc V1 0 5 10m V2 0 3 1", ".noise V(out) V1 dec 10 10 1Meg",
-  ".tf V(out,in) V1", ".tf I(V2) V1", ".pz in 0 out 0 vol pz", ".sens V(out)", ".sens I(V1) ac dec 10 10 1Meg", ".op"]) {
+  ".tf V(out,in) V1", ".tf I(V2) V1", ".pz in 0 out 0 vol pz", ".sens V(out)", ".sens V(out) dc", ".sens I(V1) ac dec 10 10 1Meg", ".op"]) {
   const { kind, f } = parseAnalysis(l);
   assert.equal(formatAnalysis(kind, f), l, l);
 }
@@ -69,6 +69,7 @@ for (const [l, k] of [[".ic V(out)=1", "ic"], [".temp 25", "temp"], [".meas ac f
 assert.equal(formatMeas(parseMeas(".meas ac f3db WHEN V(out)=0.707")!), ".meas ac f3db WHEN V(out)=0.707"); // no edge added
 assert.ok(analysisRoundTrips(".tran 1m startup") && analysisRoundTrips(".noise v(out) V1 dec 10 10 1Meg 1"));
 assert.equal(analysisRoundTrips(".dc lin V1 0 5 0.1"), false);
+{ const { f } = parseAnalysis(".sens V(out) dc"); assert.equal(formatAnalysis("sens", { ...f, mode: "ac" }), ".sens V(out) ac dec 10 10 1Meg"); } // `dc` is the mode, not an option
 assert.ok(analysisEditable(".param a=1\n.tran 0 1m") && !analysisEditable(".tran 0 1m\n* c\n+ 0 1u") && !analysisEditable(".param a=1"));
 // extra function arguments (PULSE cycles) survive an edit elsewhere
 const cyc = parseSource("PULSE(0 5 0 1n 1n 0.5m 1m 10)");

@@ -2,7 +2,7 @@
 import { useState } from "react";
 import type { Item } from "./types";
 import { commit, useS } from "./store";
-import { analysisEditable, analysisIndex, formatAnalysis, parseAnalysis, type Analysis, type Fields } from "./spice";
+import { analysisEditable, analysisIndex, formatAnalysis, knownSweep, parseAnalysis, type Analysis, type Fields } from "./spice";
 import { CircuitLists, Tabs, closeDialog, Field, Modal, NumField, Section, Select, SpiceLine, TextField } from "./ui/dialog";
 import { Button } from "./ui/button";
 
@@ -22,7 +22,7 @@ export function SimDialog({ index }: { index?: number }) {
   const [init] = useState(() => {
     const a = parseAnalysis(li >= 0 ? lines[li] : ".tran 1m");
     // a sweep the form does not know (`.ac list 1k 2k`): its values mean something else, start empty
-    return a.f.sweep !== undefined && !["dec", "oct", "lin"].includes(a.f.sweep) ? { kind: a.kind, f: {} } : a;
+    return knownSweep(a.f) ? a : { kind: a.kind, f: {} };
   });
   const [kind, setKind] = useState<Analysis>(init.kind);
   const [forms, setForms] = useState<Partial<Record<Analysis, Fields>>>({ [init.kind]: init.f });
@@ -73,7 +73,7 @@ export function SimDialog({ index }: { index?: number }) {
   return (
     <Modal title="Edit Simulation Command" onSubmit={submit} wide>
       <CircuitLists />
-      {partial && <p className="text-2xs text-status-warning">⚠ The form does not cover all of “{lines[li].trim()}”{cont(li + 1) ? " and its + lines" : ""}: a change here replaces it with the line below. “Edit as text” keeps it.</p>}
+      {partial && <p className="text-2xs text-status-warning">⚠ The form does not cover all of “{lines[li].trim()}”{lines.some((_, j) => cont(j)) ? " and its + lines" : ""}: a change here replaces it with the line below. “Edit as text” keeps it.</p>}
       <Tabs tabs={TABS} value={kind} set={setKind} />
       {kind === "tran" && (
         <>

@@ -274,8 +274,8 @@ export function parseAnalysis(line: string): { kind: Analysis; f: Fields } {
     case "tf": return { kind, f: { ...parseOut(t[0]), src: t[1] ?? "", rest: after(2) } };
     case "pz": return { kind, f: { inp: t[0] ?? "", inn: t[1] ?? "", outp: t[2] ?? "", outn: t[3] ?? "", tf: (t[4] ?? "vol").toLowerCase(), what: (t[5] ?? "pz").toLowerCase(), rest: after(6) } };
     case "sens": {
-      const ac = /^ac$/i.test(t[1] ?? "");
-      return { kind, f: { ...parseOut(t[0]), mode: ac ? "ac" : "dc", sweep: ac ? (t[2] ?? "dec").toLowerCase() : "dec", pts: ac ? t[3] ?? "" : "", fstart: ac ? t[4] ?? "" : "", fstop: ac ? t[5] ?? "" : "", rest: after(ac ? 6 : 1) } };
+      const ac = /^ac$/i.test(t[1] ?? ""), dc = /^dc$/i.test(t[1] ?? ""); // `dc` may be written out
+      return { kind, f: { ...parseOut(t[0]), mode: ac ? "ac" : dc ? "dc" : "", sweep: ac ? (t[2] ?? "dec").toLowerCase() : "dec", pts: ac ? t[3] ?? "" : "", fstart: ac ? t[4] ?? "" : "", fstop: ac ? t[5] ?? "" : "", rest: after(ac ? 6 : dc ? 2 : 1) } };
     }
     default: return { kind: "op", f: { rest: after(0) } };
   }
@@ -297,7 +297,7 @@ export function formatAnalysis(kind: Analysis, f: Fields): string {
     op: () => ".op",
     tf: () => `.tf ${formatOut(f)} ${v("src", "V1")}`,
     pz: () => `.pz ${v("inp", "in")} ${v("inn", "0")} ${v("outp", "out")} ${v("outn", "0")} ${v("tf", "vol")} ${v("what", "pz")}`,
-    sens: () => `.sens ${formatOut(f)}${v("mode") === "ac" ? ` ac ${sweep("10")}` : ""}`,
+    sens: () => `.sens ${formatOut(f)}${v("mode") === "ac" ? ` ac ${sweep("10")}` : v("mode") === "dc" ? " dc" : ""}`,
   }[kind]();
   return [line, v("rest")].filter(Boolean).join(" ");
 }
@@ -337,10 +337,14 @@ export function directiveKind(text: string): DirectiveKind {
   return back !== null && sameSpice(back, l) ? kind : "text";
 }
 
+/** The sweeps the simulation form has (dec, oct, lin); an analysis without one counts as known. */
+export const SWEEP_KINDS = ["dec", "oct", "lin"];
+export const knownSweep = (f: Fields) => f.sweep === undefined || SWEEP_KINDS.includes(f.sweep);
+
 /** Whether the simulation dialog writes this analysis line back unchanged. */
 export const analysisRoundTrips = (line: string) => {
   const { kind, f } = parseAnalysis(line);
-  if (f.sweep !== undefined && !["dec", "oct", "lin"].includes(f.sweep)) return false; // e.g. LTspice `.ac list …`
+  if (!knownSweep(f)) return false; // e.g. LTspice `.ac list …`
   return sameSpice(formatAnalysis(kind, f), line);
 };
 
