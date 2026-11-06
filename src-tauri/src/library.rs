@@ -42,6 +42,9 @@ pub struct Index {
     cache: Mutex<Vec<(PathBuf, Arc<String>)>>,
 }
 
+/// The `file` of the built-in models' entries (no file on disk).
+const BUILTIN: &str = "<built-in>";
+
 fn mtime(p: &Path) -> Option<std::time::SystemTime> {
     std::fs::metadata(p).and_then(|m| m.modified()).ok()
 }
@@ -77,6 +80,9 @@ impl Index {
                 ix.scan(&crate::schematic::decode(&bytes), &s.name, &f);
             }
         }
+        // nomospice's own defaults (what the netlister falls back to), after the libraries: a
+        // library's part of the same name wins, and the list is never empty
+        ix.scan(crate::schematic::builtin_cards(), "nomospice (built-in)", Path::new(BUILTIN));
         ix
     }
 
@@ -142,6 +148,9 @@ impl Index {
     /// A file edited since indexing invalidates the index (rebuilt on next use) instead of
     /// returning text from stale offsets.
     pub fn text(&self, e: &Entry) -> Option<String> {
+        if e.file == Path::new(BUILTIN) {
+            return crate::schematic::builtin_cards().get(e.start..e.end).map(str::to_string);
+        }
         if self.stamps.get(&e.file).copied().flatten() != mtime(&e.file) {
             GENERATION.fetch_add(1, Ordering::SeqCst);
             return None;
@@ -390,6 +399,22 @@ pub fn subckt_symbol(name: &str) -> Option<crate::schematic::SymbolDef> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn builtin_models_listed_after_libraries() {
+        let ix = Index::build(&[]);
+        let d = ix.get("1n4148").expect("built-in 1N4148");
+        assert_eq!((d.kind.as_str(), d.symbol.as_str(), d.source.as_str()), ("D", "diode", "nomospice (built-in)"));
+        assert!(ix.text(d).unwrap().starts_with(".model 1N4148 D(IS=2n"), "{:?}", ix.text(d));
+        assert_eq!(ix.resolve("2N3904", &mut HashSet::new()).len(), 1);
+        assert!(ix.get("d").is_none() && ix.get("opamp").is_none(), "type defaults and the opamp are not parts");
+        let dir = std::env::temp_dir().join(format!("nomospice-builtin-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("v.lib"), ".model 1N4148 D(IS=4n)\n").unwrap();
+        let ix = Index::build(&[Source { name: "vendor".into(), path: dir.clone(), enabled: true }]);
+        assert_eq!(ix.get("1N4148").unwrap().source, "vendor", "a library wins");
+        std::fs::remove_dir_all(dir).ok();
+    }
 
     #[test]
     fn indexes_models_and_subckts_with_dependencies() {

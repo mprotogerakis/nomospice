@@ -553,6 +553,9 @@ fn install_menu(app: &tauri::App) -> tauri::Result<()> {
             app_menu.remove(&last)?;
         }
         app_menu.append(&MenuItem::with_id(app, "quit", "Quit nomospice", true, Some("CmdOrCtrl+Q"))?)?;
+        // where macOS users look for settings: after About
+        let libraries = MenuItem::with_id(app, "libraries", "Model Libraries…", true, Some("CmdOrCtrl+,"))?;
+        app_menu.insert_items(&[&libraries, &tauri::menu::PredefinedMenuItem::separator(app)?], 2)?;
     }
     app.set_menu(menu)?;
     Ok(())
@@ -627,6 +630,9 @@ fn main() {
             use tauri::Emitter;
             if event.id() == "quit" {
                 let _ = app.emit("quit-requested", ());
+            }
+            if event.id() == "libraries" {
+                let _ = app.emit("open-libraries", ());
             }
         })
         .run(tauri::generate_context!())

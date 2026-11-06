@@ -15,7 +15,7 @@ export type Dialog =
   | { k: "new"; item: Item; at?: [number, number] }
   | { k: "sim" }
   /** `replace`: choose a model for that part instead of placing a new one */
-  | { k: "parts"; replace?: number; kind?: string }
+  | { k: "parts"; replace?: number; kind?: string; libraries?: boolean }
   | { k: "trace" }
   | { k: "about" };
 

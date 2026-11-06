@@ -68,14 +68,18 @@ const KINDS: [string, string | null][] = [
 
 /** Component library: the symbols plus every model and subcircuit of the configured libraries
  *  (LTspice, Micro-Cap 12, own folders), searchable; places a part with the matching symbol. */
-function PartsDialog({ replace, kind0 }: { replace?: number; kind0?: string }) {
+function PartsDialog({ replace, kind0, libraries }: { replace?: number; kind0?: string; libraries?: boolean }) {
   const lib = useS((s) => s.lib);
   const [q, setQ] = useState("");
   const [kind, setKind] = useState<string | null>(kind0 ?? null);
   const [hits, setHits] = useState<LibEntry[]>([]);
   const [i, setI] = useState(0);
   const [text, setText] = useState("");
-  const [view, setView] = useState<"parts" | "sources">("parts");
+  const [view, setView] = useState<"parts" | "sources">(libraries ? "sources" : "parts");
+  const [start, setStart] = useState<"add" | "microcap">(); // the empty-library hint's buttons act at once
+  // no library in use: say where they come from (the settings are otherwise one click away)
+  const [srcs, setSrcs] = useState<LibSource[] | null>(null);
+  useEffect(() => void invoke<LibSource[]>("library_sources").then(setSrcs, () => {}), [view]);
   const listRef = useRef<HTMLUListElement>(null);
   // only real pointer movement highlights: rows scrolled under a resting pointer must not steal it
   const last = useRef<[number, number]>([0, 0]);
@@ -121,7 +125,8 @@ function PartsDialog({ replace, kind0 }: { replace?: number; kind0?: string }) {
     else placePart(e.symbol, e.name);
   };
   // distinct keys: switching views mounts a fresh dialog, so focus lands in the new view
-  if (view === "sources") return <Modal key="sources" title="Model Libraries" wide="xl" ok="Done" onSubmit={() => setView("parts")}><Sources /></Modal>;
+  if (view === "sources") return <Modal key="sources" title="Model Libraries" wide="xl" ok="Done" onSubmit={() => (libraries ? close() : (setStart(undefined), setView("parts")))}><Sources start={start} /></Modal>;
+  const setUp = (s: "add" | "microcap") => (setStart(s), setView("sources"));
   return (
     <Modal key="parts" title={replace != null ? "Choose Model" : "Component Library"} wide="xl" ok={replace != null ? "Use model" : "Place"} onSubmit={() => pick()}>
       <div className="flex gap-2">
@@ -135,6 +140,13 @@ function PartsDialog({ replace, kind0 }: { replace?: number; kind0?: string }) {
         />
         <Button type="button" onClick={() => setView("sources")}>Libraries…</Button>
       </div>
+      {srcs && !srcs.some((s) => s.enabled) && (
+        <div className="flex flex-wrap items-center gap-2 rounded-control border border-border bg-surface-panel p-2 text-xs text-text-secondary">
+          <span className="min-w-0 flex-1">No model library in use: besides the symbols, only nomospice's default models (1N4148, 2N3904, 2N3906, switches) are here. An installed LTspice is found by itself.</span>
+          <Button type="button" size="sm" onClick={() => setUp("microcap")}>Get Micro-Cap 12 library</Button>
+          <Button type="button" size="sm" onClick={() => setUp("add")}>Add folder…</Button>
+        </div>
+      )}
       <div className="flex flex-wrap gap-1">
         {KINDS.map(([label, k]) => (
           <button key={label} type="button" onClick={() => setKind(k)}
@@ -176,17 +188,24 @@ function PartsDialog({ replace, kind0 }: { replace?: number; kind0?: string }) {
 }
 
 /** Library folders: detected (LTspice, Micro-Cap 12), added by the user, or downloaded. */
-function Sources() {
+function Sources({ start }: { start?: "add" | "microcap" }) {
   const [list, setList] = useState<LibSource[]>([]);
   const [busy, setBusy] = useState("");
   useEffect(() => void invoke<LibSource[]>("library_sources").then(setList), []);
+  const started = useRef(false); // once (StrictMode runs effects twice in development)
+  useEffect(() => {
+    if (started.current || !start) return;
+    started.current = true;
+    void (start === "add" ? add() : microcap());
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const save = async (next: LibSource[]) => {
     setList(next);
     await invoke("library_set_sources", { sources: next }).then(refreshLibrarySymbols, (e) => setBusy(String(e)));
   };
   const add = async () => {
     const dir = await open({ directory: true, multiple: false });
-    if (typeof dir === "string") await save([...list, { name: dir.split(/[\\/]/).pop() || dir, path: dir, enabled: true }]);
+    // the list as stored (the shown one may not have loaded yet)
+    if (typeof dir === "string") await save([...(await invoke<LibSource[]>("library_sources")), { name: dir.split(/[\\/]/).pop() || dir, path: dir, enabled: true }]);
   };
   const microcap = async () => {
     setBusy("Downloading Micro-Cap 12 (60 MB) from the Internet Archive…");
@@ -345,7 +364,7 @@ export const Dialogs = memo(function Dialogs() {
       const i = items.findIndex((x) => holdsAnalysis(x));
       return <SimDialog key={i} index={i >= 0 ? i : undefined} />;
     }
-    case "parts": return <PartsDialog replace={dialog.replace} kind0={dialog.kind} />;
+    case "parts": return <PartsDialog replace={dialog.replace} kind0={dialog.kind} libraries={dialog.libraries} />;
     case "trace": return <TraceDialog />;
     case "about": return <AboutDialog />;
   }

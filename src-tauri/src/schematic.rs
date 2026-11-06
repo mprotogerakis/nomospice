@@ -374,6 +374,15 @@ fn inside(p: (i32, i32), a: (i32, i32), b: (i32, i32)) -> bool {
     cross == 0 && dot > 0 && dot < (bx - ax).pow(2) + (by - ay).pow(2)
 }
 
+/// The default models the component library lists ([`BUILTIN_MODELS`] with a name of their own
+/// and parameters: not the bare `.model D D` type defaults or the opamp symbol's subckt).
+pub fn builtin_cards() -> &'static str {
+    static CARDS: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        BUILTIN_MODELS.iter().map(|(_, t)| *t).filter(|t| t.starts_with(".model") && t.contains('(')).collect::<Vec<_>>().join("\n") + "\n"
+    });
+    &CARDS
+}
+
 const BUILTIN_MODELS: &[(&str, &str)] = &[
     ("d", ".model D D"),
     ("npn", ".model NPN NPN"),
