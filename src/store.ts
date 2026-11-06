@@ -156,7 +156,7 @@ export async function loadDoc(items: Item[], path: string | null) {
   await loadSymbols(items, dirOf(path));
   docGen++;
   autoPlotted = new Set();
-  set({ tab: null, tabs: {}, items, path, past: [], future: [], sel: [], dirty: false, sim: null, traces: [], stale: false, nets: null, netsItems: null, plot: NO_PLOT, panel: get().panel === "op" ? null : get().panel, diff: null, tool: { k: "select" }, fitToken: get().fitToken + 1 });
+  set({ dialog: null, menu: null, tab: null, tabs: {}, items, path, past: [], future: [], sel: [], dirty: false, sim: null, traces: [], stale: false, nets: null, netsItems: null, plot: NO_PLOT, panel: get().panel === "op" ? null : get().panel, diff: null, tool: { k: "select" }, fitToken: get().fitToken + 1 });
   refreshNets();
   refreshGit();
 }
@@ -235,6 +235,15 @@ export function analysisItem(items: Item[], kind: Analysis | null) {
   return active >= 0 ? active : items.findIndex(holds);
 }
 
+/** What a run for tab `tab` gets: a chosen tab runs its analysis instead of the schematic's. The
+ *  items keep their indices (the netlist's arrays are aligned with them), the analyses are taken
+ *  out, the tab's line goes last. Simulation and root locus use it. */
+export function simDeck(items: Item[], tab: Analysis | null) {
+  const pick = tab ? analysesOf(items).find((o) => o.kind === tab) : undefined;
+  if (!pick) return items;
+  return [...items.map((it) => (it.t === "text" && it.directive ? { ...it, text: stripAnalyses(it.text) } : it)), { t: "text", x: 0, y: 0, text: pick.line, directive: true } as Item];
+}
+
 /** Show another result tab: the shown one is put away, the other's results come back (a tab
  *  that never ran runs now). Not while a simulation runs: its result belongs to the shown tab. */
 export function selectTab(kind: Analysis) {
@@ -257,10 +266,7 @@ export function selectTab(kind: Analysis) {
 export async function simulate() {
   if (get().running) return;
   const { items, path, tab } = get();
-  // a chosen tab runs its analysis instead of the schematic's: the items keep their indices (the
-  // netlist's arrays are aligned with them), the analyses are taken out, the tab's line goes last
-  const pick = tab ? analysesOf(items).find((o) => o.kind === tab) : undefined;
-  const deck = pick ? [...items.map((it) => (it.t === "text" && it.directive ? { ...it, text: stripAnalyses(it.text) } : it)), { t: "text", x: 0, y: 0, text: pick.line, directive: true } as Item] : items;
+  const deck = simDeck(items, tab);
   const gen = docGen;
   runSeq++;
   set({ running: true });

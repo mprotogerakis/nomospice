@@ -75,6 +75,7 @@ assert.equal(analysisRoundTrips(".dc lin V1 0 5 0.1"), false);
   assert.ok(Math.abs(r.area - 2) < 1e-12 && Math.abs(r.avg - 1) < 1e-12 && Math.abs(r.rms - Math.sqrt(4 / 3)) < 1e-12, JSON.stringify(r));
   assert.ok(Math.abs(integrate([2, 1, 0], [2, 1, 0], 0.5, 1.5).avg - 1) < 1e-12);
   assert.equal(at([0, 1], [0, 10], 0.25), 2.5);
+  assert.ok(Math.abs(integrate([0, 1, 2], [1, 1, 1], -5, 5).avg - 1) < 1e-12, "a range beyond the data: averaged over the data");
 }
 // result tabs: one per kind, the active one wins, alternatives from comments, fixed order
 {

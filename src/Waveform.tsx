@@ -351,7 +351,7 @@ const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot }: { trac
   const dx = a != null && b != null ? b - a : null;
   // average, RMS, integral (LTspice: ctrl-click a trace label) between the cursors, else over what is shown
   const zoom = useS((s) => s.plot.zoom);
-  const [lo, hi] = dx ? [Math.min(a!, b!), Math.max(a!, b!)] : zoom ?? [xs[0], xs[xs.length - 1]];
+  const [lo, hi] = dx ? [Math.min(a!, b!), Math.max(a!, b!)] : zoom ?? [Math.min(xs[0], xs[xs.length - 1]), Math.max(xs[0], xs[xs.length - 1])];
   const stats = traces.flatMap((t) => panes.flatMap((p) => p.series.filter((s) => s.t === t && p.unit !== "dB" && p.unit !== "°").map((s) => ({ t, unit: p.unit, ...integrate(xs, s.y, lo, hi) }))));
   return (
     <>

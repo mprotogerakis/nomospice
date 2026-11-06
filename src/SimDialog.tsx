@@ -1,8 +1,8 @@
 // "Edit Simulation Command": every analysis as a form (LTspice's dialog, plus .tf, .pz, .sens).
 import { useState } from "react";
 import type { Item } from "./types";
-import { analysesOf, commit, useS } from "./store";
-import { ANALYSES, analysisEditable, analysisIndex, formatAnalysis, knownSweep, parseAnalysis, type Analysis, type Fields } from "./spice";
+import { analysesOf, analysisItem, commit, currentTab, selectTab, useS } from "./store";
+import { ANALYSES, ANALYSIS, analysisEditableAt, analysisIndex, formatAnalysis, knownSweep, parseAnalysis, type Analysis, type Fields } from "./spice";
 import { CircuitLists, Tabs, closeDialog, Field, Modal, NumField, Section, Select, SpiceLine, TextField } from "./ui/dialog";
 import { Button } from "./ui/button";
 
@@ -12,11 +12,13 @@ const PER: Record<string, string> = { dec: "Points per decade", oct: "Points per
 
 /** Edits the analysis line of directive `index` (Dialogs picks it), else places a new one (of
  *  kind `kind0`: "+" on the result tabs). */
-export function SimDialog({ index, kind0 }: { index?: number; kind0?: Analysis }) {
+export function SimDialog({ index, kind0, of }: { index?: number; kind0?: Analysis; of?: Analysis | null }) {
   const items = useS((s) => s.items);
   const idx = index ?? -1;
   const lines = idx >= 0 && items[idx].t === "text" ? items[idx].text.split("\n") : [];
-  const li = analysisIndex(lines); // the same rule Dialogs used to pick this dialog
+  // `of`: the result tab's analysis (a text may hold several), else its first
+  const own = lines.findIndex((l) => ANALYSIS.test(l.trim()) && parseAnalysis(l.trim()).kind === of);
+  const li = own >= 0 ? own : analysisIndex(lines);
   const [init] = useState(() => {
     if (kind0) return { kind: kind0, f: {} as Fields };
     const a = parseAnalysis(li >= 0 ? lines[li] : ".tran 1m");
@@ -33,7 +35,7 @@ export function SimDialog({ index, kind0 }: { index?: number; kind0?: Analysis }
   const [pristine] = useState(() => formatAnalysis(init.kind, init.f));
   const unchanged = idx >= 0 && kind === init.kind && line === pristine;
   // more than the form shows (unknown options, `+` lines): OK replaces the whole statement
-  const partial = idx >= 0 && !analysisEditable(lines.join("\n"));
+  const partial = idx >= 0 && !analysisEditableAt(lines, li);
   const cont = (j: number) => j > li && /^\s*\+/.test(lines[j]) && lines.slice(li + 1, j).every((l) => !l.trim() || /^\s*[*+]/.test(l));
   const edited = unchanged ? lines.join("\n") : lines.flatMap((l, j) => (j === li ? [line] : cont(j) ? [] : [l])).join("\n");
 
@@ -43,7 +45,15 @@ export function SimDialog({ index, kind0 }: { index?: number; kind0?: Analysis }
       const it = items[idx] as Extract<Item, { t: "text" }>;
       commit(items.map((x, i) => (i === idx ? { ...it, text: edited } : x)));
       closeDialog();
-    } else useS.setState({ dialog: null, tab: kind, tool: { k: "place", item: { t: "text", x: 0, y: 0, text: line, directive: !alternate } } });
+    } else if (kind0) {
+      // "+" on the result tabs: under the analysis shown, and its tab runs at once (the shown
+      // results are put away under their own tab first)
+      const ref = items[analysisItem(items, currentTab(useS.getState()))];
+      const at = ref?.t === "text" ? { x: ref.x, y: ref.y + 32 * ref.text.split("\n").length } : { x: 0, y: 0 };
+      commit([...items, { t: "text", ...at, text: line, directive: !alternate }]);
+      closeDialog();
+      selectTab(kind);
+    } else useS.setState({ dialog: null, tool: { k: "place", item: { t: "text", x: 0, y: 0, text: line, directive: !alternate } } });
   };
   // the schematic already runs an analysis: a new one is an alternative (a comment, as LTspice keeps
   // them), run in its own result tab; LTspice opens the file as before

@@ -389,8 +389,9 @@ export const analysisRoundTrips = (line: string) => {
 
 /** Whether the simulation form can edit `text`'s analysis: it writes the line back unchanged and
  *  no `+` line continues it (the form would not see the rest). */
-export const analysisEditable = (text: string) => {
-  const lines = text.split("\n"), li = analysisIndex(lines);
+export const analysisEditable = (text: string) => { const lines = text.split("\n"); return analysisEditableAt(lines, analysisIndex(lines)); };
+/** The same for the analysis on line `li` (a text may hold several). */
+export const analysisEditableAt = (lines: string[], li: number) => {
   const next = lines.slice(li + 1).find((l) => l.trim() && !l.trim().startsWith("*")) ?? "";
   return li >= 0 && analysisRoundTrips(lines[li]) && !next.trim().startsWith("+");
 };
@@ -482,14 +483,15 @@ export function integrate(xs: number[], ys: (number | null)[], lo: number, hi: n
   xs.forEach((x, i) => x > lo && x < hi && ys[i] != null && pts.push([x, ys[i]!]));
   pts.push([hi, at(xs, ys, hi)]);
   pts.sort((p, q) => p[0] - q[0]); // a sweep may run downwards
-  let area = 0, sq = 0;
+  // average and RMS over the part with data (a gap, or a range beyond the run, does not count as 0)
+  let area = 0, sq = 0, span = 0;
   for (let i = 1; i < pts.length; i++) {
     const [[x0, y0], [x1, y1]] = [pts[i - 1], pts[i]];
     if (Number.isNaN(y0) || Number.isNaN(y1)) continue;
     area += ((y0 + y1) / 2) * (x1 - x0);
     sq += ((y0 * y0 + y0 * y1 + y1 * y1) / 3) * (x1 - x0); // exact for a straight segment
+    span += x1 - x0;
   }
-  const span = hi - lo;
   return { area, avg: span ? area / span : NaN, rms: span ? Math.sqrt(sq / span) : NaN };
 }
 

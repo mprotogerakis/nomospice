@@ -144,7 +144,7 @@ async function saveFile(as = false) {
     if (doc !== docId()) return; // another document was loaded meanwhile
     const moved = path !== useS.getState().path; // relative .include paths now resolve elsewhere
     useS.setState({ path, dirty: useS.getState().items !== items, ...(moved && useS.getState().sim && { stale: true }) });
-    if (moved) refreshNets();
+    if (moved) void loadSymbols(useS.getState().items).then(refreshNets); // the new folder's symbols
     refreshGit();
   } catch (e) {
     await fail(`Cannot save ${path}`)(e);

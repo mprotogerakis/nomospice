@@ -140,7 +140,8 @@ impl Library {
     }
 
     /// The schematic's folder: its symbols (LTspice looks there first) are all loaded, so the
-    /// component list shows them; a built-in symbol of the same name stays. Another folder (or
+    /// component list shows them; they replace one cached from LTspice or a library folder (it
+    /// comes back with another folder), not a built-in symbol. Another folder (or
     /// none) drops them again; `rescan` reloads the same folder (a symbol saved meanwhile).
     pub fn set_dir(&mut self, dir: Option<&std::path::Path>, rescan: bool) {
         if !rescan && self.3 .0.as_deref() == dir {
@@ -155,7 +156,8 @@ impl Library {
         for p in std::fs::read_dir(dir).into_iter().flatten().flatten().map(|e| e.path()) {
             let Some(stem) = p.file_stem().and_then(|s| s.to_str()) else { continue };
             let key = sym_key(stem);
-            if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("asy")) && !self.0.contains_key(&key) {
+            let builtin = BUILTIN_SYMBOLS.iter().any(|(n, _)| *n == key);
+            if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("asy")) && !builtin {
                 if let Ok(bytes) = std::fs::read(&p) {
                     self.0.insert(key.clone(), parse_asy(&key, &decode(&bytes)));
                     self.3 .1.insert(key);
@@ -781,11 +783,13 @@ fn meas_statement(s: &str, sensors: &[Sensor], an: &str) -> String {
     let s = sensor_currents(s, sensors);
     let toks = spice_tokens(&s);
     let low = |t: &str| t.to_ascii_lowercase();
-    // a vector, V(..)/I(..) or a number: ngspice reads it as it is
+    // a vector, V(..)/I(..) and ngspice's vdb(..), vm(..) … or a number: ngspice reads it as it is
+    // (par() would turn it into a B-source, which knows none of the vdb/vm/… forms)
+    const VECTOR: [&str; 14] = ["v", "i", "vdb", "vm", "vp", "vr", "vi", "vg", "idb", "im", "ip", "ir", "ii", "ig"];
     let simple = |x: &str| {
-        let x = x.trim();
-        let call = x.len() > 3 && matches!(&low(&x[..2])[..], "v(" | "i(") && x.ends_with(')') && !x[2..x.len() - 1].contains(['(', ')']);
-        call || x.chars().all(|c| c.is_ascii_alphanumeric() || "_#.:".contains(c)) && !x.is_empty()
+        let (x, l) = (x.trim(), low(x.trim()));
+        let call = l.find('(').is_some_and(|o| VECTOR.contains(&&l[..o]) && l.ends_with(')') && o + 1 < l.len() && !l[o + 1..l.len() - 1].contains(['(', ')']));
+        call || (!x.is_empty() && x.chars().all(|c| c.is_ascii_alphanumeric() || "_#.:".contains(c)))
     };
     let number = |v: &str| {
         let v = v.trim();
@@ -1274,7 +1278,10 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool) -> Netlist {
     let mut any_ac = false; // some V/I source has an AC amplitude (else .ac results are all 0)
     for (i, it) in items.iter().enumerate() {
         let Item::Sym { sym, attrs, .. } = it else { continue };
-        let Some(def) = lib.get(sym).cloned() else { continue };
+        let Some(def) = lib.get(sym).cloned() else {
+            nl.warnings.push(format!("symbol `{sym}` not found: the part is left out (its .asy is not next to the schematic, in LTspice or a library folder)"));
+            continue;
+        };
 
         let prefix = prefix_of(&def, attrs);
         let inst = match attrs.get("InstName").filter(|n| !n.is_empty()) {
@@ -1663,10 +1670,11 @@ mod tests {
             ".meas tran t TRIG par('V(in)-(0.5*V(vdd))') VAL=0 TD=2n RISE=1 TARG V(out) VAL=1 RISE=1");
         assert_eq!(m(".meas x FIND I(R1) AT=1m"), ".meas tran x FIND i(vsense_r1) AT=1m", "LTspice's default analysis, part current");
         assert_eq!(m(".meas tran w WHEN V(out)=0.5*V(vdd) RISE=1"), ".meas tran w WHEN par('V(out)-(0.5*V(vdd))')=0 RISE=1");
-        for same in [".meas tran w WHEN V(out)=1 RISE=1", ".meas tran a AVG V(out) FROM=1m TO=2m", ".meas tran t TRIG AT=1n TARG V(out) VAL={0.5*2} RISE=1"] {
+        for same in [".meas tran w WHEN V(out)=1 RISE=1", ".meas tran a AVG V(out) FROM=1m TO=2m", ".meas tran t TRIG AT=1n TARG V(out) VAL={0.5*2} RISE=1", ".meas ac bw WHEN vdb(out)=-3", ".meas ac g MAX vm(out)"] {
             assert_eq!(m(same), same);
         }
         assert_eq!(sensor_currents("I(R1)+I(R10)+II(R1)", &r1), "i(vsense_r1)+I(R10)+II(R1)");
+        assert_eq!(m(".meas tran p AVG 1µ*I(R1)"), ".meas tran p AVG par('1µ*i(vsense_r1)')", "multi-byte text: no panic");
         // the manual's delay and power measurements, end to end
         let deck = "* m\nV1 in 0 PULSE(0 2 0 1n 1n 4n 10n)\nV2 vdd 0 2\nR1 out in 100\nC1 out 0 10p\n.tran 4e-11 40n 0.1n\n.MEAS TRAN TpLH\n* note\n+TRIG V(in) VAL=0.5*V(vdd) TD=22n RISE=1\n+TARG V(out) VAL=0.5*V(vdd) TD=22n RISE=1\n.meas tran pdyn AVG -I(V1)*V(in)\n.meas tran vmax MAX V(out)\n+ FROM=0 TO=10n\n.end\n";
         let text = ltspice_meas(&prepare(deck, None, &mut vec![]).0, &[]);

@@ -377,8 +377,8 @@ export const Dialogs = memo(function Dialogs() {
     }
     case "sim": { // the form also for an analysis it does not fully cover: it says so, and OK rewrites the line
       if (dialog.add) return <SimDialog kind0={dialog.add} />;
-      const i = analysisItem(items, currentTab(useS.getState())); // what the shown result tab runs
-      return <SimDialog key={i} index={i >= 0 ? i : undefined} />;
+      const tab = currentTab(useS.getState()), i = analysisItem(items, tab); // what the shown result tab runs
+      return <SimDialog key={i} index={i >= 0 ? i : undefined} of={tab} />;
     }
     case "parts": return <PartsDialog replace={dialog.replace} kind0={dialog.kind} libraries={dialog.libraries} />;
     case "trace": return <TraceDialog />;

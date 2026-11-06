@@ -3,7 +3,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { Run } from "./types";
-import { dirOf, docId, useS } from "./store";
+import { dirOf, docId, simDeck, useS } from "./store";
 import { si, spiceNum } from "./spice";
 import { NumField, Select, TextField } from "./ui/dialog";
 import { Button } from "./ui/button";
@@ -190,9 +190,9 @@ function Sidebar({ poles, zeros, hasLocus, setLocus, error, setError }: {
     setRunning(true);
     const req = ++reqRef.current;
     try {
-      const { items, path } = useS.getState();
+      const { items, path, tab } = useS.getState();
       // a step is null where .pz failed (drawn as a gap); fewer steps than values: halted
-      const steps = await invoke<([number, number][] | null)[]>("root_locus", { items, dir: dirOf(path), target: f.target.trim(), values });
+      const steps = await invoke<([number, number][] | null)[]>("root_locus", { items: simDeck(items, tab), dir: dirOf(path), target: f.target.trim(), values }); // the tab's deck
       if (docId() !== gen || req !== reqRef.current) return; // another document opened meanwhile, or Clear
       // live mode, Run: a new simulation stops the sweep (before its result reaches the store)
       if (useS.getState().running || useS.getState().sim !== sim0) return setError("The circuit was simulated again meanwhile: draw the locus again.");

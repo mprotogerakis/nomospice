@@ -366,7 +366,8 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
         return Err(log);
     }
     let sensors = &sensors[..];
-    let (mut vectors, mut scale) = plot_vectors(api, &plot, sensors);
+    let uses_par = netlist.contains("par('");
+    let (mut vectors, mut scale) = plot_vectors(api, &plot, sensors, uses_par);
     // one frequency (`.ac lin 1 50 50`): phasors, shown as a table like .op instead of a 1-point plot
     let phasors = scale == "frequency" && read(api, "frequency").is_some_and(|f| f.re.len() == 1);
     if phasors {
@@ -388,7 +389,7 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
     // .noise ends in noise2 (totals); the spectrum users want to plot is noise1 (we `destroy all` per run)
     if plot == "noise2" && api.command("setplot noise1") {
         plot = "noise1".into();
-        (vectors, scale) = plot_vectors(api, &plot, sensors);
+        (vectors, scale) = plot_vectors(api, &plot, sensors, uses_par);
     }
     let aborted = log.iter().any(|l| {
         let l = l.to_lowercase();
@@ -397,7 +398,7 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
     Ok(Run { id, plot, scale, vectors, op, aborted, meas: measurements(&log), log })
 }
 
-fn plot_vectors(api: &Api, plot: &str, sensors: &[crate::schematic::Sensor]) -> (Vec<String>, String) {
+fn plot_vectors(api: &Api, plot: &str, sensors: &[crate::schematic::Sensor], uses_par: bool) -> (Vec<String>, String) {
     let mut vectors = vec![];
     let cplot = CString::new(plot).unwrap_or_default();
     let mut p = unsafe { (api.all_vecs)(cplot.as_ptr()) };
@@ -412,10 +413,15 @@ fn plot_vectors(api: &Api, plot: &str, sensors: &[crate::schematic::Sensor]) -> 
     vectors.retain(|v| !sensors.iter().any(|s| {
         &s.node == v || SENS.iter().any(|x| *v == format!("{}{x}", s.source)) || *v == format!("{}#branch", s.inst)
     }));
-    // the helper sources ngspice makes for `.meas … par('…')` (pa_00, bpa_00#branch)
-    let par_helper = |v: &str| v.strip_prefix('b').unwrap_or(v).strip_suffix("#branch").unwrap_or(v.strip_prefix('b').unwrap_or(v))
-        .strip_prefix("pa_").is_some_and(|n| !n.is_empty() && n.bytes().all(|c| c.is_ascii_digit()));
-    vectors.retain(|v| !par_helper(v));
+    // the helper sources ngspice makes for `.meas … par('…')` (pa_00, bpa_00#branch), if it has any
+    let par_helper = |v: &str| {
+        let n = v.strip_prefix('b').unwrap_or(v);
+        let n = n.strip_suffix("#branch").unwrap_or(n);
+        n.strip_prefix("pa_").is_some_and(|d| !d.is_empty() && d.bytes().all(|c| c.is_ascii_digit()))
+    };
+    if uses_par {
+        vectors.retain(|v| !par_helper(v));
+    }
     vectors.sort();
     let scale = ["time", "frequency", "v-sweep", "i-sweep", "temp-sweep", "res-sweep"]
         .into_iter()
