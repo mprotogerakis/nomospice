@@ -48,26 +48,30 @@ static DEAD: AtomicBool = AtomicBool::new(false);
 static LOADS: AtomicUsize = AtomicUsize::new(0);
 static LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
 static BG_DONE: AtomicBool = AtomicBool::new(true);
-/// Set by `halt` from any thread; only the run thread acts on it, so libngspice is never
-/// entered concurrently. Cleared by `arm` when a new simulation request starts.
-static HALT: AtomicBool = AtomicBool::new(false);
-
-/// Operations in flight (simulations, root loci). Halt stops all of them; the flag is cleared only
-/// when the first of overlapping operations begins, so starting one cannot undo a Halt meant for another.
-static ACTIVE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-
-/// One user operation; hold the guard until it is done.
-pub struct Op;
-impl Drop for Op {
-    fn drop(&mut self) {
-        ACTIVE.fetch_sub(1, Ordering::SeqCst);
-    }
+/// Counts Halt presses. An operation (a simulation, a root locus) notes the count when it begins
+/// (`begin`) and is halted once the count moves on: a Halt stops what was running when it was
+/// pressed, never something started afterwards, and no later start can undo it. Only the run
+/// thread acts on it (`bg_halt`), so libngspice is never entered concurrently.
+static HALTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+thread_local! {
+    /// The Halt count the operation on this thread began with (see `enter`); none: not haltable.
+    static OP: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
 }
-pub fn begin() -> Op {
-    if ACTIVE.fetch_add(1, Ordering::SeqCst) == 0 {
-        HALT.store(false, Ordering::SeqCst);
+
+/// An operation begins (call it before netlisting, so a Halt during that counts too).
+pub fn begin() -> u64 {
+    HALTS.load(Ordering::SeqCst)
+}
+
+/// Runs on this thread belong to the operation that began at `op` until the guard is dropped.
+pub fn enter(op: u64) -> impl Drop {
+    struct Leave(Option<u64>);
+    impl Drop for Leave {
+        fn drop(&mut self) {
+            OP.with(|o| o.set(self.0));
+        }
     }
-    Op
+    Leave(OP.with(|o| o.replace(Some(op))))
 }
 
 extern "C" fn on_char(s: *const c_char, _: c_int, _: *mut c_void) -> c_int {
@@ -313,7 +317,7 @@ pub fn run(netlist: &Prepared) -> Result<Run, Vec<String>> {
     if unsafe { (api.circ)(ptrs.as_ptr()) } != 0 {
         return Err(take_log());
     }
-    if HALT.load(Ordering::SeqCst) {
+    if halted() {
         return Err(vec!["simulation halted".into()]);
     }
     BG_DONE.store(false, Ordering::SeqCst);
@@ -324,7 +328,7 @@ pub fn run(netlist: &Prepared) -> Result<Run, Vec<String>> {
     let mut halted = false;
     // BG_DONE comes from the callback; ngSpice_running() covers a thread that never started.
     while !BG_DONE.load(Ordering::SeqCst) && (started.elapsed() < Duration::from_millis(500) || unsafe { (api.running)() }) {
-        if !halted && HALT.load(Ordering::SeqCst) {
+        if !halted && self::halted() {
             halted = true;
             api.command("bg_halt");
         }
@@ -414,14 +418,15 @@ pub fn trace(expr: &str, scale: &str) -> Result<Trace, String> {
     Ok(t)
 }
 
-/// Request a stop; `run` sends `bg_halt` from its own thread.
+/// Request a stop of whatever runs now; `run` sends `bg_halt` from its own thread.
 pub fn halt() {
-    HALT.store(true, Ordering::SeqCst);
+    HALTS.fetch_add(1, Ordering::SeqCst);
 }
 
-/// Whether Halt was pressed since `arm` (loops of runs, such as a root locus, stop there).
+/// Whether Halt was pressed since the operation on this thread began (loops of runs, such as a
+/// root locus, stop there). Outside an operation (tests, MCP): never.
 pub fn halted() -> bool {
-    HALT.load(Ordering::SeqCst)
+    OP.with(|o| o.get()).is_some_and(|op| HALTS.load(Ordering::SeqCst) != op)
 }
 
 /// Tests that run simulations share the one ngspice engine: they take this lock.

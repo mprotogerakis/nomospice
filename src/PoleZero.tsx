@@ -159,6 +159,9 @@ function Sidebar({ poles, zeros, locus, setLocus, error, setError }: {
   const nets = useS(currentNets); // null while the netlist lags the items: no index-aligned names then
   // its own busy state: the global `running` would make simulate() drop a Run meanwhile
   const [running, setRunning] = useState(false);
+  const runningRef = useRef(false);
+  runningRef.current = running;
+  useEffect(() => () => void (runningRef.current && invoke("cancel_locus")), []); // the view goes: the sweep stops
   // sweepable: .param names and R/C/L instances
   const targets = useMemo(() => [...new Set([
     // `+` continuation lines joined to their .param (names defined there can be swept too)

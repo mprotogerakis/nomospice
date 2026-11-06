@@ -600,10 +600,7 @@ impl Prepared {
     pub fn at(&self, spans: &[(usize, usize)], value: f64) -> Prepared {
         Prepared(splice(&self.0, spans, value), self.1.clone())
     }
-    #[cfg(test)]
-    pub fn varied(&self, target: &str, value: f64) -> Option<Prepared> {
-        Some(self.at(&self.spans(target)?, value))
-    }
+
 
     pub fn sensors(&self) -> &[Sensor] {
         &self.1
@@ -1369,7 +1366,7 @@ mod tests {
         let bode = EXAMPLES.iter().find(|e| e.0 == "rc_bode").unwrap().1.replace(".ac dec 50 10 1Meg", ".pz in 0 out 0 vol pz");
         let nl = netlist_for_sim(&parse_asc(&bode), &mut Library::builtin());
         let p = prepare(&nl.text, None, &mut vec![]).with_sensors(nl.sensors.clone());
-        let run = crate::ngspice::run(&p.varied("R1", 2000.0).unwrap()).unwrap();
+        let run = crate::ngspice::run(&p.at(&p.spans("R1").unwrap(), 2000.0)).unwrap();
         let pole = run.op.iter().find(|o| o.0.starts_with("pole")).unwrap();
         assert!((pole.1 + 5000.0).abs() < 1.0, "{:?}", run.op);
     }
@@ -1491,7 +1488,7 @@ mod tests {
                     // K = 2: Q = 1, w0 = 1/RC = 1e4 -> -5000 ± j8660; Rb = 30k (K = 4): right half-plane
                     let p = run.op.iter().find(|o| o.0.starts_with("pole") && o.2 > 0.0).unwrap_or_else(|| panic!("{:?}", run.op));
                     assert!((p.1 + 5000.0).abs() < 150.0 && (p.2 - 8660.0).abs() < 200.0, "{name}: {:?}", run.op);
-                    let k4 = crate::ngspice::run(&deck.varied("Rb", 30e3).unwrap()).unwrap();
+                    let k4 = crate::ngspice::run(&deck.at(&deck.spans("Rb").unwrap(), 30e3)).unwrap();
                     assert!(k4.op.iter().any(|o| o.0.starts_with("pole") && o.1 > 0.0), "{name}: {:?}", k4.op);
                 }
                 _ => {

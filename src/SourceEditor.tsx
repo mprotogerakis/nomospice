@@ -18,7 +18,7 @@ export function SourceEditor({ attrs: given, setAttrs, current, spiceLine }: { a
   const [hadRest] = useState(() => !!src.rest); // keep the "Other" fields while they are being retyped
   const [hadVrest] = useState(() => !!src.vrest);
   // arguments per function, so switching away and back keeps what was typed
-  const [kept, setKept] = useState<Partial<Record<Func, { args: string[]; vrest: string }>>>({});
+  const [kept, setKept] = useState<Partial<Record<Func | "", { args: string[]; vrest: string }>>>({});
   const update = (next: Source) => {
     setSrc(next);
     setAttrs({ ...attrs, ...formatSource(next) });
@@ -30,9 +30,10 @@ export function SourceEditor({ attrs: given, setAttrs, current, spiceLine }: { a
     setMore(null);
     // a new function starts with every value written out: the line, the fields and the preview agree
     const args = func ? kept[func]?.args ?? (func === "PWL" ? ["0", "0", "1m", "1"] : FUNCS[func].map((d) => d.def)) : [];
-    // options after the function (PWL's r=0) belong to it: kept with it, not written after another
-    if (src.func) setKept({ ...kept, [src.func]: { args: src.args, vrest: src.vrest } });
-    update({ ...src, func, args, vrest: func ? kept[func]?.vrest ?? "" : "" });
+    // options after a function (PWL's r=0) belong to it and stay with it; a DC source's (Rpar=…)
+    // are not tied to a function and go along
+    setKept({ ...kept, [src.func]: { args: src.args, vrest: src.vrest } });
+    update({ ...src, func, args, vrest: kept[func]?.vrest ?? (src.func ? "" : src.vrest) });
   };
   const out = formatSource(src);
   const lastArg = lastFilled(src.args); // empty fields after it: SPICE's defaults

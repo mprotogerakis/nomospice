@@ -178,7 +178,7 @@ static SWEEP_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::n
 /// `dir`: folder of the .asc, for relative `.include`/`.lib` paths.
 #[tauri::command]
 async fn simulate(items: Vec<Item>, dir: Option<String>, lib: tauri::State<'_, Lib>) -> Result<Sim, String> {
-    let _op = ngspice::begin(); // a Halt pressed from here on (netlisting, include expansion) still counts
+    let op = ngspice::begin(); // a Halt pressed from here on (netlisting, include expansion) still counts
     // the UI gets the clean netlist (same nets/insts/probes); the one with current sensors runs
     let (netlist, prepared) = {
         let mut lib = lib.0.lock().unwrap_or_else(|e| e.into_inner());
@@ -191,6 +191,7 @@ async fn simulate(items: Vec<Item>, dir: Option<String>, lib: tauri::State<'_, L
     SWEEP_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let res = tauri::async_runtime::spawn_blocking(move || {
         let _sweep = SWEEP.lock().unwrap_or_else(|e| e.into_inner());
+        let _op = ngspice::enter(op);
         ngspice::run(&prepared)
     }).await.map_err(|e| e.to_string())?;
     Ok(match res {
@@ -204,10 +205,13 @@ async fn simulate(items: Vec<Item>, dir: Option<String>, lib: tauri::State<'_, L
 /// (it often does near a pole crossing; the view leaves a gap). Halt stops after the current step.
 #[tauri::command]
 async fn root_locus(items: Vec<Item>, dir: Option<String>, target: String, values: Vec<f64>, lib: tauri::State<'_, Lib>) -> Result<Vec<Option<Vec<(f64, f64)>>>, String> {
-    let _op = ngspice::begin();
+    let op = ngspice::begin();
     let deck = sim_deck(&items, dir.as_deref(), &mut lib.0.lock().unwrap_or_else(|e| e.into_inner()), &mut vec![]);
-    if !deck.text().lines().any(|l| l.trim_start().to_lowercase().starts_with(".pz")) {
-        return Err("the schematic has no .pz analysis (Simulation command → Poles/zeros)".into());
+    let pz = deck.text().lines().map(|l| l.trim().to_lowercase()).find(|l| l.starts_with(".pz"));
+    match pz {
+        None => return Err("the schematic has no .pz analysis (Simulation command → Poles/zeros)".into()),
+        Some(l) if l.split_whitespace().nth(6) == Some("zer") => return Err("the .pz analysis computes zeros only: a root locus needs the poles (Poles/zeros → Compute)".into()),
+        _ => {}
     }
     // where the value sits in the deck: found once, then spliced per step
     let spans = deck.spans(&target).ok_or_else(|| format!("`{target}` is neither a .param nor an R, C or L in the schematic"))?;
@@ -215,6 +219,7 @@ async fn root_locus(items: Vec<Item>, dir: Option<String>, target: String, value
     let stop = move || ngspice::halted() || SWEEP_GEN.load(std::sync::atomic::Ordering::SeqCst) != gen;
     tauri::async_runtime::spawn_blocking(move || {
         let _sweep = SWEEP.lock().unwrap_or_else(|e| e.into_inner());
+        let _op = ngspice::enter(op);
         let (mut steps, mut first_error) = (vec![], None);
         for &v in &values {
             if stop() {

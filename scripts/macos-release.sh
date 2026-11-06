@@ -52,4 +52,6 @@ spctl -a -t open --context context:primary-signature -v "$DMG"
 # 5. the in-app updater's archive of the stapled app, signed (scripts/publish-release.sh uploads it)
 COPYFILE_DISABLE=1 tar -czf "$OUT/nomospice_${VERSION}_aarch64.app.tar.gz" -C "$(dirname "$APP")" nomospice.app
 scripts/sign-update.sh "$OUT/nomospice_${VERSION}_aarch64.app.tar.gz"
+# which commit this is (publish-release.sh checks it); built with local changes: not a commit
+echo "$(git rev-parse HEAD)$([ -n "$(git status --porcelain --untracked-files=no)" ] && echo -dirty)" > "$OUT/built-from"
 echo "$DMG"
