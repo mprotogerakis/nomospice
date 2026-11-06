@@ -95,6 +95,8 @@ fn call(base: &Path, name: &str, args: &Value) -> Result<Value, String> {
             let mut warnings = shown.warnings.clone();
             let dir = path.as_ref().and_then(|p| p.parent().map(Path::to_path_buf));
             let prepared = sim.prepared(dir.as_deref(), &mut warnings);
+            // `nomospice --mcp` is a process of its own (stdio, one request at a time): no GUI, no Halt
+            // and no root locus share this engine, so the run and its traces below cannot be interleaved
             let run = match ngspice::run(&prepared) {
                 Ok(run) => run,
                 Err(log) => return Ok(json!({ "ok": false, "warnings": warnings, "log": log.iter().rev().take(40).rev().collect::<Vec<_>>() })),
