@@ -37,7 +37,10 @@ SOFTWARE.
 
 ## ngspice (BSD-3-Clause, loaded at runtime)
 
-https://ngspice.sourceforge.io — the simulation engine. Windows builds bundle ngspice.dll.
+https://ngspice.sourceforge.io — the simulation engine. Windows builds bundle ngspice's official
+DLL package (ngspice.dll, XSPICE code models, LLVM OpenMP runtime `libomp140.x86_64.dll`, Apache-2.0
+with LLVM exception) plus `sndfile.dll` (libsndfile, LGPL-2.1-or-later) and `samplerate.dll`
+(libsamplerate, BSD-2-Clause) from ngspice's console package, all unmodified and loaded at runtime.
 
 ## LTspice and Micro-Cap 12 libraries
 

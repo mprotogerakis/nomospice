@@ -19,6 +19,8 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: pnpm }
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.os == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
       - uses: Swatinem/rust-cache@v2
         with: { workspaces: src-tauri }
 
@@ -35,8 +37,12 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Invoke-WebRequest -Uri "https://downloads.sourceforge.net/project/ngspice/ng-spice-rework/47/ngspice-47_dll_64.7z" -OutFile ngspice.7z -UserAgent "Wget"
+          $base = "https://downloads.sourceforge.net/project/ngspice/ng-spice-rework/47"
+          Invoke-WebRequest -Uri "$base/ngspice-47_dll_64.7z" -OutFile ngspice.7z -UserAgent "Wget"
+          Invoke-WebRequest -Uri "$base/ngspice-47_64.7z" -OutFile ngspice-console.7z -UserAgent "Wget"
           7z x ngspice.7z -o"ngspice-tmp" | Out-Null
+          # ngspice.dll imports sndfile.dll + samplerate.dll, which only the console package ships
+          7z e ngspice-console.7z Spice64/bin/sndfile.dll Spice64/bin/samplerate.dll -o"ngspice-tmp/Spice64_dll/dll-vs" | Out-Null
           Move-Item ngspice-tmp/Spice64_dll src-tauri/ngspice
           "NGSPICE_LIB=$PWD/src-tauri/ngspice/dll-vs/ngspice.dll" | Out-File -FilePath $env:GITHUB_ENV -Append
 

@@ -109,6 +109,20 @@ pub fn set_scratch_dir(dir: std::path::PathBuf) {
     let _ = SCRATCH.set(dir);
 }
 
+/// Open a library by path. Windows: resolve its own imports (libomp, sndfile, samplerate) from its
+/// folder, which the default search order skips.
+unsafe fn open(p: &std::path::Path) -> Result<libloading::Library, String> {
+    #[cfg(windows)]
+    let lib = {
+        let p = std::path::absolute(p).map_err(|e| e.to_string())?; // the flag needs an absolute path
+        libloading::os::windows::Library::load_with_flags(p, libloading::os::windows::LOAD_WITH_ALTERED_SEARCH_PATH).map(Into::into)
+    };
+    #[cfg(not(windows))]
+    let lib = libloading::Library::new(p);
+    // libloading's message is just "LoadLibraryExW failed": add the OS reason
+    lib.map_err(|e| match std::error::Error::source(&e) { Some(why) => format!("{e} ({why})"), None => e.to_string() })
+}
+
 fn load() -> Result<Api, String> {
     let n = LOADS.load(Ordering::SeqCst); // successful loads so far: > 0 means this is a reload
     if n == 0 {
@@ -121,7 +135,7 @@ fn load() -> Result<Api, String> {
     }
     let mut errors = vec![];
     // the first file that exists *and loads* (a stale wrong-architecture copy must not block others)
-    let found = candidates().into_iter().filter(|p| p.is_file()).find_map(|p| match unsafe { libloading::Library::new(&p) } {
+    let found = candidates().into_iter().filter(|p| p.is_file()).find_map(|p| match unsafe { open(&p) } {
         Ok(lib) => Some((p, lib)),
         Err(e) => {
             errors.push(format!("{}: {e}", p.display()));
@@ -133,15 +147,16 @@ fn load() -> Result<Api, String> {
     let cm_dirs: Vec<std::path::PathBuf> = found.as_ref().and_then(|(p, _)| p.parent()).map(|d| vec![d.join("ngspice"), d.join("../lib/ngspice")]).unwrap_or_default();
     let lib = match found {
         // a reload must not get the dead image back from the loader's cache: load a fresh copy
-        Some((path, cached)) if n > 0 => {
-            drop(cached);
+        // `_orig` stays loaded until the copy is: its imports (Windows: libomp, sndfile, samplerate,
+        // not beside the copy) resolve to the modules already in memory
+        Some((path, _orig)) if n > 0 => {
             let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
             let name = format!("nomospice-{}-{nanos}-{}", std::process::id(), path.file_name().unwrap().to_string_lossy());
             let dirs = SCRATCH.get().cloned().into_iter().chain([std::env::temp_dir()]);
             let mut last = String::new();
             let lib = dirs.map(|d| d.join(&name)).find_map(|copy| {
                 let res = std::fs::copy(&path, &copy).map_err(|e| e.to_string())
-                    .and_then(|_| unsafe { libloading::Library::new(&copy) }.map_err(|e| e.to_string()));
+                    .and_then(|_| unsafe { open(&copy) });
                 // unix: the mapping stays valid after unlink, so no copy is left behind
                 if cfg!(unix) || res.is_err() {
                     let _ = std::fs::remove_file(&copy);
