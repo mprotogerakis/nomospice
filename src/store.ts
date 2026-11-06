@@ -177,9 +177,9 @@ function freeSlot(traces: Trace[]) {
 }
 
 async function fetchTrace(t: Trace): Promise<Trace> {
-  const scale = get().sim?.run?.scale ?? "";
+  const run = get().sim?.run;
   try {
-    return { ...t, data: await invoke<TraceData>("trace", { expr: t.expr, scale }), error: undefined };
+    return { ...t, data: await invoke<TraceData>("trace", { expr: t.expr, scale: run?.scale ?? "", run: run?.id ?? 0 }), error: undefined };
   } catch (e) {
     return { ...t, data: undefined, error: String(e) };
   }
@@ -238,7 +238,7 @@ export async function simulate() {
     }
   } catch (e) {
     // stale cleared so live mode does not retry a hard failure every 350 ms
-    if (gen === docGen) set({ sim: { netlist: get().nets ?? { text: "", nets: [], insts: [], probes: [], warnings: [] }, simulated: "", run: null, log: [String(e)] }, panel: "log", stale: false });
+    if (gen === docGen) set({ sim: { netlist: get().nets ?? { text: "", nets: [], insts: [], probes: [], warnings: [] }, simulated: "", run: null, log: [String(e)], sweepable: [] }, panel: "log", stale: false });
   } finally {
     set({ running: false });
   }

@@ -48,6 +48,8 @@ static DEAD: AtomicBool = AtomicBool::new(false);
 static LOADS: AtomicUsize = AtomicUsize::new(0);
 static LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
 static BG_DONE: AtomicBool = AtomicBool::new(true);
+/// Counts runs: each one destroys the results of the one before (see `Run::id`, `trace`).
+static RUNS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// Counts Halt presses. An operation (a simulation, a root locus) notes the count when it begins
 /// (`begin`) and is halted once the count moves on: a Halt stops what was running when it was
 /// pressed, never something started afterwards, and no later start can undo it. Only the run
@@ -263,6 +265,8 @@ fn cstr(p: *const c_char) -> String {
 
 #[derive(Serialize, Debug, Default)]
 pub struct Run {
+    /// Which run this is: only the latest one's vectors can be traced
+    pub id: u64,
     /// ngspice plot name: tran1, ac1, dc1, op1 ...
     pub plot: String,
     /// Scale vector (time / frequency / *-sweep), empty for .op
@@ -310,6 +314,7 @@ pub fn run(netlist: &Prepared) -> Result<Run, Vec<String>> {
     let api = g.as_ref().unwrap();
     api.command("destroy all");
     api.command("remcirc");
+    let id = RUNS.fetch_add(1, Ordering::SeqCst) + 1; // the previous run's results are gone now
     take_log();
     let lines: Vec<CString> = netlist.lines().map(|l| CString::new(l).unwrap_or_default()).collect();
     let mut ptrs: Vec<*const c_char> = lines.iter().map(|l| l.as_ptr()).collect();
@@ -368,7 +373,7 @@ pub fn run(netlist: &Prepared) -> Result<Run, Vec<String>> {
         let l = l.to_lowercase();
         l.contains("aborted") || l.contains("timestep too small") || l.contains("simulation interrupted")
     });
-    Ok(Run { plot, scale, vectors, op, aborted, log })
+    Ok(Run { id, plot, scale, vectors, op, aborted, log })
 }
 
 fn plot_vectors(api: &Api, plot: &str, sensors: &[crate::schematic::Sensor]) -> (Vec<String>, String) {
@@ -395,8 +400,9 @@ fn plot_vectors(api: &Api, plot: &str, sensors: &[crate::schematic::Sensor]) -> 
     (vectors, scale)
 }
 
-/// Evaluate an ngspice expression (e.g. `v(out)`, `i(vsense_r1)`, `v(a)-v(b)`) in the current plot.
-pub fn trace(expr: &str, scale: &str) -> Result<Trace, String> {
+/// Evaluate an ngspice expression (e.g. `v(out)`, `i(vsense_r1)`, `v(a)-v(b)`) in the results of
+/// run `run` (an error once another run, such as a root locus step, replaced them).
+pub fn trace(expr: &str, scale: &str, run: u64) -> Result<Trace, String> {
     // ngspice's command line is csh-like (`;` chains, backquotes run sh, `!` history, `$` vars):
     // only characters an expression needs may pass.
     let ok = |c: char| c.is_ascii_alphanumeric() || " _()[]@#+-*/^.,:\"'<>=&|%".contains(c);
@@ -405,6 +411,9 @@ pub fn trace(expr: &str, scale: &str) -> Result<Trace, String> {
     }
     let g = engine().map_err(|e| e.join("\n"))?;
     let api = g.as_ref().unwrap();
+    if RUNS.load(Ordering::SeqCst) != run {
+        return Err("the results were replaced by a later run (a root locus or another simulation): run the simulation again".into());
+    }
     api.command("unlet nmsp_trace"); // a failed `let` would otherwise leave the previous trace behind
     take_log(); // after unlet: it may print leftovers of the finished run ("Background thread stopped")
     api.command(&format!("let nmsp_trace = {expr}"));

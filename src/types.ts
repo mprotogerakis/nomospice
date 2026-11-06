@@ -66,6 +66,8 @@ export interface Netlist {
 }
 
 export interface Run {
+  /** which ngspice run: only the latest one's vectors can be traced */
+  id: number;
   plot: string;
   scale: string;
   vectors: string[];
@@ -81,6 +83,8 @@ export interface Sim {
   simulated: string;
   run: Run | null;
   log: string[];
+  /** what a root locus can vary: .param names and R/C/L instances (by the sweep's own rules) */
+  sweepable: string[];
 }
 
 export interface TraceData {

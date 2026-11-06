@@ -102,7 +102,7 @@ fn call(base: &Path, name: &str, args: &Value) -> Result<Value, String> {
             let points = args["points"].as_u64().unwrap_or(200).clamp(2, 5000) as usize;
             let mut traces = serde_json::Map::new();
             for expr in args["traces"].as_array().into_iter().flatten().filter_map(Value::as_str) {
-                traces.insert(expr.into(), match ngspice::trace(expr, &run.scale) {
+                traces.insert(expr.into(), match ngspice::trace(expr, &run.scale, run.id) {
                     Ok(t) => json!({
                         "x": downsample(&t.x, points),
                         "re": downsample(&t.re, points),

@@ -34,7 +34,7 @@ const SUFFIX: [RegExp, number][] = [
 ];
 /** A SPICE number (`4.7k`, `1Meg`, `10uF`); null for expressions, names and junk. */
 export function spiceNum(s: string): number | null {
-  const m = s.trim().match(/^([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)([a-zµμ]*)$/i);
+  const m = s.trim().replace(/Ω$/, "").match(/^([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)([a-zµμ]*)$/i);
   if (!m) return null;
   const tail = m[2].toLowerCase();
   if (tail.startsWith("mil")) return (+m[1] * 25.4) / 1e6;
@@ -50,7 +50,7 @@ export function numInfo(s: string, unit = ""): { text: string; warn?: string } |
   if (/^[a-z_]\w*$/i.test(v)) return { text: "", warn: `write {${v}} to use a parameter` };
   const n = spiceNum(v);
   if (n === null) return { text: "", warn: "not a number: SPICE writes 4.7k, 10u, 1Meg, 2.5e-3" };
-  const tail = v.match(/[a-zµμ]+$/i)?.[0] ?? "";
+  const tail = v.replace(/Ω$/, "").match(/[a-zµμ]+$/i)?.[0] ?? ""; // 10kΩ: the netlist drops the Ω
   const warn = /^M/.test(tail) && !/^(meg|mil)/i.test(tail) ? "M is milli in SPICE: write Meg for mega"
     : /^F/.test(tail) ? "F is femto in SPICE (write 10u, not 10F)"
     : /^a/i.test(tail) ? "a is atto (1e-18) in SPICE: for amperes write the number alone (1, not 1A)"

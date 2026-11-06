@@ -9,6 +9,8 @@ import {
 assert.equal(spiceNum("4.7k"), 4700);
 assert.equal(spiceNum("1Meg"), 1e6);
 assert.equal(spiceNum("10uF"), 10e-6);
+assert.equal(spiceNum("10kΩ"), 1e4); // the netlist drops the Ω
+assert.match(numInfo("1MΩ")?.warn ?? "", /milli/);
 assert.equal(spiceNum("1MHz"), 1e-3); // SPICE reads M as milli
 assert.equal(spiceNum("{R*2}"), null);
 assert.match(numInfo("1MHz", "Hz")!.warn!, /milli/);

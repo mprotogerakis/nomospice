@@ -439,7 +439,7 @@ fn microcap_parts_simulate() {
     let nl = netlist_for_sim(&parse_asc(&src), &mut lib);
     assert!(nl.warnings.is_empty(), "{:?}\n{}", nl.warnings, nl.text);
     let run = crate::ngspice::run(&prepare(&nl.text, None, &mut vec![])).unwrap_or_else(|l| panic!("{}\n{}", nl.text, l.join("\n")));
-    let out = crate::ngspice::trace("v(\"out\")", &run.scale).unwrap();
+    let out = crate::ngspice::trace("v(\"out\")", &run.scale, run.id).unwrap();
     let late: Vec<f64> = out.x.iter().zip(&out.re).filter(|(t, _)| **t > 1e-3).map(|(_, v)| *v).collect();
     let (lo, hi) = late.iter().fold((f64::MAX, f64::MIN), |(a, b), v| (a.min(*v), b.max(*v)));
     println!("V(out) after 1 ms: min {lo:.3} max {hi:.3}");

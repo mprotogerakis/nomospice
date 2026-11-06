@@ -454,9 +454,21 @@ fn param_defs<'a>(line: &'a str, low: &str) -> Vec<(&'a str, (usize, usize))> {
     out
 }
 
+/// The value of an R, C or L line (the token after its two nodes) if a number can stand in for it:
+/// a number or a `{…}`/`'…'` expression, not a model name or an `R=…` form.
+fn part_value(line: &str) -> Option<(usize, usize)> {
+    if !matches!(line.trim_start().bytes().next()?.to_ascii_lowercase(), b'r' | b'c' | b'l') {
+        return None;
+    }
+    let (a, e) = *token_spans(line).get(3)?;
+    let v = &line[a..e];
+    let plain = v.starts_with(|c: char| c.is_ascii_digit() || c == '.') && !v.contains('=');
+    (plain || (v.starts_with('{') && v.ends_with('}')) || (v.len() > 1 && v.starts_with('\'') && v.ends_with('\''))).then_some((a, e))
+}
+
 /// Where `target` is set in `text` (byte spans): every top-level `.param` definition of that name
-/// (SPICE uses the last), or else the value of the top-level R, C or L instance of that name (the
-/// token after its two nodes). `.subckt` bodies are left alone. None if neither is in the deck.
+/// (SPICE uses the last), or else the value of the top-level R, C or L instance of that name
+/// ([`part_value`]). `.subckt` bodies are left alone. None if neither is in the deck.
 pub fn vary_spans(text: &str, target: &str) -> Option<Vec<(usize, usize)>> {
     let t = target.trim();
     if t.is_empty() || !t.is_ascii() {
@@ -471,21 +483,15 @@ pub fn vary_spans(text: &str, target: &str) -> Option<Vec<(usize, usize)>> {
         return Some(defs);
     }
     let low = t.to_ascii_lowercase();
-    if !"rcl".contains(&low[..1]) {
-        return None;
-    }
     lines.iter().filter(|l| l.top).find(|l| l.low.split_whitespace().next() == Some(low.as_str()))
-        .and_then(|l| token_spans(l.line).get(3).map(|&(a, e)| vec![(l.start + a, l.start + e)]))
+        .and_then(|l| part_value(l.line).map(|(a, e)| vec![(l.start + a, l.start + e)]))
 }
 
 /// What a sweep can vary in `text`: top-level `.param` names and R, C, L instances (vary_spans' rules).
 pub fn sweepable(text: &str) -> Vec<String> {
     let lines = deck_lines(text);
     let params = lines.iter().filter(|l| l.top && l.param).flat_map(|l| param_defs(l.line, &l.low).into_iter().map(|(n, _)| n.to_string()));
-    let parts = lines.iter().filter(|l| l.top && token_spans(l.line).len() >= 4).filter_map(|l| {
-        let first = l.line.split_whitespace().next()?;
-        "rclRCL".contains(&first[..1]).then(|| first.to_string())
-    });
+    let parts = lines.iter().filter(|l| l.top && part_value(l.line).is_some()).filter_map(|l| l.line.split_whitespace().next().map(str::to_string));
     let mut out: Vec<String> = vec![];
     for n in params.chain(parts) {
         if !out.iter().any(|o| o.eq_ignore_ascii_case(&n)) {
@@ -628,9 +634,14 @@ impl Prepared {
     /// or `.meas` would run every step for nothing).
     pub fn only_pz(&self) -> Prepared {
         const OTHER: [&str; 12] = [".tran", ".ac", ".dc", ".op", ".noise", ".tf", ".sens", ".four", ".meas", ".measure", ".disto", ".pss"];
+        let mut off = false; // in such a statement: its `+` continuation lines go too
         let text = self.0.lines().map(|l| {
             let first = l.split_whitespace().next().unwrap_or("").to_ascii_lowercase();
-            if OTHER.contains(&first.as_str()) { format!("* {l}") } else { l.to_string() }
+            let skip = first.is_empty() || first.starts_with('*');
+            if !skip && !first.starts_with('+') {
+                off = OTHER.contains(&first.as_str());
+            }
+            if off && !skip { format!("* {l}") } else { l.to_string() }
         }).collect::<Vec<_>>().join("\n") + "\n";
         Prepared(text, self.1.clone())
     }
@@ -1342,7 +1353,7 @@ mod tests {
         let nl = netlist_for_sim(&parse_asc(src), &mut Library::builtin());
         assert!(nl.text.contains("S1 vdd out ctl 0 SW") && nl.text.contains(".model SW SW("), "{}", nl.text);
         let run = crate::ngspice::run(&prepare(&nl.text, None, &mut vec![])).unwrap();
-        let out = crate::ngspice::trace("v(out)", &run.scale).unwrap();
+        let out = crate::ngspice::trace("v(out)", &run.scale, run.id).unwrap();
         let at = |t: f64| out.re[out.x.iter().position(|&x| x >= t).unwrap()];
         assert!(at(0.5e-3).abs() < 1e-3 && (at(1.5e-3) - 1.0).abs() < 2e-3, "off {} on {}", at(0.5e-3), at(1.5e-3));
         // W: Value is `Vcontrol model`; the model is the last token
@@ -1405,6 +1416,15 @@ mod tests {
         for l in [".param x = 5\n", ".param x =5\n", ".param x= 5\n"] {
             assert!(vary(l, "x", 7.0).unwrap().contains("7e0") && !vary(l, "x", 7.0).unwrap().contains('5'), "{l}");
         }
+        // a number cannot stand in for a model name or an `R=` form: not a target
+        for l in ["R1 a b R=V(c)*1k\n", "R1 a b rmod L=10u\n", "C1 a b Q=1u*V(a)\n"] {
+            assert_eq!(vary(l, &l[..2], 1.0), None, "{l}");
+            assert!(sweepable(l).is_empty(), "{l}");
+        }
+        assert!(vary("R1 a b 'x*2'\n", "R1", 1.0).unwrap().contains("R1 a b 1e0"));
+        // a sweep step runs only .pz: other analyses go, with their continuation lines
+        let only = prepare(".param a=1\n.meas tran x AVG V(out)\n* c\n+ FROM=1m TO=2m\n.pz in 0 out 0 vol pz\n+ \n", None, &mut vec![]).only_pz();
+        assert!(only.text().contains("* + FROM=1m") && only.text().contains("\n.pz in 0") && !only.text().contains("* .pz"), "{}", only.text());
         // RC low-pass: the pole moves with R (-1/RC)
         let _s = SIM.lock();
         let bode = EXAMPLES.iter().find(|e| e.0 == "rc_bode").unwrap().1.replace(".ac dec 50 10 1Meg", ".pz in 0 out 0 vol pz");
@@ -1440,7 +1460,7 @@ mod tests {
         let run = crate::ngspice::run(&prepare(&nl.text, None, &mut vec![])).unwrap();
         assert_eq!((run.plot.as_str(), run.scale.as_str()), ("noise1", "frequency"));
         assert!(run.op.iter().any(|(n, ..)| n == "onoise_total"), "{:?}", run.op);
-        assert!(crate::ngspice::trace("onoise_spectrum", &run.scale).unwrap().re.len() > 10);
+        assert!(crate::ngspice::trace("onoise_spectrum", &run.scale, run.id).unwrap().re.len() > 10);
     }
 
     #[test]
@@ -1459,8 +1479,8 @@ mod tests {
         let _s = SIM.lock();
         let nl = netlist_for_sim(&parse_asc(EXAMPLES.iter().find(|e| e.0 == "rc_bode").unwrap().1), &mut Library::builtin());
         let run = crate::ngspice::run(&prepare(&nl.text, None, &mut vec![])).unwrap();
-        let ir = crate::ngspice::trace("i(vsense_r1)", &run.scale).unwrap();
-        let ic = crate::ngspice::trace("i(vsense_c1)", &run.scale).unwrap();
+        let ir = crate::ngspice::trace("i(vsense_r1)", &run.scale, run.id).unwrap();
+        let ic = crate::ngspice::trace("i(vsense_c1)", &run.scale, run.id).unwrap();
         let (f, im) = (&ir.x, ir.im.as_ref().expect("complex in .ac"));
         // series RC driven by AC 1: |I| = 1/|R + 1/(jwC)|, the same current through R and C
         let k = 20;
@@ -1515,7 +1535,7 @@ mod tests {
             match *name {
                 "bjt_curves" => {
                     // 201 V_CE points x 6 base currents; at 50 µA the collector carries about beta * I_B
-                    let ic = crate::ngspice::trace("i(vsense_q1)", &run.scale).unwrap();
+                    let ic = crate::ngspice::trace("i(vsense_q1)", &run.scale, run.id).unwrap();
                     assert_eq!(ic.re.len(), 6 * 201, "{name}");
                     let top = ic.re[5 * 201 + 100].abs(); // V_CE = 5 V, I_B = 50 µA
                     assert!((5e-3..15e-3).contains(&top), "{name}: Ic = {top}");
@@ -1537,7 +1557,7 @@ mod tests {
                 }
                 _ => {
                     assert!(!run.scale.is_empty(), "{name}: {run:?}");
-                    let out = ["v(out)", "i(vsense_d1)"].iter().find_map(|e| crate::ngspice::trace(e, &run.scale).ok()).unwrap();
+                    let out = ["v(out)", "i(vsense_d1)"].iter().find_map(|e| crate::ngspice::trace(e, &run.scale, run.id).ok()).unwrap();
                     assert!(out.re.len() > 10, "{name}");
                 }
             }
@@ -1554,7 +1574,7 @@ mod tests {
         let text = prepare("* t\n*# shell touch /tmp/nomospice-pwned\n.op\n.end\n", None, &mut vec![]);
         assert!(!text.text().contains("shell"), "{}", text.text());
         assert!(nl.nets[0][0].chars().all(|c| c.is_ascii_alphanumeric() || c == '_'), "{:?}", nl.nets[0]);
-        assert!(crate::ngspice::trace("v(a);shell ls", "").is_err());
+        assert!(crate::ngspice::trace("v(a);shell ls", "", 0).is_err());
     }
 
     #[test]
@@ -1582,9 +1602,9 @@ mod tests {
         let nl = netlist(&parse_asc(src), &mut Library::builtin());
         assert_eq!(nl.nets[2][0], "time_");
         let run = crate::ngspice::run(&prepare(&nl.text, None, &mut vec![])).unwrap();
-        let v = crate::ngspice::trace("v(\"3V3\")", &run.scale).unwrap();
+        let v = crate::ngspice::trace("v(\"3V3\")", &run.scale, run.id).unwrap();
         assert!((v.re[0] - 3.3).abs() < 1e-9, "{:?}", &v.re[..1]);
-        assert!(crate::ngspice::trace("v(a) + `touch /tmp/nomospice-x`", "").is_err());
+        assert!(crate::ngspice::trace("v(a) + `touch /tmp/nomospice-x`", "", 0).is_err());
     }
 
     #[test]
@@ -1620,12 +1640,12 @@ mod tests {
         let nl = netlist_for_sim(&parse_asc(RC), &mut Library::builtin());
         let run = crate::ngspice::run(&prepare(&nl.text, None, &mut vec![])).expect("sim");
         assert_eq!(run.scale, "time");
-        let t = crate::ngspice::trace("v(out)", &run.scale).unwrap();
+        let t = crate::ngspice::trace("v(out)", &run.scale, run.id).unwrap();
         assert_eq!(t.x.len(), t.re.len());
         assert!(t.re.iter().cloned().fold(0.0, f64::max) > 0.5);
-        let i = crate::ngspice::trace("i(vsense_r1)", &run.scale).unwrap();
+        let i = crate::ngspice::trace("i(vsense_r1)", &run.scale, run.id).unwrap();
         assert_eq!(i.re.len(), t.re.len());
-        assert!(crate::ngspice::trace("v(nonexistent)", &run.scale).is_err(), "stale nmsp_trace returned");
+        assert!(crate::ngspice::trace("v(nonexistent)", &run.scale, run.id).is_err(), "stale nmsp_trace returned");
     }
 
     #[test]

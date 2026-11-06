@@ -11,6 +11,7 @@ import { useSize } from "./lib/useSize";
 import { cn } from "@/lib/utils";
 
 type P = { re: number; im: number };
+const NONE: string[] = [];
 type Hit = P & { kind: "pole" | "zero" | "locus"; param?: number };
 const dist = (a: P, b: P) => Math.hypot(a.re - b.re, a.im - b.im);
 const lastOf = <T,>(a: (T | null)[]) => { for (let i = a.length - 1; i >= 0; i--) if (a[i]) return a[i]; return null; };
@@ -141,30 +142,23 @@ export const PoleZero = memo(function PoleZero({ run }: { run: Run }) {
         )}
         {!poles.length && !zeros.length && <div className="absolute inset-0 flex items-center justify-center text-xs text-text-tertiary">No poles or zeros found: check the .pz input and output nodes (see Log).</div>}
       </div>
-      <Sidebar run={run} poles={poles} zeros={zeros} locus={locus} setLocus={setLocus} error={error} setError={setError} />
+      <Sidebar poles={poles} zeros={zeros} locus={locus} setLocus={setLocus} error={error} setError={setError} />
     </div>
   );
 });
 
-function Sidebar({ run, poles, zeros, locus, setLocus, error, setError }: {
-  run: Run; poles: P[]; zeros: P[]; locus: unknown; setLocus: (l: { values: number[]; steps: P[][]; target: string } | null) => void; error: string; setError: (e: string) => void;
+function Sidebar({ poles, zeros, locus, setLocus, error, setError }: {
+  poles: P[]; zeros: P[]; locus: unknown; setLocus: (l: { values: number[]; steps: P[][]; target: string } | null) => void; error: string; setError: (e: string) => void;
 }) {
   // its own busy state: the global `running` would make simulate() drop a Run meanwhile
   const [running, setRunning] = useState(false);
   const runningRef = useRef(false);
   runningRef.current = running;
   useEffect(() => () => void (runningRef.current && invoke("cancel_locus")), []); // the view goes: the sweep stops
-  // sweepable: .param names and R/C/L instances
-  // what the sweep can vary, by its own rules (the backend reads the deck that runs, includes too)
-  const [targets, setTargets] = useState<string[]>([]);
-  useEffect(() => {
-    let live = true;
-    const { items, path } = useS.getState();
-    invoke<string[]>("locus_targets", { items, dir: dirOf(path) }).then((t) => live && setTargets(t), () => {});
-    return () => void (live = false);
-  }, [run]);
+  // what the sweep can vary (the backend lists it with each simulation, from the deck that ran)
+  const targets = useS((s) => s.sim?.sweepable ?? NONE);
   const [f, setF] = useState({ target: targets[0] ?? "", from: "", to: "", steps: "40", scale: "log" });
-  // the names arrive with the netlist (it may lag the run): fill in the first one if still empty
+  // a later run may bring the first names: fill one in if still empty
   useEffect(() => { if (targets[0]) setF((x) => (x.target ? x : { ...x, target: targets[0] })); }, [targets]);
 
   const compute = async () => {
@@ -185,7 +179,7 @@ function Sidebar({ run, poles, zeros, locus, setLocus, error, setError }: {
       const steps = await invoke<([number, number][] | null)[]>("root_locus", { items, dir: dirOf(path), target: f.target.trim(), values });
       if (docId() !== gen) return; // another document was opened meanwhile
       if (useS.getState().sim !== sim0) return setError("The circuit was simulated again meanwhile: draw the locus again."); // live mode, Run
-      const failed = steps.filter((x) => !x).length;
+      const failed = steps.filter((x) => !x?.length).length; // failed, or ran without poles
       setError([failed && `${failed} of ${steps.length} steps found no poles (gaps in the paths).`, steps.length < values.length && `Halted after ${steps.length} of ${values.length} steps.`].filter(Boolean).join(" "));
       setLocus({ values: values.slice(0, steps.length), target: f.target.trim(), steps: steps.map((s) => (s ?? []).map(([re, im]) => ({ re, im }))) });
     } catch (e) {
