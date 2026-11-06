@@ -2,7 +2,7 @@
 import { useState } from "react";
 import type { Item } from "./types";
 import { analysesOf, analysisItem, commit, currentTab, selectTab, useS } from "./store";
-import { ANALYSES, analysisEditableAt, analysisLineIndex, continuation, formatAnalysis, knownSweep, parseAnalysis, type Analysis, type Fields } from "./spice";
+import { ANALYSES, analysisEditableAt, analysisLineIndex, analysisOptions, continuation, formatAnalysis, knownSweep, parseAnalysis, type Analysis, type Fields } from "./spice";
 import { CircuitLists, Tabs, closeDialog, Field, Modal, NumField, Section, Select, SpiceLine, TextField } from "./ui/dialog";
 import { Button } from "./ui/button";
 
@@ -25,6 +25,7 @@ export function SimDialog({ index, kind0, of }: { index?: number; kind0?: Analys
     return knownSweep(a.f) ? a : { kind: a.kind, f: {} };
   });
   const [kind, setKind] = useState<Analysis>(init.kind);
+  const [err, setErr] = useState("");
   const [forms, setForms] = useState<Partial<Record<Analysis, Fields>>>({ [init.kind]: init.f });
   const f = forms[kind] ?? {};
   const v = (k: string) => f[k] ?? "";
@@ -47,7 +48,8 @@ export function SimDialog({ index, kind0, of }: { index?: number; kind0?: Analys
       closeDialog();
     } else if (kind0) {
       // "+" on the result tabs: under the analysis shown, and its tab runs at once (the shown
-      // results are put away under their own tab first)
+      // results are put away under their own tab first). Incomplete, it would be a note, no tab.
+      if (!analysisOptions([{ text: line, directive: !alternate }]).length) return setErr("Fill in the analysis first (e.g. a stop time, the frequencies or the output).");
       const ref = items[analysisItem(items, currentTab(useS.getState()))];
       const at = ref?.t === "text" ? { x: ref.x, y: ref.y + 32 * ref.text.split("\n").length } : { x: 0, y: 0 };
       commit([...items, { t: "text", ...at, text: line, directive: !alternate }]);
@@ -156,6 +158,7 @@ export function SimDialog({ index, kind0, of }: { index?: number; kind0?: Analys
       )}
       {(v("rest") || (kind === init.kind && init.f.rest)) && <TextField label="Other options" value={v("rest")} set={set("rest")} hint="kept as written" />}
       <SpiceLine>{line}</SpiceLine>
+      {err && <p className="text-2xs text-status-danger">{err}</p>}
       {idx >= 0 && (
         <Button type="button" size="sm" className="self-start" onClick={() => useS.setState({ dialog: { k: "edit", index: idx, raw: true, draft: edited } })}>Edit as text</Button>
       )}

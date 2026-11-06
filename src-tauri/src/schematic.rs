@@ -130,11 +130,29 @@ pub fn sym_key(name: &str) -> String {
 /// generated for, and the symbols loaded from the schematic's folder.
 pub struct Library(pub HashMap<String, SymbolDef>, HashSet<String>, u64, Local);
 
-/// The schematic's folder, the keys of the symbols loaded from it, a fingerprint of its .asy files
-/// when they were (a symbol added, removed, edited or replaced there changes it), and the keys of
-/// symbols lent by library folders (they go when the libraries change).
+/// Where symbols came from, so they can go again.
 #[derive(Default)]
-pub struct Local(Option<std::path::PathBuf>, HashSet<String>, Option<(usize, u128)>, HashSet<String>);
+pub struct Local {
+    /// the schematic's folder
+    dir: Option<std::path::PathBuf>,
+    /// keys of the symbols loaded from it
+    own: HashSet<String>,
+    /// a fingerprint of its .asy files when they were (an added, removed, edited, renamed or
+    /// replaced symbol changes it)
+    stamp: Option<(usize, u128)>,
+    /// keys of symbols lent by library folders (they go when the libraries change)
+    lent: HashSet<String>,
+}
+
+/// The schematic folder's own symbol files: (key, path) of each .asy (any case), not those of a
+/// built-in symbol (nomospice's win). Library::set_dir and Save As (carry them along) share it.
+pub fn folder_symbols(dir: &std::path::Path) -> Vec<(String, std::path::PathBuf)> {
+    std::fs::read_dir(dir).into_iter().flatten().flatten().map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("asy")))
+        .filter_map(|p| Some((sym_key(p.file_stem()?.to_str()?), p.clone())))
+        .filter(|(k, _)| !builtin_symbol(k))
+        .collect()
+}
 
 /// (count, a sum over modification times and sizes) of the .asy files in `dir`.
 fn asy_stamp(dir: &std::path::Path) -> Option<(usize, u128)> {
@@ -157,33 +175,29 @@ impl Library {
     /// comes back with another folder), not a built-in symbol. Another folder (or
     /// none) drops them again; `rescan` reloads the same folder (a symbol saved meanwhile).
     pub fn set_dir(&mut self, dir: Option<&std::path::Path>, rescan: bool) {
-        let moved = self.3 .0.as_deref() != dir;
+        let moved = self.3.dir.as_deref() != dir;
         if !moved && !rescan {
             return; // netlisting: no disk access
         }
         let stamp = dir.and_then(asy_stamp);
-        if !moved && stamp == self.3 .2 {
+        if !moved && stamp == self.3.stamp {
             return;
         }
-        self.3 .2 = stamp;
-        for k in self.3 .1.drain() {
+        self.3.stamp = stamp;
+        for k in self.3.own.drain() {
             self.0.remove(&k);
         }
         if moved {
             self.1.clear(); // a name missing before may be in the new folder (a rescan keeps the misses: they cost disk scans)
         }
-        self.3 .0 = dir.map(std::path::Path::to_path_buf);
+        self.3.dir = dir.map(std::path::Path::to_path_buf);
         let Some(dir) = dir else { return };
-        for p in std::fs::read_dir(dir).into_iter().flatten().flatten().map(|e| e.path()) {
-            let Some(stem) = p.file_stem().and_then(|s| s.to_str()) else { continue };
-            let key = sym_key(stem);
-            if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("asy")) && !builtin_symbol(&key) {
-                if let Ok(bytes) = std::fs::read(&p) {
-                    self.0.insert(key.clone(), parse_asy(&key, &decode(&bytes)));
-                    self.1.remove(&key);
-                    self.3 .3.remove(&key); // the folder's own now, no longer lent
-                    self.3 .1.insert(key);
-                }
+        for (key, p) in folder_symbols(dir) {
+            if let Ok(bytes) = std::fs::read(&p) {
+                self.0.insert(key.clone(), parse_asy(&key, &decode(&bytes)));
+                self.1.remove(&key);
+                self.3.lent.remove(&key); // the folder's own now, no longer lent
+                self.3.own.insert(key);
             }
         }
     }
@@ -206,7 +220,7 @@ impl Library {
         if self.2 != g {
             // other libraries now: regenerate subckt boxes, drop symbols a library folder lent (it
             // may be off now: they come back from where they are), retry what was missing
-            for k in self.3 .3.drain() {
+            for k in self.3.lent.drain() {
                 self.0.remove(&k);
             }
             self.0.retain(|k, _| !k.starts_with("subckt:"));
@@ -240,7 +254,7 @@ impl Library {
                 return None;
             };
             if lent {
-                self.3 .3.insert(key.clone());
+                self.3.lent.insert(key.clone());
             }
             self.0.insert(key.clone(), def);
         }
@@ -939,8 +953,11 @@ fn meas_statement(s: &str, sensors: &[Sensor], an: &str) -> Result<String, Strin
                     Some(v) if !number(&v) && typ == "ac" => {
                         return Err(format!("{}: in AC, ngspice takes only a number as the level ({v}), and would measure at its first number: left out", out.get(2).map_or(".meas", |n| n.as_str())));
                     }
-                    Some(v) if !x.is_empty() && !number(&v) && !low(&x).starts_with("par(") => {
-                        out.push(par(&format!("{x}-({v})")));
+                    Some(v) if !x.is_empty() && !number(&v) => {
+                        // (a quantity already in par('…') form is unwrapped: no par() in a par())
+                        let inner = low(&x).starts_with("par(") && x.ends_with(')');
+                        let q = if inner { x[4..x.len() - 1].trim().trim_matches('\'') } else { x.as_str() };
+                        out.push(par(&format!("{q}-({v})")));
                         match val_at {
                             Some(j) => toks[j] = "VAL=0".into(),
                             None => out.push("VAL=0".into()),
@@ -1826,6 +1843,7 @@ mod tests {
         assert_eq!(m(".meas tran t TRIG V(in) VAL=0.5 * V(vdd) RISE=1 TARG V(out) VAL=1"), ".meas tran t TRIG par('V(in)-(0.5*V(vdd))') VAL=0 RISE=1 TARG V(out) VAL=1", "a level with blanks");
         assert_eq!(m(".meas tran t TRIG V(in)=0.5 * V(vdd) RISE=1"), ".meas tran t TRIG par('V(in)-(0.5*V(vdd))') VAL=0 RISE=1");
         assert_eq!(meas_statement(".meas x AVG V(a)", &[], "op").unwrap(), ".meas x AVG V(a)", "ngspice measures tran/ac/dc/sp only");
+        assert_eq!(m(".meas tran t TRIG par('v(a)') VAL=0.5 * V(vdd) RISE=1"), ".meas tran t TRIG par('v(a)-(0.5*V(vdd))') VAL=0 RISE=1", "no par() in par(), nothing cut");
         assert_eq!(m(".meas ac p FIND ph(V(out)) AT=1k"), ".meas ac p FIND ph(V(out)) AT=1k", "degrees vs radians: not mapped");
         let mut w = vec![];
         let skipped = ltspice_meas(".ac dec 10 1 1k\n.meas ac f1 TRIG vm(out) VAL=0.5*vm(in) TARG vm(out) VAL=1\n", &[], &mut w);

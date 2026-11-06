@@ -140,6 +140,13 @@ async function saveFile(as = false) {
   }
   const items = useS.getState().items;
   const doc = docId();
+  // another folder: symbols from next to the old file go along on request (else its parts lose
+  // them). Asked before the path changes, so no run (live mode) meanwhile looks in the new folder.
+  const [from, to] = [dirOf(prev), dirOf(path)], names = items.flatMap((it) => (it.t === "sym" ? [it.sym] : []));
+  const own = prev && from && to && from !== to ? await invoke<string[]>("folder_symbols", { from, to, names, copy: false }).catch(() => []) : [];
+  if (own.length && (await ask(`The schematic uses symbols from its old folder: ${own.join(", ")}. Copy them to the new folder?`, { title: "nomospice" })))
+    await invoke("folder_symbols", { from, to, names, copy: true }).catch(fail("Cannot copy the symbols"));
+  if (doc !== docId()) return;
   try {
     // saves are written in the order they were requested: a newer snapshot never loses to an older one
     const write = (saveQueue = saveQueue.catch(() => {}).then(() => invoke("save_asc", { path, items })));
@@ -147,14 +154,7 @@ async function saveFile(as = false) {
     if (doc !== docId()) return; // another document was loaded meanwhile
     const moved = path !== useS.getState().path; // relative .include paths now resolve elsewhere
     useS.setState({ path, dirty: useS.getState().items !== items, ...(moved && useS.getState().sim && { stale: true }) });
-    if (moved) {
-      // symbols from next to the old file go with it on request (else its parts lose them)
-      const [from, to] = [dirOf(prev), dirOf(path)], names = items.flatMap((it) => (it.t === "sym" ? [it.sym] : []));
-      const own = from && to && from !== to ? await invoke<string[]>("folder_symbols", { from, to, names, copy: false }).catch(() => []) : [];
-      if (own.length && (await ask(`The schematic uses symbols from its old folder: ${own.join(", ")}. Copy them to the new folder?`, { title: "nomospice" })))
-        await invoke("folder_symbols", { from, to, names, copy: true }).catch(fail("Cannot copy the symbols"));
-      void loadSymbols(useS.getState().items).catch(() => {}).finally(refreshNets); // the new folder's symbols
-    }
+    if (moved) void loadSymbols(useS.getState().items).catch(() => {}).finally(refreshNets); // the new folder's symbols
     refreshGit();
   } catch (e) {
     await fail(`Cannot save ${path}`)(e);

@@ -142,10 +142,9 @@ async function loadSymbolsNow(items: Item[], dir: string | null, { force = false
   if (Object.keys(get().lib).length && !moved && want(items).every((n) => get().lib[symKey(n)])) return;
   // the answer replaces ours, and the backend may have dropped symbols it had cached (switched-off
   // libraries): ask for everything in use — the document, its undo history, a diff on show
-  const s = get();
-  const inUse = fresh ? [] : [s.items, ...s.past, ...s.future, s.diff?.items ?? []].flatMap(want);
-  const names = [...new Set([...want(items), ...inUse])];
-  const defs = await invoke<SymbolDef[]>("symbols", { names, dir });
+  const s = get(), names = new Set(want(items));
+  if (!fresh) for (const its of [s.items, ...s.past, ...s.future, s.diff?.items ?? []]) for (const it of its) if (it.t === "sym") names.add(it.sym);
+  const defs = await invoke<SymbolDef[]>("symbols", { names: [...names], dir });
   symDir = dir; // only once answered: a failed request is asked again next time
   set({ lib: Object.fromEntries(defs.map((d) => [d.name, d])) }); // the backend's whole set
 }
@@ -276,9 +275,10 @@ export async function selectTab(kind: Analysis) {
 }
 
 /** The shown results put away under their tab (if the schematic still has it), `kind`'s back. */
-function swapTo(s: State, kind: Analysis | null, opts = analysesOf(s.items)): Partial<State> {
+function swapTo(s: State, kind: Analysis | null): Partial<State> {
   const tabs = { ...s.tabs };
-  if (s.shown && opts.some((o) => o.kind === s.shown)) tabs[s.shown] = { sim: s.sim, traces: s.traces, plot: s.plot, stale: s.stale, at: s.items };
+  // kept also when its analysis is gone: an undo brings the analysis back, and with it these
+  if (s.shown) tabs[s.shown] = { sim: s.sim, traces: s.traces, plot: s.plot, stale: s.stale, at: s.items };
   const next = kind ? tabs[kind] : undefined;
   if (kind) delete tabs[kind];
   const sim = next?.sim ?? null, view = viewOf(sim);
@@ -293,11 +293,11 @@ function swapTo(s: State, kind: Analysis | null, opts = analysesOf(s.items)): Pa
 // its own results (none yet: Run), never the other analysis' under its name.
 useS.subscribe((s, prev) => {
   // after an edit, or when a run ends (an edit during it was skipped: its results are filed meanwhile)
-  if ((s.items === prev.items && !(prev.running && !s.running)) || !s.shown || s.running) return;
+  if ((s.items === prev.items && !(prev.running && !s.running)) || s.running) return;
   const opts = analysesOf(s.items), cur = currentTab(s, opts);
-  if (cur === s.shown) return;
+  if (cur === s.shown || (!s.shown && !(cur && s.tabs[cur]))) return; // (nothing shown, nothing to bring back)
   const keep = !!s.tab && opts.some((o) => o.kind === s.tab);
-  set({ tab: keep ? s.tab : null, ...swapTo(s, cur, opts) });
+  set({ tab: keep ? s.tab : null, ...swapTo(s, cur) });
 });
 
 export async function simulate() {

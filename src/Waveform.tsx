@@ -329,7 +329,8 @@ export function Measurements({ xUnit }: { xUnit: string }) {
     const t = l.trim().split(/\s+/);
     if (!/^\.meas/i.test(t[0] ?? "")) return [];
     const k = /^(tran|ac|dc|sp|op|noise|tf)$/i.test(t[1] ?? "") ? 2 : 1; // the name, after an optional type
-    return t.slice(k + 1).some((w) => /^when$/i.test(w)) && !t.slice(k + 1).some((w) => /^find$/i.test(w)) ? [t[k].toLowerCase()] : [];
+    const w = t.slice(k + 1);
+    return w.some((x) => /^when$/i.test(x)) && !w.some((x) => /^(find|deriv|derivative)$/i.test(x)) ? [t[k].toLowerCase()] : [];
   })), [deck]);
   if (!meas?.length) return null;
   return (

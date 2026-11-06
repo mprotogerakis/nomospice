@@ -267,21 +267,18 @@ async fn root_locus(items: Vec<Item>, dir: Option<String>, target: String, value
 #[tauri::command]
 async fn folder_symbols(from: String, to: String, names: Vec<String>, copy: bool) -> Result<Vec<String>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        // .asy files by symbol key (any case, as the library finds them)
-        let asy = |dir: &str| -> std::collections::HashMap<String, String> {
-            std::fs::read_dir(dir).into_iter().flatten().flatten().filter_map(|e| e.file_name().into_string().ok())
-                .filter_map(|f| { let stem = f.strip_suffix(".asy").or_else(|| f.strip_suffix(".ASY"))?; Some((schematic::sym_key(stem), f.clone())) }).collect()
-        };
-        let (old, new) = (asy(&from), asy(&to));
+        // the library's own rule for which .asy files are a folder's symbols
+        let old: std::collections::HashMap<_, _> = schematic::folder_symbols(std::path::Path::new(&from)).into_iter().collect();
+        let new: std::collections::HashMap<_, _> = schematic::folder_symbols(std::path::Path::new(&to)).into_iter().collect();
         let mut out: Vec<String> = vec![];
         for n in names {
             let key = schematic::sym_key(&n);
-            let Some(file) = old.get(&key).cloned() else { continue };
-            let (src, dst) = (std::path::Path::new(&from).join(&file), std::path::Path::new(&to).join(&file));
-            // (a built-in symbol is never taken from the folder: nothing to carry)
-            if !new.contains_key(&key) && !out.contains(&file) && !schematic::builtin_symbol(&n) {
+            let Some(src) = old.get(&key) else { continue };
+            let file = src.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
+            let dst = std::path::Path::new(&to).join(&file);
+            if !new.contains_key(&key) && !out.contains(&file) {
                 if copy {
-                    std::fs::copy(&src, &dst).map_err(|e| format!("{file}: {e}"))?;
+                    std::fs::copy(src, &dst).map_err(|e| format!("{file}: {e}"))?;
                 }
                 out.push(file);
             }
