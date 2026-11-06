@@ -336,17 +336,17 @@ export const Dialogs = memo(function Dialogs() {
   if (!dialog) return null;
   const commitAt = (index: number) => (next: Item) => (commit(items.map((x, i) => (i === index ? next : x))), close());
   /** A directive: the simulation form if it holds an analysis the form writes back unchanged, else the directive forms. */
-  const directive = (index: number, raw?: boolean) => {
+  const directive = (index: number, raw?: boolean, draft?: string) => {
     const it = items[index] as Extract<Item, { t: "text" }>;
     const line = analysisLine(it.text);
     if (!raw && line && analysisRoundTrips(line)) return <SimDialog key={index} index={index} />;
-    return <DirectiveDialog key={`${index}${raw || line ? "raw" : ""}`} item={it} title="SPICE Directive" raw={raw || !!line} onDone={commitAt(index)} />;
+    return <DirectiveDialog key={`${index}${raw || line ? "raw" : ""}`} item={draft === undefined ? it : { ...it, text: draft }} title="SPICE Directive" raw={raw || !!line} onDone={commitAt(index)} />;
   };
   switch (dialog.k) {
     case "edit": {
       const it = items[dialog.index];
       if (!it) return null;
-      if (it.t === "text" && it.directive) return directive(dialog.index, dialog.raw);
+      if (it.t === "text" && it.directive) return directive(dialog.index, dialog.raw, dialog.draft);
       return <ItemForm key={dialog.index} item={it} title={it.t === "sym" ? `Edit ${it.attrs.InstName ?? it.sym}` : it.t === "flag" ? "Net Name" : "Edit Text"} onDone={commitAt(dialog.index)} />;
     }
     case "new": {

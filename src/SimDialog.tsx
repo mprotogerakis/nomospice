@@ -3,9 +3,8 @@ import { useState } from "react";
 import type { Item } from "./types";
 import { commit, useS } from "./store";
 import { ANALYSIS, analysisLine, formatAnalysis, parseAnalysis, type Analysis, type Fields } from "./spice";
-import { CircuitLists, closeDialog, Field, Modal, NumField, Section, Select, SpiceLine, TextField } from "./ui/dialog";
+import { CircuitLists, Tabs, closeDialog, Field, Modal, NumField, Section, Select, SpiceLine, TextField } from "./ui/dialog";
 import { Button } from "./ui/button";
-import { cn } from "@/lib/utils";
 
 const TABS: [Analysis, string][] = [
   ["tran", "Transient"], ["ac", "AC"], ["dc", "DC sweep"], ["noise", "Noise"], ["op", "DC op pnt"],
@@ -63,14 +62,7 @@ export function SimDialog({ index }: { index?: number }) {
   return (
     <Modal title="Edit Simulation Command" onSubmit={submit} wide>
       <CircuitLists />
-      <div role="tablist" className="flex flex-wrap border-b border-border">
-        {TABS.map(([k, label]) => (
-          <button key={k} type="button" role="tab" aria-selected={kind === k} onClick={() => setKind(k)}
-            className={cn("-mb-px border-b-2 px-2.5 py-1 text-xs", kind === k ? "border-selection text-text-strong" : "border-transparent text-text-secondary hover:text-text-strong")}>
-            {label}
-          </button>
-        ))}
-      </div>
+      <Tabs tabs={TABS} value={kind} set={setKind} />
       {kind === "tran" && (
         <>
           <NumField label="Stop time" value={v("stop")} set={set("stop")} unit="s" placeholder="1m" autofocus />
@@ -140,7 +132,7 @@ export function SimDialog({ index }: { index?: number }) {
       {(v("rest") || (kind === init.kind && init.f.rest)) && <TextField label="Other options" value={v("rest")} set={set("rest")} hint="kept as written" />}
       <SpiceLine>{line}</SpiceLine>
       {idx >= 0 && (
-        <Button type="button" size="sm" className="self-start" onClick={() => useS.setState({ dialog: { k: "edit", index: idx, raw: true } })}>Edit as text</Button>
+        <Button type="button" size="sm" className="self-start" onClick={() => useS.setState({ dialog: { k: "edit", index: idx, raw: true, draft: lines.map((l, j) => (j === li ? line : l)).join("\n") } })}>Edit as text</Button>
       )}
     </Modal>
   );

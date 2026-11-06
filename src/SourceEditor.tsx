@@ -1,7 +1,7 @@
 // Independent source (V, I) as a form: waveform function with named fields, AC, parasitics,
 // a waveform preview, and the SPICE attributes it writes (Value, Value2, SpiceLine like LTspice).
 import { useMemo, useState } from "react";
-import { FUNCS, formatSource, parseSource, sample, si, sourceRoundTrips, type Func, type Source } from "./spice";
+import { FUNCS, formatSource, parseSource, sample, si, sourceRoundTrips, tokens, type Func, type Source } from "./spice";
 import { Field, FIELD, NumField, Section, SpiceLine, TextField } from "./ui/dialog";
 import { Button } from "./ui/button";
 import { cn } from "@/lib/utils";
@@ -65,7 +65,7 @@ export function SourceEditor({ attrs, setAttrs, current }: { attrs: Attrs; setAt
             )) : null}
           {src.func && src.func !== "PWL" && src.args.length > FUNCS[src.func].length && (
             <TextField label="More arguments" value={src.args.slice(FUNCS[src.func].length).join(" ")} hint="kept as written (e.g. a cycle count)"
-              set={(v) => update({ ...src, args: [...src.args.slice(0, FUNCS[src.func as Exclude<Func, "PWL">].length), ...v.split(/\s+/)] })} />
+              set={(v) => update({ ...src, args: [...src.args.slice(0, FUNCS[src.func as Exclude<Func, "PWL">].length), ...tokens(v)] })} />
           )}
           <NumField label={src.func ? "DC value" : "Value"} value={src.dc} set={(dc) => update({ ...src, dc })} unit={y} autofocus={!src.func}
             hint={src.func ? "only for the operating point (.op, .dc)" : undefined} />

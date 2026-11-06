@@ -408,19 +408,26 @@ pub fn vary(text: &str, target: &str, value: f64) -> Option<String> {
         return None;
     }
     let v = format!("{value:e}");
-    // the value span of `t=` on a .param line, if it defines t
+    // the value span of `t=` on a .param line, if it defines t: whole top-level tokens only, so
+    // `{x==1?2:3}` (one token) and `µa=1` (another name) are not definitions of x / a.
+    // Forms: `t=v`, `t= v`, `t =v`, `t = v`.
     let param_value = |line: &str, low: &str| {
-        let b = low.as_bytes();
-        let mut i = 0;
-        while let Some(k) = low[i..].find(&t).map(|k| k + i) {
-            let mut j = k + t.len();
-            while j < b.len() && b[j] == b' ' { j += 1; }
-            if (k == 0 || !(b[k - 1].is_ascii_alphanumeric() || b[k - 1] == b'_')) && j < b.len() && b[j] == b'=' {
-                j += 1;
-                while j < b.len() && b[j] == b' ' { j += 1; }
-                return Some((j, token_spans(&line[j..]).first().map_or(j, |&(_, e)| j + e)));
+        let sp = token_spans(line);
+        for (i, &(a, e)) in sp.iter().enumerate() {
+            let tok = &low[a..e];
+            let Some(after) = tok.strip_prefix(t.as_str()) else { continue };
+            let (rest, next) = (after, sp.get(i + 1).map(|&(a, e)| (a, e, &low[a..e])));
+            let val = match (rest, next) {
+                (r, _) if r.starts_with('=') && !r.starts_with("==") && r.len() > 1 => Some((a + t.len() + 1, e)),
+                ("=", Some((na, ne, _))) => Some((na, ne)),
+                ("", Some((na, ne, n))) if n.starts_with('=') && !n.starts_with("==") => {
+                    if n.len() > 1 { Some((na + 1, ne)) } else { sp.get(i + 2).copied() }
+                }
+                _ => None,
+            };
+            if val.is_some() {
+                return val;
             }
-            i = k + 1;
         }
         None
     };
@@ -1308,6 +1315,13 @@ mod tests {
         let two = vary(".param X=1\nRx a b 1k\n.param X=2\n", "X", 3.0).unwrap();
         assert!(two.contains(".param X=3e0") && !two.contains("X=1") && !two.contains("X=2"), "{two}");
         assert!(vary(".param Rb=10k\nRb out inv {Rb}\n", "Rb", 2e4).unwrap().contains("Rb out inv {Rb}"));
+        // `==` inside an expression and a name after a non-ASCII letter are not definitions
+        let v = vary(".param y={x==1?2:3} x=5\n", "x", 7.0).unwrap();
+        assert!(v.contains("y={x==1?2:3} x=7e0"), "{v}");
+        assert!(vary(".param µa=1 a=2\n", "a", 3.0).unwrap().contains("µa=1 a=3e0"));
+        for l in [".param x = 5\n", ".param x =5\n", ".param x= 5\n"] {
+            assert!(vary(l, "x", 7.0).unwrap().contains("7e0") && !vary(l, "x", 7.0).unwrap().contains('5'), "{l}");
+        }
         // RC low-pass: the pole moves with R (-1/RC)
         let _s = SIM.lock();
         let bode = EXAMPLES.iter().find(|e| e.0 == "rc_bode").unwrap().1.replace(".ac dec 50 10 1Meg", ".pz in 0 out 0 vol pz");

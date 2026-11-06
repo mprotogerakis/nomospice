@@ -204,7 +204,8 @@ export function sample(s: Source, n = 240): [number, number][] | null {
     } else if (s.func === "EXP") {
       const [v1, v2, td1, tau1, td2, tau2] = p;
       end = isFinite(td2) ? Math.max(td2 + 5 * tau2, td1 + 5 * tau1, 1e-12) : Math.max(td1 + 5 * tau1, 2 * td1, 1e-12);
-      f = (t) => v1 + (t < td1 ? 0 : (v2 - v1) * (1 - Math.exp(-(t - td1) / tau1))) + (t < td2 ? 0 : (v1 - v2) * (1 - Math.exp(-(t - td2) / tau2)));
+      const rise = (x: number, tau: number) => (x < 0 ? 0 : tau > 0 ? 1 - Math.exp(-x / tau) : 1); // tau 0: a step, not 0/0
+      f = (t) => v1 + (v2 - v1) * rise(t - td1, tau1) + (v1 - v2) * rise(t - td2, tau2);
     } else {
       const [off, amp, fc, mdi, fs] = p;
       end = fs > 0 ? 2 / fs : 1;

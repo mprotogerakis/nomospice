@@ -109,6 +109,20 @@ export function Select({ label, value, set, options, hint, compact }: { label: s
   );
 }
 
+/** A row of tabs (simulation command, directive forms). */
+export function Tabs<K extends string>({ tabs, value, set }: { tabs: [K, string][]; value: K; set: (k: K) => void }) {
+  return (
+    <div role="tablist" className="flex flex-wrap border-b border-border">
+      {tabs.map(([k, label]) => (
+        <button key={k} type="button" role="tab" aria-selected={value === k} onClick={() => set(k)}
+          className={cn("-mb-px border-b-2 px-2.5 py-1 text-xs", value === k ? "border-selection text-text-strong" : "border-transparent text-text-secondary hover:text-text-strong")}>
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 /** Section heading inside a form. */
 export const Section = ({ children }: { children: React.ReactNode }) => (
   <div className="mt-1 border-b border-border pb-0.5 text-2xs font-medium uppercase tracking-wide text-text-tertiary">{children}</div>

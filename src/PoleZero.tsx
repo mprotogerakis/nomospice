@@ -182,7 +182,9 @@ function Sidebar({ poles, zeros, locus, setLocus }: { poles: P[]; zeros: P[]; lo
     }
   };
   // conjugate pairs once: σ ± jω
-  const rows = (list: P[], kind: string) => list.filter((p) => p.im >= 0).map((p, i) => ({ p, kind, pair: p.im > 0, key: `${kind}${i}` }));
+  // real if the imaginary part is numerical noise (ngspice returns -1e4 - j1e-12 for a real pole)
+  const real = (p: P) => Math.abs(p.im) <= 1e-9 * Math.max(Math.abs(p.re), Math.abs(p.im), 1e-300);
+  const rows = (list: P[], kind: string) => list.filter((p) => real(p) || p.im > 0).map((p, i) => ({ p: real(p) ? { ...p, im: 0 } : p, kind, pair: !real(p), key: `${kind}${i}` }));
   return (
     <div className="flex w-[340px] shrink-0 flex-col gap-2 overflow-y-auto border-l border-border bg-surface-panel p-2 text-xs">
       <div className="font-medium text-text-strong">Poles and zeros</div>

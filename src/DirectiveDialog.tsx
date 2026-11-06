@@ -7,7 +7,7 @@ import {
   directiveKind, formatIc, formatInclude, formatMeas, formatModel, formatParams, MODEL_PARAMS, MODEL_TYPES, parseIc, parseInclude,
   analysisLine, analysisRoundTrips, parseMeas, parseModel, parseParams, portablePaths, type DirectiveKind, type Meas,
 } from "./spice";
-import { CircuitLists, Field, FIELD, Modal, numHelp, NumField, Section, Select, SpiceLine, TextField } from "./ui/dialog";
+import { CircuitLists, Tabs, Field, FIELD, Modal, numHelp, NumField, Section, Select, SpiceLine, TextField } from "./ui/dialog";
 import { Button } from "./ui/button";
 import { FIELD_BASE, FIELD_FOCUS } from "./ui/focus";
 import { cn, keys } from "@/lib/utils";
@@ -125,7 +125,8 @@ export function DirectiveDialog({ item, title, raw, onDone }: { item: Text; titl
   const done = () => {
     if (invalid) return setTried(true);
     if (!result.trim()) return useS.setState({ dialog: null });
-    onDone({ ...item, text: portablePaths(result), directive: tab !== "text" || directive });
+    // the checkbox decides whenever the result is the text itself (Text tab, or an untouched form)
+    onDone({ ...item, text: portablePaths(result), directive: result === text ? directive : true });
   };
   // leaving a used form writes its result into the text; the next form reads the text
   const toTab = (k: DirectiveKind) => {
@@ -144,14 +145,7 @@ export function DirectiveDialog({ item, title, raw, onDone }: { item: Text; titl
   return (
     <Modal title={title} onSubmit={done} wide>
       <CircuitLists />
-      <div role="tablist" className="flex flex-wrap border-b border-border">
-        {TABS.map(([k, label]) => (
-          <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => toTab(k)}
-            className={cn("-mb-px border-b-2 px-2.5 py-1 text-xs", tab === k ? "border-selection text-text-strong" : "border-transparent text-text-secondary hover:text-text-strong")}>
-            {label}
-          </button>
-        ))}
-      </div>
+      <Tabs tabs={TABS} value={tab} set={toTab} />
       {tab === "text" && (
         <>
           <textarea data-autofocus rows={6} className={cn(FIELD_BASE, FIELD_FOCUS, "w-full p-2 font-mono")} value={text} spellCheck={false}
@@ -209,7 +203,7 @@ export function DirectiveDialog({ item, title, raw, onDone }: { item: Text; titl
               <TextField label="Signal" value={mf("expr")} set={setMf("expr")} list="vexprs" placeholder="V(out)" />
               <NumField label="Reaches" value={mf("val")} set={setMf("val")} placeholder="0" />
               <Select label="Crossing" value={mf("edge")} set={setMf("edge")} options={EDGES} />
-              {mf("edge") && <NumField label="Number" value={mf("n")} set={setMf("n")} placeholder="1" hint="1 = the first one" />}
+              {mf("edge") && <TextField label="Number" value={mf("n")} set={setMf("n")} placeholder="1" hint="1 = the first one, LAST = the last" />}
             </>
           )}
           {meas.type === "delay" && (
@@ -218,12 +212,12 @@ export function DirectiveDialog({ item, title, raw, onDone }: { item: Text; titl
               <TextField label="Signal" value={mf("expr")} set={setMf("expr")} list="vexprs" placeholder="V(in)" />
               <NumField label="Reaches" value={mf("val")} set={setMf("val")} placeholder="0.5" />
               <Select label="Crossing" value={mf("edge")} set={setMf("edge")} options={EDGES} />
-              {mf("edge") && <NumField label="Number" value={mf("n")} set={setMf("n")} placeholder="1" />}
+              {mf("edge") && <TextField label="Number" value={mf("n")} set={setMf("n")} placeholder="1" hint="or LAST" />}
               <Section>To (target)</Section>
               <TextField label="Signal" value={mf("expr2")} set={setMf("expr2")} list="vexprs" placeholder="V(out)" />
               <NumField label="Reaches" value={mf("val2")} set={setMf("val2")} placeholder="0.5" />
               <Select label="Crossing" value={mf("edge2")} set={setMf("edge2")} options={EDGES} />
-              {mf("edge2") && <NumField label="Number" value={mf("n2")} set={setMf("n2")} placeholder="1" />}
+              {mf("edge2") && <TextField label="Number" value={mf("n2")} set={setMf("n2")} placeholder="1" hint="or LAST" />}
             </>
           )}
         </>
