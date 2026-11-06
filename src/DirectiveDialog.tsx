@@ -2,7 +2,7 @@
 import { useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import type { Item } from "./types";
-import { dirOf, useS } from "./store";
+import { relToDoc, useS } from "./store";
 import {
   directiveKind, formatIc, formatInclude, formatMeas, formatModel, formatParams, MODEL_PARAMS, MODEL_TYPES, parseIc, parseInclude,
   analysisLine, analysisRoundTrips, parseMeas, parseModel, parseParams, portablePaths, type DirectiveKind, type Meas,
@@ -114,9 +114,7 @@ export function DirectiveDialog({ item, title, raw, onDone }: { item: Text; titl
   const browse = async () => {
     const path = await open({ multiple: false, filters: [{ name: "SPICE models", extensions: ["lib", "sub", "mod", "inc", "cir", "txt", "sp", "spi", "bjt", "dio", "jft", "mos"] }] });
     if (typeof path !== "string") return;
-    const dir = dirOf(useS.getState().path); // relative to the schematic when inside its folder
-    const rel = dir && (path.startsWith(`${dir}/`) || path.startsWith(`${dir}\\`)) ? path.slice(dir.length + 1) : path;
-    setInc({ ...inc, path: rel.replaceAll("\\", "/") });
+    setInc({ ...inc, path: relToDoc(path) });
   };
   // a form replaces a directive of its own kind; any other text stays and gets the line added
   const keeps = tab !== "text" && directiveKind(text) !== tab && text.trim() !== "";
@@ -164,8 +162,7 @@ export function DirectiveDialog({ item, title, raw, onDone }: { item: Text; titl
             SPICE directive (otherwise a comment, ignored by the simulation)
           </label>
           <p className="text-2xs text-text-tertiary">Any SPICE directive, one per line · {keys("⌘↵")} to confirm · the other tabs build the common ones for you</p>
-          {simForm ? <Button type="button" size="sm" className="self-start" onClick={() => useS.setState({ dialog: { k: "sim" } })}>Simulation command (.tran, .ac …)</Button>
-            : <p className="text-2xs text-text-tertiary">This analysis uses options the simulation form does not know, so it is edited here as text.</p>}
+          {!simForm && <p className="text-2xs text-text-tertiary">This analysis uses options the simulation form does not know, so it is edited here as text.</p>}
         </>
       )}
       <div className="contents" onInputCapture={() => setTouched(true)} onClickCapture={(e) => (e.target as HTMLElement).closest("button") && setTouched(true)}>

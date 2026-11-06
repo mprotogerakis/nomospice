@@ -92,39 +92,48 @@ export interface Source {
   acPhase: string;
   rser: string;
   cpar: string;
-  /** everything else (other instance parameters, LTspice-only options), kept verbatim */
+  /** what the form does not know, kept verbatim where it was: in Value (e.g. a PWL's `r=0`, which
+   *  must follow the function) and in Value2/SpiceLine (other instance parameters) */
+  vrest: string;
   rest: string;
 }
 
+/** Commas outside `{…}` as spaces: argument separators (`PWL(0,0 1m,1)`), not `{max(a,b)}`. */
+const argCommas = (s: string) => { let d = 0, out = ""; for (const c of s) { d += c === "{" ? 1 : c === "}" ? -1 : 0; out += c === "," && d <= 0 ? " " : c; } return out; };
+
 /** Reads a source from its Value, Value2 and SpiceLine attributes (LTspice spreads it over all three). */
 export function parseSource(...parts: (string | undefined)[]): Source {
-  const s: Source = { dc: "", func: "", args: [], acMag: "", acPhase: "", rser: "", cpar: "", rest: "" };
-  const t = tokens(parts.filter(Boolean).join(" "));
-  const rest: string[] = [];
+  const s: Source = { dc: "", func: "", args: [], acMag: "", acPhase: "", rser: "", cpar: "", vrest: "", rest: "" };
+  // tokens of Value first, then Value2 and SpiceLine; `inValue` tells where an unknown one goes
+  const t = parts.flatMap((p, k) => tokens(p ?? "").map((w) => [w, k === 0] as const));
+  const vrest: string[] = [], rest: string[] = [];
   for (let i = 0; i < t.length; i++) {
-    const w = t[i];
+    const [w, inValue] = t[i];
     const fn = w.match(/^(SINE|SIN|PULSE|EXP|SFFM|PWL)\((.*)\)$/is);
     const kv = w.match(/^(rser|cpar)=(.+)$/i);
     if (fn && !s.func) {
       s.func = (fn[1].toUpperCase() === "SIN" ? "SINE" : fn[1].toUpperCase()) as Func;
-      s.args = tokens(fn[2].replace(/,/g, " "));
-    } else if (/^dc$/i.test(w) && t[i + 1]) s.dc = t[++i];
-    else if (/^ac$/i.test(w) && t[i + 1] && isNum(t[i + 1])) {
-      s.acMag = t[++i];
-      if (t[i + 1] && isNum(t[i + 1])) s.acPhase = t[++i];
+      s.args = tokens(argCommas(fn[2]));
+    } else if (/^dc$/i.test(w) && t[i + 1]) s.dc = t[++i][0];
+    else if (/^ac$/i.test(w) && t[i + 1] && isNum(t[i + 1][0])) {
+      s.acMag = t[++i][0];
+      if (t[i + 1] && isNum(t[i + 1][0])) s.acPhase = t[++i][0];
     } else if (kv) s[kv[1].toLowerCase() as "rser" | "cpar"] = kv[2];
     else if (i === 0 && isNum(w)) s.dc = w;
-    else rest.push(w);
+    else (inValue ? vrest : rest).push(w);
   }
-  s.rest = rest.join(" ");
+  [s.vrest, s.rest] = [vrest.join(" "), rest.join(" ")];
   return s;
 }
 
 /** Whether the source form writes these attributes back with the same meaning (token order,
  *  SIN/SINE, a leading DC and commas in argument lists do not matter); otherwise it opens as text. */
 export function sourceRoundTrips(...parts: (string | undefined)[]): boolean {
-  const norm = (s: string) => tokens(s.replace(/,/g, " ").replace(/\bsin\(/gi, "SINE(").replace(/(^|\s)dc\s+/gi, "$1").toUpperCase()).map((t) => t.replace(/\s+/g, " ")).sort().join(" ");
-  const f = formatSource(parseSource(...parts));
+  const norm = (s: string) => tokens(argCommas(s).replace(/\bsin\(/gi, "SINE(").replace(/(^|\s)dc\s+/gi, "$1").toUpperCase()).map((t) => t.replace(/\s+/g, " ")).sort().join(" ");
+  const p = parseSource(...parts);
+  // a waveform the form did not recognise (`SINE (…)`, `PWL file=…`) would show as DC: text instead
+  if (/\(|\b(sine?|pulse|exp|sffm|pwl|am|trnoise|trrandom)\b/i.test(p.vrest)) return false;
+  const f = formatSource(p);
   return norm(parts.filter(Boolean).join(" ")) === norm(`${f.Value} ${f.Value2} ${f.SpiceLine}`);
 }
 
@@ -137,7 +146,7 @@ function argList(func: Func, args: string[]) {
     return out;
   }
   const defs = FUNCS[func];
-  const last = args.reduce((n, a, i) => (a.trim() ? i : n), -1);
+  const last = args.reduce((n, a, i) => (a?.trim() ? i : n), -1);
   // arguments beyond the form's fields (PULSE cycles, LTspice's Ncycles ...) are kept as typed
   return Array.from({ length: Math.max(last + 1, 2) }, (_, i) => args[i]?.trim() || defs[i]?.def || "0");
 }
@@ -145,7 +154,7 @@ function argList(func: Func, args: string[]) {
 /** The attributes LTspice writes: Value (DC and/or function), Value2 (AC), SpiceLine (parasitics). */
 export function formatSource(s: Source): { Value: string; Value2: string; SpiceLine: string } {
   const fn = s.func ? `${s.func}(${argList(s.func, s.args).join(" ")})` : "";
-  let value = [s.dc.trim() && (fn ? `DC ${s.dc.trim()}` : s.dc.trim()), fn].filter(Boolean).join(" ");
+  let value = [s.dc.trim() && (fn ? `DC ${s.dc.trim()}` : s.dc.trim()), fn, s.vrest.trim()].filter(Boolean).join(" ");
   let value2 = s.acMag.trim() ? `AC ${s.acMag.trim()}${s.acPhase.trim() ? ` ${s.acPhase.trim()}` : ""}` : "";
   if (!value) [value, value2] = [value2 || "0", ""]; // AC only: "AC 1" as the value, like LTspice
   const line = [s.rser.trim() && `Rser=${s.rser.trim()}`, s.cpar.trim() && `Cpar=${s.cpar.trim()}`, s.rest.trim()].filter(Boolean).join(" ");
@@ -323,8 +332,8 @@ export const parseIc = (line: string) => [...line.matchAll(/v\(\s*([^)\s]+)\s*\)
 export const formatIc = (rows: string[][]) => `.ic ${rows.filter(([n]) => n.trim()).map(([n, v]) => `V(${n.trim()})=${v.trim() || "0"}`).join(" ")}`;
 
 export function parseInclude(line: string) {
-  const m = line.trim().match(/^\.(inc\w*|lib)\s+("([^"]*)"|(\S+))\s*(\S*)/i);
-  return { lib: !!m && m[1].toLowerCase() === "lib", path: m ? (m[3] ?? m[4]) : "", section: m?.[5] ?? "" };
+  const m = line.trim().match(/^\.(inc\w*|lib)\s+("([^"]*)"|'([^']*)'|(\S+))\s*(\S*)/i);
+  return { lib: !!m && m[1].toLowerCase() === "lib", path: m ? (m[3] ?? m[4] ?? m[5]) : "", section: m?.[6] ?? "" };
 }
 export const formatInclude = (lib: boolean, path: string, section: string) => `${lib ? ".lib" : ".include"} "${path.trim()}"${lib && section.trim() ? ` ${section.trim()}` : ""}`;
 

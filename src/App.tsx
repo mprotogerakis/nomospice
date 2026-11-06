@@ -15,7 +15,7 @@ import { Waveform } from "./Waveform";
 import { PoleZero } from "./PoleZero";
 import { Dialogs } from "./Dialogs";
 import { Boundary } from "./Boundary";
-import { dirOf, docId, isOp, loadDoc, loadSymbols, placeSymbol, plotKind, redo, refreshGit, refreshNets, simulate, undo, useS, useStatus } from "./store";
+import { docId, isOp, loadDoc, loadSymbols, placeSymbol, plotKind, redo, refreshGit, refreshNets, relToDoc, simulate, undo, useS, useStatus } from "./store";
 import { History } from "./History";
 import { currentLabel, mirror, rotate, si } from "./geom";
 import { deleteSelection, duplicate, newItem, placeFlag, transform } from "./actions";
@@ -114,10 +114,8 @@ async function dropFiles(paths: string[]) {
   if (useS.getState().dialog) return;
   const asc = paths.find((p) => /\.asc$/i.test(p));
   if (asc) return openFile(asc);
-  const dir = dirOf(useS.getState().path);
-  const rel = (p: string) => (dir && (p.startsWith(`${dir}/`) || p.startsWith(`${dir}\\`)) ? p.slice(dir.length + 1) : p);
   const models = paths.filter((p) => MODEL_FILE.test(p));
-  if (models.length) newItem({ t: "text", x: 0, y: 0, directive: true, text: models.map((p) => `.include "${rel(p)}"`).join("\n") });
+  if (models.length) newItem({ t: "text", x: 0, y: 0, directive: true, text: models.map((p) => `.include "${relToDoc(p)}"`).join("\n") });
 }
 
 async function saveFile(as = false) {

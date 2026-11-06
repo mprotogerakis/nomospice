@@ -14,14 +14,16 @@ export function SourceEditor({ attrs, setAttrs, current }: { attrs: Attrs; setAt
   const [src, setSrc] = useState<Source>(() => parseSource(attrs.Value, attrs.Value2, attrs.SpiceLine));
   // what the form cannot read (e.g. `PWL file=…`, `SINE (…)`) opens as text instead of being rewritten
   const [text, setText] = useState(() => !sourceRoundTrips(attrs.Value, attrs.Value2, attrs.SpiceLine));
-  const [hadRest] = useState(() => !!src.rest); // keep the "Other" field while it is being retyped
+  const [hadRest] = useState(() => !!src.rest); // keep the "Other" fields while they are being retyped
+  const [hadVrest] = useState(() => !!src.vrest);
   // arguments per function, so switching away and back keeps what was typed
   const [kept, setKept] = useState<Partial<Record<Func, string[]>>>({});
   const update = (next: Source) => {
     setSrc(next);
     setAttrs({ ...attrs, ...formatSource(next) });
   };
-  const setArg = (i: number, v: string) => { const args = [...src.args]; args[i] = v; update({ ...src, args }); };
+  // no holes: a sparse array would reach formatSource as undefined
+  const setArg = (i: number, v: string) => { const args = Array.from({ length: Math.max(src.args.length, i + 1) }, (_, k) => src.args[k] ?? ""); args[i] = v; update({ ...src, args }); };
   const pick = (func: Func | "") => {
     if (func === src.func) return; // the selected one: keep what was typed
     // a new function starts with every value written out: the line, the fields and the preview agree
@@ -38,7 +40,9 @@ export function SourceEditor({ attrs, setAttrs, current }: { attrs: Attrs; setAt
         <TextField label="Value" value={attrs.Value ?? ""} set={(v) => setAttrs({ ...attrs, Value: v })} autofocus hint="SPICE syntax: 5 · SINE(off amp freq) · PULSE(v1 v2 td tr tf ton per)" />
         <TextField label="Value2" value={attrs.Value2 ?? ""} set={(v) => setAttrs({ ...attrs, Value2: v })} hint="e.g. AC 1" />
         <TextField label="SpiceLine" value={attrs.SpiceLine ?? ""} set={(v) => setAttrs({ ...attrs, SpiceLine: v })} hint="e.g. Rser=50" />
-        <Button type="button" size="sm" className="self-start" onClick={() => { setSrc(parseSource(attrs.Value, attrs.Value2, attrs.SpiceLine)); setText(false); }}>Back to the form</Button>
+        {sourceRoundTrips(attrs.Value, attrs.Value2, attrs.SpiceLine)
+          ? <Button type="button" size="sm" className="self-start" onClick={() => { setSrc(parseSource(attrs.Value, attrs.Value2, attrs.SpiceLine)); setText(false); }}>Back to the form</Button>
+          : <p className="text-2xs text-text-tertiary">The form cannot show this source without changing it, so it stays text.</p>}
       </>
     );
   }
@@ -71,6 +75,7 @@ export function SourceEditor({ attrs, setAttrs, current }: { attrs: Attrs; setAt
           <Section>Parasitics</Section>
           <NumField label="Series resistance" value={src.rser} set={(rser) => update({ ...src, rser })} unit="Ω" />
           <NumField label="Parallel capacitance" value={src.cpar} set={(cpar) => update({ ...src, cpar })} unit="F" />
+          {(src.vrest || hadVrest) && <TextField label="Value options" value={src.vrest} set={(vrest) => update({ ...src, vrest })} hint="kept after the function, as written" />}
           {(src.rest || hadRest) && <TextField label="Other" value={src.rest} set={(rest) => update({ ...src, rest })} hint="kept as written" />}
         </div>
         <div className="flex flex-col gap-2">

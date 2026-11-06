@@ -26,8 +26,7 @@ assert.deepEqual(formatSource(parseSource("5")), { Value: "5", Value2: "", Spice
 // a gap is filled with the default, trailing blanks are dropped; unknown parts survive
 const p = parseSource("PULSE(0 5) foo=1");
 p.args[5] = "2m";
-assert.equal(formatSource(p).Value, "PULSE(0 5 0 1n 1n 2m)");
-assert.equal(formatSource(p).SpiceLine, "foo=1");
+assert.equal(formatSource(p).Value, "PULSE(0 5 0 1n 1n 2m) foo=1"); // unknown parts stay where they were
 // preview: a 1 kHz sine of amplitude 1 peaks near 1
 const w = sample(parseSource("SINE(0 1 1k)"))!;
 assert.ok(Math.abs(Math.max(...w.map(([, y]) => y)) - 1) < 0.01);
@@ -85,4 +84,12 @@ assert.equal(directiveKind(".meas tran tpd TRIG V(in) VAL=0.5 TARG V(out) VAL=0.
 for (const v of [["SINE(0 10m 1k)", "AC 1", "Rser=50"], ["SIN(0 1 1k) AC 1"], ["DC 5"], ["PWL(0,0 1m,1)"], ["AC 1 SINE(0 1 1k)"], ["5 Rpar=1Meg"]]) assert.ok(sourceRoundTrips(...v), v.join(" "));
 for (const v of [["SINE (0 1 1k)"], ["PWL file=wave.txt"]]) assert.equal(sourceRoundTrips(...v), false, v.join(" "));
 assert.equal(numInfo("1Mil")!.warn, undefined); // mil is 25.4 um, not the milli trap
+// pass 4: holes in the argument list, commas in expressions, quotes, option position
+const holes = parseSource("SINE(0 1 1k)");
+holes.args[5] = "30";
+holes.args = [...holes.args];
+assert.equal(formatSource({ ...holes, args: Array.from(holes.args) }).Value, "SINE(0 1 1k 0 0 30)");
+assert.equal(formatSource(parseSource("SINE(0 {max(a,b)} 1k)")).Value, "SINE(0 {max(a,b)} 1k)");
+assert.equal(formatInclude(false, parseInclude(".inc 'x.lib'").path, ""), '.include "x.lib"');
+assert.deepEqual(formatSource(parseSource("PWL(0 0 1m 1) r=0", "AC 1")), { Value: "PWL(0 0 1m 1) r=0", Value2: "AC 1", SpiceLine: "" });
 console.log("spice-check: ok");

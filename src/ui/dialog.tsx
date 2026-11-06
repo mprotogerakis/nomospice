@@ -127,7 +127,7 @@ export function CircuitLists() {
   const { names, sources, sweepable } = useMemo(() => {
     const names = [...new Set((nets?.nets ?? []).flat().filter(Boolean))].sort((a, b) => (a === "0" ? -1 : b === "0" ? 1 : a.localeCompare(b, undefined, { numeric: true })));
     const insts = items.flatMap((it, i) => (it.t === "sym" ? [{ inst: nets?.insts[i] || it.attrs.InstName || "", prefix: defOf(lib, it)?.prefix?.[0]?.toUpperCase() ?? "" }] : []));
-    const sources = insts.filter((x) => x.inst && "VI".includes(x.prefix)).map((x) => x.inst);
+    const sources = insts.filter((x) => x.inst && (x.prefix === "V" || x.prefix === "I")).map((x) => x.inst);
     const sweepable = [...sources, ...insts.filter((x) => x.inst && x.prefix === "R").map((x) => x.inst), "TEMP"];
     return { names, sources, sweepable };
   }, [items, nets, lib]);
