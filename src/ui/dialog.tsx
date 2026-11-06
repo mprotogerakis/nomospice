@@ -1,7 +1,7 @@
 // Dialog building blocks shared by the editors: modal frame, labelled fields, SPICE number fields,
 // and suggestion lists (nets, sources) from the open schematic.
 import { useEffect, useMemo, useRef } from "react";
-import { useS } from "../store";
+import { currentNets, useS } from "../store";
 import { defOf } from "../geom";
 import { numInfo } from "../spice";
 import { Button } from "./button";
@@ -136,7 +136,7 @@ export const SpiceLine = ({ children }: { children: React.ReactNode }) => (
 /** <datalist>s for the fields: "nets", "sources" (V/I), "sweepable" (sources, R, TEMP), "vexprs" (V(net)). */
 export function CircuitLists() {
   const items = useS((s) => s.items);
-  const nets = useS((s) => s.nets);
+  const nets = useS(currentNets); // null while the netlist lags the items (names are index-aligned)
   const lib = useS((s) => s.lib);
   const { names, sources, sweepable } = useMemo(() => {
     const names = [...new Set((nets?.nets ?? []).flat().filter(Boolean))].sort((a, b) => (a === "0" ? -1 : b === "0" ? 1 : a.localeCompare(b, undefined, { numeric: true })));

@@ -191,6 +191,8 @@ export const probeMode = (sim: Sim | null) => !!sim?.run && !isOp(sim) && !/^(no
 
 /** Results without a scale (.op, .tf, .noise totals, .sens): a value table, nothing to plot or probe. */
 export const isOp = (sim: Sim | null) => !!sim?.run && !sim.run.scale;
+/** How a result is shown: curves, the s-plane (.pz has no scale but a view of its own), or a table only. */
+export const viewOf = (sim: Sim | null): "none" | "plot" | "pz" | "table" => (!sim?.run ? "none" : sim.run.plot.startsWith("pz") ? "pz" : isOp(sim) ? "table" : "plot");
 /** Identifies the loaded document; async work checks it before writing results back. */
 export const docId = () => docGen;
 /** Counts simulation starts: a trace fetched while a run started may belong to either circuit. */

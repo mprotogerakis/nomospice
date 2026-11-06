@@ -3,7 +3,7 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { Run } from "./types";
-import { dirOf, useS } from "./store";
+import { currentNets, dirOf, docId, useS } from "./store";
 import { parseParams, si, spiceNum } from "./spice";
 import { defOf } from "./geom";
 import { NumField, Select, TextField } from "./ui/dialog";
@@ -150,7 +150,7 @@ export const PoleZero = memo(function PoleZero({ run }: { run: Run }) {
 function Sidebar({ poles, zeros, locus, setLocus }: { poles: P[]; zeros: P[]; locus: unknown; setLocus: (l: { values: number[]; steps: P[][]; target: string } | null) => void }) {
   const items = useS((s) => s.items);
   const lib = useS((s) => s.lib);
-  const nets = useS((s) => s.nets);
+  const nets = useS(currentNets); // null while the netlist lags the items: no index-aligned names then
   const running = useS((s) => s.running);
   // sweepable: .param names and R/C/L instances
   const targets = useMemo(() => [...new Set([
@@ -165,6 +165,10 @@ function Sidebar({ poles, zeros, locus, setLocus }: { poles: P[]; zeros: P[]; lo
     const [a, b, n] = [spiceNum(f.from), spiceNum(f.to), Math.round(spiceNum(f.steps) ?? 0)];
     if (!f.target.trim() || a === null || b === null || n < 2) return setError("Enter a parameter, a range and at least 2 steps.");
     if (f.scale === "log" && (a <= 0 || b <= 0)) return setError("A log sweep needs positive values.");
+    if (n > 500) return setError("At most 500 steps (each is one .pz run).");
+    // the locus is drawn over this run's poles: it must be the same circuit
+    if (useS.getState().stale) return setError("The schematic changed since this run: run it again first.");
+    const gen = docId();
     const values = Array.from({ length: n }, (_, i) => (f.scale === "log" ? a * (b / a) ** (i / (n - 1)) : a + ((b - a) * i) / (n - 1)));
     setError("");
     useS.setState({ running: true });
@@ -172,6 +176,7 @@ function Sidebar({ poles, zeros, locus, setLocus }: { poles: P[]; zeros: P[]; lo
       const { items, path } = useS.getState();
       // a step is null where .pz failed (drawn as a gap); fewer steps than values: halted
       const steps = await invoke<([string, number, number][] | null)[]>("root_locus", { items, dir: dirOf(path), target: f.target.trim(), values });
+      if (docId() !== gen) return; // another document was opened meanwhile
       const failed = steps.filter((x) => !x).length;
       setError([failed && `${failed} of ${steps.length} steps found no poles (gaps in the paths).`, steps.length < values.length && `Halted after ${steps.length} of ${values.length} steps.`].filter(Boolean).join(" "));
       setLocus({ values: values.slice(0, steps.length), target: f.target.trim(), steps: steps.map((s) => (s ?? []).filter(([n]) => n.startsWith("pole")).map(([, re, im]) => ({ re, im }))) });

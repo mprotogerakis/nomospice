@@ -15,7 +15,7 @@ import { Waveform } from "./Waveform";
 import { PoleZero } from "./PoleZero";
 import { Dialogs } from "./Dialogs";
 import { Boundary } from "./Boundary";
-import { docId, isOp, loadDoc, loadSymbols, placeSymbol, plotKind, redo, refreshGit, refreshNets, relToDoc, simulate, undo, useS, useStatus } from "./store";
+import { docId, viewOf, loadDoc, loadSymbols, placeSymbol, plotKind, redo, refreshGit, refreshNets, relToDoc, simulate, undo, useS, useStatus } from "./store";
 import { History } from "./History";
 import { currentLabel, mirror, rotate, si } from "./geom";
 import { deleteSelection, duplicate, newItem, placeFlag, transform } from "./actions";
@@ -173,9 +173,9 @@ export function App() {
   }, []);
   const [examples, setExamples] = useState<[string, Item[]][]>([]);
   const mainRef = useRef<HTMLDivElement>(null);
-  // pole-zero results have no scale (a table) but get their own view: the s-plane
-  const pz = !!s.sim?.run?.plot.startsWith("pz");
-  const showWave = !!s.sim?.run && (!isOp(s.sim) || pz);
+  const view = viewOf(s.sim);
+  const pz = view === "pz";
+  const showWave = view === "plot" || pz;
 
   useEffect(() => {
     if (booted) return; // StrictMode mounts twice in dev: restore/open/run exactly once

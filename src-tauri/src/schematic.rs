@@ -431,21 +431,23 @@ pub fn vary(text: &str, target: &str, value: f64) -> Option<String> {
         }
         None
     };
-    // top-level lines only (outside .subckt … .ends), with their lowercase twin
-    let mut sub = 0;
-    let lines: Vec<(&str, String, bool)> = text.lines().map(|line| {
+    // top-level lines only (outside .subckt … .ends), with their lowercase twin and whether they
+    // are part of a .param (its own line, or a `+` continuation of one)
+    let (mut sub, mut in_param) = (0, false);
+    let lines: Vec<(&str, String, bool, bool)> = text.lines().map(|line| {
         let low = line.to_ascii_lowercase();
-        match low.split_whitespace().next() { Some(".subckt") => sub += 1, Some(".ends") => sub -= 1, _ => {} }
-        let top = sub == 0 && !low.trim_start().starts_with(".ends");
-        (line, low, top)
+        let first = low.split_whitespace().next().unwrap_or("");
+        match first { ".subckt" => sub += 1, ".ends" => sub -= 1, _ => {} }
+        in_param = first == ".param" || (in_param && first.starts_with('+'));
+        let top = sub == 0 && first != ".ends";
+        (line, low, top, in_param)
     }).collect();
-    let is_param = |low: &str| low.split_whitespace().next() == Some(".param");
     // a .param of that name wins over a part of the same name (pz_sallen_key: `.param Rb`, part Rb = {Rb})
-    let params = lines.iter().any(|(l, low, top)| *top && is_param(low) && param_value(l, low).is_some());
+    let params = lines.iter().any(|(l, low, top, p)| *top && *p && param_value(l, low).is_some());
     let mut found = false;
-    let out: Vec<String> = lines.iter().map(|(line, low, top)| {
+    let out: Vec<String> = lines.iter().map(|(line, low, top, is_param)| {
         let span = if !top { None }
-            else if params { is_param(low).then(|| param_value(line, low)).flatten() }
+            else if params { is_param.then(|| param_value(line, low)).flatten() }
             else if !found && low.split_whitespace().next() == Some(t.as_str()) && "rcl".contains(&t[..1]) { token_spans(line).get(3).copied() }
             else { None };
         match span {
@@ -1319,6 +1321,8 @@ mod tests {
         let v = vary(".param y={x==1?2:3} x=5\n", "x", 7.0).unwrap();
         assert!(v.contains("y={x==1?2:3} x=7e0"), "{v}");
         assert!(vary(".param µa=1 a=2\n", "a", 3.0).unwrap().contains("µa=1 a=3e0"));
+        assert!(vary(".param Ra=1k\n+ Rb=10k\nR5 a b 1k\n", "Rb", 2e4).unwrap().contains("+ Rb=2e4"), "continuation line");
+        assert!(vary("R1 a b 1k\n+ tc=1\n", "tc", 2.0).is_none(), "a part's continuation is not a .param");
         for l in [".param x = 5\n", ".param x =5\n", ".param x= 5\n"] {
             assert!(vary(l, "x", 7.0).unwrap().contains("7e0") && !vary(l, "x", 7.0).unwrap().contains('5'), "{l}");
         }

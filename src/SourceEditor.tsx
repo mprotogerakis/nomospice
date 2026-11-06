@@ -1,7 +1,7 @@
 // Independent source (V, I) as a form: waveform function with named fields, AC, parasitics,
 // a waveform preview, and the SPICE attributes it writes (Value, Value2, SpiceLine like LTspice).
 import { useMemo, useState } from "react";
-import { FUNCS, formatSource, parseSource, sample, si, sourceRoundTrips, tokens, type Func, type Source } from "./spice";
+import { FUNCS, formatSource, lastFilled, parseSource, sample, si, sourceRoundTrips, tokens, type Func, type Source } from "./spice";
 import { Field, FIELD, NumField, Section, SpiceLine, TextField } from "./ui/dialog";
 import { Button } from "./ui/button";
 import { cn } from "@/lib/utils";
@@ -26,13 +26,17 @@ export function SourceEditor({ attrs, setAttrs, current }: { attrs: Attrs; setAt
   const setArg = (i: number, v: string) => { const args = Array.from({ length: Math.max(src.args.length, i + 1) }, (_, k) => src.args[k] ?? ""); args[i] = v; update({ ...src, args }); };
   const pick = (func: Func | "") => {
     if (func === src.func) return; // the selected one: keep what was typed
+    setMore(null);
     // a new function starts with every value written out: the line, the fields and the preview agree
     const args = func ? kept[func] ?? (func === "PWL" ? ["0", "0", "1m", "1"] : FUNCS[func].map((d) => d.def)) : [];
     if (src.func) setKept({ ...kept, [src.func]: src.args });
     update({ ...src, func, args });
   };
   const out = formatSource(src);
-  const lastArg = src.args.reduce((n, a, i) => (a?.trim() ? i : n), -1); // empty fields after it: SPICE's defaults
+  const lastArg = lastFilled(src.args); // empty fields after it: SPICE's defaults
+  // "More arguments" keeps its raw text while typed (re-tokenizing each key would eat the spaces)
+  const [more, setMore] = useState<string | null>(null);
+  const nDefs = src.func && src.func !== "PWL" ? FUNCS[src.func].length : 0;
 
   if (text) {
     return (
@@ -63,9 +67,9 @@ export function SourceEditor({ attrs, setAttrs, current }: { attrs: Attrs; setAt
               <NumField key={`${src.func}${i}`} label={a.label} value={src.args[i] ?? ""} set={(v) => setArg(i, v)} unit={a.unit === "y" ? y : a.unit}
                 placeholder={i < lastArg ? a.def : "SPICE default"} autofocus={i === 0} />
             )) : null}
-          {src.func && src.func !== "PWL" && src.args.length > FUNCS[src.func].length && (
-            <TextField label="More arguments" value={src.args.slice(FUNCS[src.func].length).join(" ")} hint="kept as written (e.g. a cycle count)"
-              set={(v) => update({ ...src, args: [...src.args.slice(0, FUNCS[src.func as Exclude<Func, "PWL">].length), ...tokens(v)] })} />
+          {nDefs > 0 && (src.args.length > nDefs || more !== null) && (
+            <TextField label="More arguments" value={more ?? src.args.slice(nDefs).join(" ")} hint="kept as written (e.g. a cycle count)"
+              set={(v) => { setMore(v); update({ ...src, args: [...src.args.slice(0, nDefs), ...tokens(v)] }); }} />
           )}
           <NumField label={src.func ? "DC value" : "Value"} value={src.dc} set={(dc) => update({ ...src, dc })} unit={y} autofocus={!src.func}
             hint={src.func ? "only for the operating point (.op, .dc)" : undefined} />

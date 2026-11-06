@@ -98,6 +98,9 @@ export interface Source {
   rest: string;
 }
 
+/** Index of the last argument that is filled in (-1: none); the ones after it are SPICE's defaults. */
+export const lastFilled = (args: string[]) => args.reduce((n, a, i) => (a?.trim() ? i : n), -1);
+
 /** Commas outside `{…}` as spaces: argument separators (`PWL(0,0 1m,1)`), not `{max(a,b)}`. */
 const argCommas = (s: string) => { let d = 0, out = ""; for (const c of s) { d += c === "{" ? 1 : c === "}" ? -1 : 0; out += c === "," && d <= 0 ? " " : c; } return out; };
 
@@ -134,7 +137,7 @@ export function sourceRoundTrips(...parts: (string | undefined)[]): boolean {
   // a waveform the form did not recognise (`SINE (…)`, `PWL file=…`) would show as DC: text instead
   if (/\(|\b(sine?|pulse|exp|sffm|pwl|am|trnoise|trrandom)\b/i.test(p.vrest)) return false;
   const f = formatSource(p);
-  return norm(parts.filter(Boolean).join(" ")) === norm(`${f.Value} ${f.Value2} ${f.SpiceLine}`);
+  return norm(parts.filter(Boolean).join(" ") || "0") === norm(`${f.Value} ${f.Value2} ${f.SpiceLine}`); // nothing: DC 0
 }
 
 /** Function arguments for SPICE: gaps filled with defaults, trailing blanks dropped. */
@@ -146,7 +149,7 @@ function argList(func: Func, args: string[]) {
     return out;
   }
   const defs = FUNCS[func];
-  const last = args.reduce((n, a, i) => (a?.trim() ? i : n), -1);
+  const last = lastFilled(args);
   // arguments beyond the form's fields (PULSE cycles, LTspice's Ncycles ...) are kept as typed
   return Array.from({ length: Math.max(last + 1, 2) }, (_, i) => args[i]?.trim() || defs[i]?.def || "0");
 }
@@ -183,7 +186,7 @@ export function sample(s: Source, n = 240): [number, number][] | null {
     };
   } else {
     // given arguments; a gap gets the form default (as written); trailing ones what SPICE does
-    const last = s.args.reduce((n, a, i) => (a?.trim() ? i : n), -1);
+    const last = lastFilled(s.args);
     const a = FUNCS[s.func].map((d, i) => (i <= last || d.spice === undefined ? num(s.args[i], d.def) : d.spice === "inf" ? Infinity : d.spice === "?" ? null : spiceNum(d.spice)));
     if (a.some((x) => x === null)) return null;
     const p = a as number[];

@@ -77,7 +77,7 @@ export function DirectiveDialog({ item, title, raw, onDone }: { item: Text; titl
   // Leaving a form that was used writes its result into the text, so no tab loses edits.
   const [tab, setTab] = useState<DirectiveKind>(raw ? "text" : directiveKind(item.text));
   const [text, setText] = useState(item.text);
-  const [directive, setDirective] = useState(true); // the Text tab can turn it into a comment
+  const [directive, setDirective] = useState(item.directive); // the Text tab switches directive / comment
   const [touched, setTouched] = useState(false); // the current form was used
   const [tried, setTried] = useState(false);
   const [s0] = useState(() => formState(tab, item.text)); // the first tab reads the directive
@@ -131,6 +131,7 @@ export function DirectiveDialog({ item, title, raw, onDone }: { item: Text; titl
   // leaving a used form writes its result into the text; the next form reads the text
   const toTab = (k: DirectiveKind) => {
     if (k === tab) return;
+    if (touched && invalid) return setTried(true); // a half-filled form: say what is missing instead of dropping it
     const next = tab !== "text" && touched && !invalid ? result : text;
     setText(next);
     if (k !== "text") load(k, next);
@@ -149,7 +150,7 @@ export function DirectiveDialog({ item, title, raw, onDone }: { item: Text; titl
       {tab === "text" && (
         <>
           <textarea data-autofocus rows={6} className={cn(FIELD_BASE, FIELD_FOCUS, "w-full p-2 font-mono")} value={text} spellCheck={false}
-            placeholder={".tran 1m\n.param R=1k\n.model D1N4148 D(...)"} onChange={(e) => setText(e.target.value)}
+            placeholder={directive ? ".tran 1m\n.param R=1k\n.model D1N4148 D(...)" : "Comment"} onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && (e.metaKey || e.ctrlKey) && (e.preventDefault(), done())} />
           <label className="flex items-center gap-2 text-xs text-text-secondary">
             <input type="checkbox" checked={directive} onChange={(e) => setDirective(e.target.checked)} />

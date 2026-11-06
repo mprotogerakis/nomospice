@@ -93,4 +93,5 @@ assert.equal(formatSource(parseSource("SINE(0 {max(a,b)} 1k)")).Value, "SINE(0 {
 assert.equal(formatInclude(false, parseInclude(".inc 'x.lib'").path, ""), '.include "x.lib"');
 assert.deepEqual(formatSource(parseSource("PWL(0 0 1m 1) r=0", "AC 1")), { Value: "PWL(0 0 1m 1) r=0", Value2: "AC 1", SpiceLine: "" });
 assert.ok(sample(parseSource("EXP(0 1 0 0)"))!.every(([, v]) => Number.isFinite(v))); // tau 0: no NaN
+assert.ok(sourceRoundTrips("") && sourceRoundTrips(undefined, "", "")); // an empty source is DC 0, not text
 console.log("spice-check: ok");

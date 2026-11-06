@@ -6,18 +6,18 @@ import type { Item, LibEntry, LibSource } from "./types";
 import { addTrace, commit, loadSymbols, placePart, placeSymbol, refreshLibrarySymbols, useS } from "./store";
 import { defOf, vexpr } from "./geom";
 import { Button } from "./ui/button";
-import { FIELD_BASE, FIELD_FOCUS } from "./ui/focus";
 import { closeDialog, Field, FIELD, Modal, numHelp, TextField } from "./ui/dialog";
 import { SourceEditor } from "./SourceEditor";
 import { SimDialog } from "./SimDialog";
 import { DirectiveDialog } from "./DirectiveDialog";
-import { analysisLine, analysisRoundTrips, portablePaths, tokens } from "./spice";
-import { cn, keys } from "@/lib/utils";
+import { analysisLine, analysisRoundTrips, tokens } from "./spice";
+import { cn } from "@/lib/utils";
 import thirdParty from "./third-party.json";
 
 const close = closeDialog;
 
-/** Edits an item; `onDone` receives the result (commit in place, or start placing it). */
+/** Edits a part or a net label; `onDone` receives the result (commit in place, or start placing it).
+ *  Comments and directives use DirectiveDialog. */
 function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: (it: Item) => void }) {
   const lib = useS((s) => s.lib);
   const [it, setIt] = useState(item);
@@ -25,10 +25,8 @@ function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: 
   const setAttr = (k: string, v: string) => it.t === "sym" && setIt({ ...it, attrs: { ...it.attrs, [k]: v } });
   const done = () => {
     if (it.t === "sym") onDone({ ...it, attrs: Object.fromEntries(Object.entries(it.attrs).filter(([, v]) => v.trim())) });
-    else if ((it.t === "flag" && !it.name.trim()) || (it.t === "text" && !it.text.trim())) close();
-    else if (it.t === "text" && it.directive) {
-      onDone({ ...it, text: portablePaths(it.text) }); // a comment just turned into a directive
-    } else onDone(it);
+    else if (it.t === "flag" && !it.name.trim()) close();
+    else onDone(it);
   };
   const def = it.t === "sym" ? defOf(lib, it) : undefined;
   // independent sources (V, I; not the controlled E/G/F/H) get the waveform form
@@ -37,7 +35,7 @@ function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: 
   const unit = ({ R: "Ω", C: "F", L: "H" } as Record<string, string>)[def?.prefix?.[0]?.toUpperCase() ?? ""];
   const valueHelp = unit && !/\s/.test(attr("Value").trim()) ? numHelp(attr("Value"), unit, (v) => setAttr("Value", v)) : null;
   return (
-    <Modal title={title} onSubmit={done} wide={source ? "xl" : it.t === "text"}>
+    <Modal title={title} onSubmit={done} wide={source ? "xl" : false}>
       {it.t === "sym" && (
         <>
           <div className="text-2xs text-text-tertiary">{def?.desc ?? it.sym} · {it.sym}</div>
@@ -56,23 +54,6 @@ function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: 
         <Field label="Net name" hint="0 = ground">
           <input data-autofocus className={FIELD} value={it.name} onChange={(e) => setIt({ ...it, name: e.target.value.replace(/\s/g, "_") })} />
         </Field>
-      )}
-      {it.t === "text" && (
-        <>
-          <textarea
-            data-autofocus
-            rows={5}
-            className={cn(FIELD_BASE, FIELD_FOCUS, "w-full p-2 font-mono")}
-            value={it.text}
-            placeholder={it.directive ? ".tran 1m\n.param R=1k\n.model D1N4148 D(...)" : "Comment"}
-            onChange={(e) => setIt({ ...it, text: e.target.value })}
-            onKeyDown={(e) => e.key === "Enter" && (e.metaKey || e.ctrlKey) && (e.preventDefault(), done())}
-          />
-          <label className="flex items-center gap-2 text-xs text-text-secondary">
-            <input type="checkbox" checked={it.directive} onChange={(e) => setIt({ ...it, directive: e.target.checked })} />
-            SPICE directive (otherwise comment) · {keys("⌘↵")} to confirm
-          </label>
-        </>
       )}
     </Modal>
   );
@@ -346,14 +327,14 @@ export const Dialogs = memo(function Dialogs() {
     case "edit": {
       const it = items[dialog.index];
       if (!it) return null;
-      if (it.t === "text" && it.directive) return directive(dialog.index, dialog.raw, dialog.draft);
-      return <ItemForm key={dialog.index} item={it} title={it.t === "sym" ? `Edit ${it.attrs.InstName ?? it.sym}` : it.t === "flag" ? "Net Name" : "Edit Text"} onDone={commitAt(dialog.index)} />;
+      if (it.t === "text") return it.directive ? directive(dialog.index, dialog.raw, dialog.draft) : <DirectiveDialog key={dialog.index} item={it} title="Comment" raw onDone={commitAt(dialog.index)} />;
+      return <ItemForm key={dialog.index} item={it} title={it.t === "sym" ? `Edit ${it.attrs.InstName ?? it.sym}` : "Net Name"} onDone={commitAt(dialog.index)} />;
     }
     case "new": {
       const at = dialog.at;
       const place = (it: Item) => (at && it.t !== "wire" && it.t !== "raw" ? (commit([...items, { ...it, x: at[0], y: at[1] }]), close()) : useS.setState({ dialog: null, tool: { k: "place", item: it } }));
-      if (dialog.item.t === "text" && dialog.item.directive) return <DirectiveDialog item={dialog.item} title="SPICE Directive" onDone={place} />;
-      return <ItemForm item={dialog.item} title={dialog.item.t === "flag" ? "Net Name" : "Comment"} onDone={place} />;
+      if (dialog.item.t === "text") return <DirectiveDialog item={dialog.item} title={dialog.item.directive ? "SPICE Directive" : "Comment"} raw={!dialog.item.directive} onDone={place} />;
+      return <ItemForm item={dialog.item} title="Net Name" onDone={place} />;
     }
     case "sim": {
       const i = analysisItem(items);
