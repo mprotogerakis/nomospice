@@ -5,7 +5,7 @@ import type { Item } from "./types";
 import { relToDoc, useS } from "./store";
 import {
   directiveKind, formatIc, formatInclude, formatMeas, formatModel, formatParams, MODEL_PARAMS, MODEL_TYPES, parseIc, parseInclude,
-  analysisLine, analysisRoundTrips, parseMeas, parseModel, parseParams, portablePaths, type DirectiveKind, type Meas,
+  analysisLine, analysisEditable, parseMeas, parseModel, parseParams, portablePaths, type DirectiveKind, type Meas,
 } from "./spice";
 import { CircuitLists, Tabs, Field, FIELD, Modal, numHelp, NumField, Rows, Section, Select, SpiceLine, TextField } from "./ui/dialog";
 import { Button } from "./ui/button";
@@ -37,17 +37,20 @@ function ParamRow({ name, desc, unit, value, set }: { name: string; desc: string
   );
 }
 
+/** A model's parameters as the form holds them: the type's listed ones by name, the rest as rows. */
+function splitModel(type: string, all: string[][]) {
+  const known = (n: string) => (MODEL_PARAMS[type] ?? []).some(([p]) => p === n.toUpperCase());
+  return { mKnown: Object.fromEntries(all.filter(([n]) => known(n)).map(([n, v]) => [n.toUpperCase(), v])) as Record<string, string>, mExtra: all.filter(([n]) => !known(n)) };
+}
+
 /** What form `k` shows for `txt`: the directive's values if `txt` is exactly one of its kind, else empty. */
 function formState(k: DirectiveKind, txt: string) {
   const one = directiveKind(txt) === k ? txt.trim() : "";
   const m = k === "model" && one ? parseModel(one) : null;
-  const known = (n: string) => (MODEL_PARAMS[m?.type ?? "D"] ?? []).some(([p]) => p === n.toUpperCase());
   return {
     params: k === "param" && one ? parseParams(one) : [["", ""]],
     // listed parameters by name; others as rows that are never re-sorted while their name is typed
-    mName: m?.name ?? "", mType: m?.type ?? "D",
-    mKnown: Object.fromEntries((m?.params ?? []).filter(([n]) => known(n)).map(([n, v]) => [n.toUpperCase(), v])) as Record<string, string>,
-    mExtra: (m?.params ?? []).filter(([n]) => !known(n)),
+    mName: m?.name ?? "", mType: m?.type ?? "D", ...splitModel(m?.type ?? "D", m?.params ?? []),
     meas: (k === "meas" && one && parseMeas(one)) || ({ an: "tran", name: "", type: "stat", f: { op: "AVG" } } as Meas),
     ic: k === "ic" && one ? parseIc(one) : [["", ""]],
     temp: k === "temp" && one ? one.split(/\s+/)[1] ?? "" : "",
@@ -85,14 +88,14 @@ export function DirectiveDialog({ item, title, raw, onDone }: { item: Text; titl
   };
   const [base, setBase] = useState(() => sig(tab, st));
   const touched = tab !== "text" && sig(tab, st) !== base;
+  // a new directive: OK places what the form shows, even untouched (.temp 27)
+  const used = touched || (tab !== "text" && !text.trim());
   const load = (k: DirectiveKind, txt: string) => { const s = formState(k, txt); setSt(s); setBase(sig(k, s)); };
 
   const known = MODEL_PARAMS[mType] ?? [];
   // another device type: its listed parameters move into the table, the rest become extra rows
   const retype = (t: string) => {
-    const all = [...Object.entries(mKnown), ...mExtra].filter(([n, v]) => n.trim() || v.trim());
-    const kn = (n: string) => (MODEL_PARAMS[t] ?? []).some(([p]) => p === n.toUpperCase());
-    put({ mType: t, mKnown: Object.fromEntries(all.filter(([n]) => kn(n)).map(([n, v]) => [n.toUpperCase(), v])), mExtra: all.filter(([n]) => !kn(n)) });
+    put({ mType: t, ...splitModel(t, [...Object.entries(mKnown), ...mExtra].filter(([n, v]) => n.trim() || v.trim())) });
   };
   const mf = (k: string) => meas.f[k] ?? "";
   const setMf = (k: string) => (v: string) => put({ meas: { ...meas, f: { ...meas.f, [k]: v } } });
@@ -105,9 +108,11 @@ export function DirectiveDialog({ item, title, raw, onDone }: { item: Text; titl
   // a form replaces a directive of its own kind; any other text stays and gets the line added
   const keeps = tab !== "text" && directiveKind(text) !== tab && text.trim() !== "";
   // untouched: the text exactly as it was (no re-formatting, no spurious change)
-  const result = tab === "text" || !touched ? text : keeps ? `${text.trimEnd()}\n${line}` : line;
-  const invalid = !touched ? "" : tab === "param" && !params.some(([n]) => n.trim()) ? "Add a parameter name."
+  const result = !used ? text : keeps ? `${text.trimEnd()}\n${line}` : line;
+  const blank = (tab === "param" ? params : tab === "ic" ? ic : []).find(([n, v]) => n.trim() && !v.trim());
+  const invalid = !used ? "" : tab === "param" && !params.some(([n]) => n.trim()) ? "Add a parameter name."
     : tab === "ic" && !ic.some(([n]) => n.trim()) ? "Add a node."
+    : blank ? `Give ${blank[0].trim()} a value.`
     : tab === "include" && !inc.path.trim() ? "Choose a file." : "";
   const done = () => {
     if (invalid) return setTried(true);
@@ -128,7 +133,7 @@ export function DirectiveDialog({ item, title, raw, onDone }: { item: Text; titl
   };
   // an analysis the simulation form cannot read stays here (the button would only come back)
   const analysis = analysisLine(text);
-  const simForm = !analysis || analysisRoundTrips(analysis);
+  const simForm = !analysis || analysisEditable(text);
 
   return (
     <Modal title={title} onSubmit={done} wide>
@@ -145,7 +150,7 @@ export function DirectiveDialog({ item, title, raw, onDone }: { item: Text; titl
             SPICE directive (otherwise a comment, ignored by the simulation)
           </label>
           <p className="text-2xs text-text-tertiary">{directive ? "Any SPICE directive, one per line · the other tabs build the common ones for you" : "Shown on the schematic, ignored by the simulation"} · {keys("⌘↵")} to confirm</p>
-          {!simForm && <p className="text-2xs text-text-tertiary">This analysis uses options the simulation form does not know, so it is edited here as text.</p>}
+          {!simForm && <p className="text-2xs text-text-tertiary">This analysis uses options the simulation form does not know, so it is edited here as text (Edit Simulation Command opens the form, which rewrites it).</p>}
         </>
       )}
       {tab === "param" && (
@@ -233,7 +238,7 @@ export function DirectiveDialog({ item, title, raw, onDone }: { item: Text; titl
       {tried && invalid && (
         <p className="text-2xs text-status-danger">
           {invalid}
-          <button type="button" className="ml-2 underline hover:text-text-strong" onClick={() => { load(tab, text); setTried(false); }}>Discard this form's changes</button>
+          {touched && <button type="button" className="ml-2 underline hover:text-text-strong" onClick={() => { load(tab, text); setTried(false); }}>Discard this form's changes</button>}
         </p>
       )}
     </Modal>

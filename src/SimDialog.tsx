@@ -2,7 +2,7 @@
 import { useState } from "react";
 import type { Item } from "./types";
 import { commit, useS } from "./store";
-import { analysisIndex, holdsAnalysis, formatAnalysis, parseAnalysis, type Analysis, type Fields } from "./spice";
+import { analysisEditable, analysisIndex, formatAnalysis, parseAnalysis, type Analysis, type Fields } from "./spice";
 import { CircuitLists, Tabs, closeDialog, Field, Modal, NumField, Section, Select, SpiceLine, TextField } from "./ui/dialog";
 import { Button } from "./ui/button";
 
@@ -13,10 +13,10 @@ const TABS: [Analysis, string][] = [
 const SWEEPS: [string, string][] = [["dec", "Decade (log)"], ["oct", "Octave (log)"], ["lin", "Linear"]];
 const PER: Record<string, string> = { dec: "Points per decade", oct: "Points per octave", lin: "Points (total)" };
 
-/** Edits the analysis line of directive `index` (or the first analysis directive), else places a new one. */
+/** Edits the analysis line of directive `index` (Dialogs picks it), else places a new one. */
 export function SimDialog({ index }: { index?: number }) {
   const items = useS((s) => s.items);
-  const idx = index !== undefined && holdsAnalysis(items[index]) ? index : items.findIndex((it) => holdsAnalysis(it));
+  const idx = index ?? -1;
   const lines = idx >= 0 && items[idx].t === "text" ? items[idx].text.split("\n") : [];
   const li = analysisIndex(lines); // the same rule Dialogs used to pick this dialog
   const [init] = useState(() => parseAnalysis(li >= 0 ? lines[li] : ".tran 1m"));
@@ -29,7 +29,10 @@ export function SimDialog({ index }: { index?: number }) {
   // unchanged (same kind, same line as read): the directive stays exactly as written
   const [pristine] = useState(() => formatAnalysis(init.kind, init.f));
   const unchanged = idx >= 0 && kind === init.kind && line === pristine;
-  const edited = unchanged ? lines.join("\n") : lines.map((l, j) => (j === li ? line : l)).join("\n");
+  // more than the form shows (unknown options, `+` lines): OK replaces the whole statement
+  const partial = idx >= 0 && !analysisEditable(lines.join("\n"));
+  const cont = (j: number) => j > li && /^\s*\+/.test(lines[j]) && lines.slice(li + 1, j).every((l) => !l.trim() || /^\s*[*+]/.test(l));
+  const edited = unchanged ? lines.join("\n") : lines.flatMap((l, j) => (j === li ? [line] : cont(j) ? [] : [l])).join("\n");
 
   const submit = () => {
     if (unchanged) return closeDialog();
@@ -66,6 +69,7 @@ export function SimDialog({ index }: { index?: number }) {
   return (
     <Modal title="Edit Simulation Command" onSubmit={submit} wide>
       <CircuitLists />
+      {partial && <p className="text-2xs text-status-warning">⚠ The form does not cover all of “{lines[li].trim()}”{cont(li + 1) ? " and its + lines" : ""}: a change here replaces it with the line below. “Edit as text” keeps it.</p>}
       <Tabs tabs={TABS} value={kind} set={setKind} />
       {kind === "tran" && (
         <>

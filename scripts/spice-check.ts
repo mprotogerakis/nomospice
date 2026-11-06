@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import {
   tokens, formatAnalysis, formatIc, formatInclude, formatMeas, formatModel, formatParams, formatSource, numInfo, parseAnalysis,
-  parseIc, parseInclude, parseMeas, parseModel, parseParams, parseSource, sample, si, spiceNum, directiveKind, analysisRoundTrips, portablePaths, sourceRoundTrips, holdsAnalysis,
+  parseIc, parseInclude, parseMeas, parseModel, parseParams, parseSource, sample, si, spiceNum, directiveKind, analysisRoundTrips, analysisEditable, portablePaths, sourceRoundTrips, holdsAnalysis,
 } from "../src/spice.ts";
 
 // numbers and the classic pitfalls
@@ -69,6 +69,7 @@ for (const [l, k] of [[".ic V(out)=1", "ic"], [".temp 25", "temp"], [".meas ac f
 assert.equal(formatMeas(parseMeas(".meas ac f3db WHEN V(out)=0.707")!), ".meas ac f3db WHEN V(out)=0.707"); // no edge added
 assert.ok(analysisRoundTrips(".tran 1m startup") && analysisRoundTrips(".noise v(out) V1 dec 10 10 1Meg 1"));
 assert.equal(analysisRoundTrips(".dc lin V1 0 5 0.1"), false);
+assert.ok(analysisEditable(".param a=1\n.tran 0 1m") && !analysisEditable(".tran 0 1m\n* c\n+ 0 1u") && !analysisEditable(".param a=1"));
 // extra function arguments (PULSE cycles) survive an edit elsewhere
 const cyc = parseSource("PULSE(0 5 0 1n 1n 0.5m 1m 10)");
 cyc.acMag = "1";

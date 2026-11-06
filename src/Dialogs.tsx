@@ -10,7 +10,7 @@ import { closeDialog as close, Field, FIELD, Modal, numHelp, TextField } from ".
 import { SourceEditor } from "./SourceEditor";
 import { SimDialog } from "./SimDialog";
 import { DirectiveDialog } from "./DirectiveDialog";
-import { analysisLine, analysisRoundTrips, holdsAnalysis, tokens } from "./spice";
+import { analysisEditable, analysisLine, holdsAnalysis, tokens } from "./spice";
 import { cn } from "@/lib/utils";
 import thirdParty from "./third-party.json";
 import { checkForUpdate } from "./updater";
@@ -324,7 +324,7 @@ export const Dialogs = memo(function Dialogs() {
   const directive = (index: number, raw?: boolean, draft?: string) => {
     const it = items[index] as Extract<Item, { t: "text" }>;
     const line = analysisLine(it.text);
-    if (!raw && line && analysisRoundTrips(line)) return <SimDialog key={index} index={index} />;
+    if (!raw && line && analysisEditable(it.text)) return <SimDialog key={index} index={index} />;
     return <DirectiveDialog key={`${index}${raw || line ? "raw" : ""}`} item={draft === undefined ? it : { ...it, text: draft }} title="SPICE Directive" raw={raw || !!line} onDone={commitAt(index)} />;
   };
   switch (dialog.k) {
@@ -340,9 +340,9 @@ export const Dialogs = memo(function Dialogs() {
       if (dialog.item.t === "text") return <DirectiveDialog item={dialog.item} title={dialog.item.directive ? "SPICE Directive" : "Comment"} raw={!dialog.item.directive} onDone={place} />;
       return <ItemForm item={dialog.item} title="Net Name" onDone={place} />;
     }
-    case "sim": {
+    case "sim": { // the form also for an analysis it does not fully cover: it says so, and OK rewrites the line
       const i = items.findIndex((x) => holdsAnalysis(x));
-      return i >= 0 ? directive(i) : <SimDialog />;
+      return <SimDialog key={i} index={i >= 0 ? i : undefined} />;
     }
     case "parts": return <PartsDialog replace={dialog.replace} kind0={dialog.kind} />;
     case "trace": return <TraceDialog />;

@@ -344,6 +344,14 @@ export const analysisRoundTrips = (line: string) => {
   return sameSpice(formatAnalysis(kind, f), line);
 };
 
+/** Whether the simulation form can edit `text`'s analysis: it writes the line back unchanged and
+ *  no `+` line continues it (the form would not see the rest). */
+export const analysisEditable = (text: string) => {
+  const lines = text.split("\n"), li = analysisIndex(lines);
+  const next = lines.slice(li + 1).find((l) => l.trim() && !l.trim().startsWith("*")) ?? "";
+  return li >= 0 && analysisRoundTrips(lines[li]) && !next.trim().startsWith("+");
+};
+
 /** Include paths with forward slashes: portable, and safe from the .asc `\n` newline escape. */
 export const portablePaths = (text: string) => text.split("\n").map((l) => (/^\s*\.(inc|lib)/i.test(l) ? l.replaceAll("\\", "/") : l)).join("\n");
 
