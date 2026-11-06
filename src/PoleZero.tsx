@@ -194,10 +194,11 @@ function Sidebar({ poles, zeros, hasLocus, setLocus, error, setError }: {
       // a step is null where .pz failed (drawn as a gap); fewer steps than values: halted
       const steps = await invoke<([number, number][] | null)[]>("root_locus", { items, dir: dirOf(path), target: f.target.trim(), values });
       if (docId() !== gen || req !== reqRef.current) return; // another document opened meanwhile, or Clear
-      if (useS.getState().sim !== sim0) return setError("The circuit was simulated again meanwhile: draw the locus again."); // live mode, Run
-      const failed = steps.filter((x) => !x?.some((p) => finite([0, ...p]))).length; // failed, or ran without poles
+      // live mode, Run: a new simulation stops the sweep (before its result reaches the store)
+      if (useS.getState().running || useS.getState().sim !== sim0) return setError("The circuit was simulated again meanwhile: draw the locus again.");
+      const failed = steps.filter((x) => !x?.some((p) => p.every(Number.isFinite))).length; // failed, or ran without poles
       setError([failed && `${failed} of ${steps.length} steps found no poles (gaps in the paths).`, steps.length < values.length && `Halted after ${steps.length} of ${values.length} steps.`].filter(Boolean).join(" "));
-      setLocus({ values: values.slice(0, steps.length), target: f.target.trim(), steps: steps.map((s) => (s ?? []).filter((p) => finite([0, ...p])).map(([re, im]) => ({ re, im }))) });
+      setLocus({ values: values.slice(0, steps.length), target: f.target.trim(), steps: steps.map((s) => (s ?? []).filter((p) => p.every(Number.isFinite)).map(([re, im]) => ({ re, im }))) });
     } catch (e) {
       if (req === reqRef.current) setError(String(e));
     } finally {

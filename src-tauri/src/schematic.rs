@@ -658,7 +658,7 @@ impl Prepared {
     /// This deck with its other analyses commented out (a sweep step needs only `.pz`; a `.tran`
     /// or `.meas` would run every step for nothing).
     pub fn only_pz(&self) -> Prepared {
-        const OTHER: [&str; 14] = [".tran", ".ac", ".dc", ".op", ".noise", ".tf", ".sens", ".four", ".meas", ".measure", ".disto", ".pss", ".sp", ".hb"];
+        const OTHER: [&str; 16] = [".tran", ".ac", ".dc", ".op", ".noise", ".tf", ".sens", ".four", ".meas", ".measure", ".disto", ".pss", ".sp", ".hb", ".print", ".plot"];
         // with their `+` continuation lines
         let text = deck_lines(&self.0).iter().map(|l| {
             if !l.skip && OTHER.contains(&l.head.as_str()) { format!("* {}", l.line) } else { l.line.to_string() }
