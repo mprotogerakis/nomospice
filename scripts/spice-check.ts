@@ -138,7 +138,8 @@ assert.equal(numInfo("1Meg", "Hz")!.text, "= 1MegHz"); // not "1M", the milli tr
   assert.ok(dot(moved as never), `the junction at 50,0 stays: ${JSON.stringify(moved)}`);
   const leg = dragPlan(items as never, {}, new Set([1]))(0, 20).find((w) => w.t === "wire" && w.x1 === 50 && w.x2 === 50) as { y1: number; y2: number };
   assert.ok(leg.y1 === 20 && leg.y2 === 50, `the T-leg follows the moved wire: ${JSON.stringify(leg)}`);
-  assert.equal(dragPlan(items as never, {}, new Set([0]))(0, 0).length, 4, "the stretched wire is cut at the junction");
+  assert.equal(dragPlan(items as never, {}, new Set([0]))(0, 20).length, 4, "the stretched wire is cut at the junction");
+  assert.deepEqual(dragPlan(items as never, {}, new Set([0]))(0, 0), items, "dragged back: the wire is whole again");
   // a bus with three junctions, dragged from one end: cut at the nearest junction only
   const bus = [{ t: "flag" as const, x: 0, y: 0, name: "a" }, W(0, 0, 100, 0), W(25, 0, 25, 50), W(50, 0, 50, 50), W(75, 0, 75, 50)];
   const busOut = dragPlan(bus as never, {}, new Set([0]))(0, 20);

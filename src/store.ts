@@ -125,11 +125,18 @@ export function redo() {
   refreshNets();
 }
 
-/** The folder whose symbols the library holds (the schematic's: its .asy are listed too), and
- *  the latest request (an older answer arriving late must not replace a newer one). */
-let symDir: string | null | undefined, symSeq = 0;
-/** `fresh`: a document is being loaded (the current one's symbols are not needed any more). */
-export async function loadSymbols(items: Item[] = [], dir = dirOf(get().path), { force = false, fresh = false } = {}) {
+/** The folder whose symbols the library holds (the schematic's: its .asy are listed too), and the
+ *  requests in order (each answer replaces the set: one at a time, none superseded unanswered). */
+let symDir: string | null | undefined, symQueue: Promise<unknown> = Promise.resolve();
+/** `dir`: the schematic's folder when the request runs, unless given (a document being loaded);
+ *  `fresh`: a document is being loaded (the current one's symbols are not needed any more). */
+export function loadSymbols(items: Item[] = [], dir?: string | null, opts: { force?: boolean; fresh?: boolean } = {}) {
+  const job = symQueue.catch(() => {}).then(() => loadSymbolsNow(items, dir === undefined ? dirOf(get().path) : dir, opts));
+  symQueue = job;
+  return job;
+}
+
+async function loadSymbolsNow(items: Item[], dir: string | null, { force = false, fresh = false }) {
   const moved = dir !== symDir || force; // another folder (or other libraries): ask again for all
   const want = (its: Item[]) => its.flatMap((it) => (it.t === "sym" ? [it.sym] : []));
   if (Object.keys(get().lib).length && !moved && want(items).every((n) => get().lib[symKey(n)])) return;
@@ -138,9 +145,7 @@ export async function loadSymbols(items: Item[] = [], dir = dirOf(get().path), {
   const s = get();
   const inUse = fresh ? [] : [s.items, ...s.past, ...s.future, s.diff?.items ?? []].flatMap(want);
   const names = [...new Set([...want(items), ...inUse])];
-  const seq = ++symSeq;
   const defs = await invoke<SymbolDef[]>("symbols", { names, dir });
-  if (seq !== symSeq) return;
   symDir = dir; // only once answered: a failed request is asked again next time
   set({ lib: Object.fromEntries(defs.map((d) => [d.name, d])) }); // the backend's whole set
 }
@@ -233,8 +238,7 @@ let runSeq = 0;
 export const analysesOf = (items: Item[]) => analysisOptions(items.flatMap((it) => (it.t === "text" ? [it] : [])));
 
 /** The tab shown: the chosen one while the schematic still has it, else its active analysis. */
-export function currentTab(s: { tab: Analysis | null; items: Item[] }): Analysis | null {
-  const o = analysesOf(s.items);
+export function currentTab(s: { tab: Analysis | null; items: Item[] }, o = analysesOf(s.items)): Analysis | null {
   return (s.tab && o.some((x) => x.kind === s.tab) ? s.tab : o.find((x) => x.active)?.kind) ?? null;
 }
 
@@ -253,7 +257,8 @@ export function simDeck(items: Item[], tab: Analysis | null) {
   // several active analyses (ngspice would run them all and show the last): the shown tab's alone;
   // the schematic's only active analysis runs as it is (the live netlist stays the schematic's)
   const actives = items.reduce((n, it) => n + (it.t === "text" && it.directive ? it.text.split("\n").filter((l) => ANALYSIS.test(l.trim())).length : 0), 0);
-  const kind = tab ?? (actives > 1 ? currentTab({ tab, items }) : null);
+  // (a chosen tab whose analysis is gone: the shown one, as currentTab says)
+  const kind = tab && opts.some((o) => o.kind === tab) ? tab : actives > 1 ? currentTab({ tab, items }, opts) : null;
   const pick = kind ? opts.find((o) => o.kind === kind) : undefined;
   if (!pick || (pick.active && actives === 1)) return items;
   return [...items.map((it) => (it.t === "text" && it.directive ? { ...it, text: stripAnalyses(it.text) } : it)), { t: "text", x: 0, y: 0, text: pick.line, directive: true } as Item];
@@ -261,18 +266,18 @@ export function simDeck(items: Item[], tab: Analysis | null) {
 
 /** Show another result tab: the shown one is put away, the other's results come back (a tab
  *  that never ran runs now). Not while a simulation runs: its result belongs to the shown tab. */
-export function selectTab(kind: Analysis) {
+export async function selectTab(kind: Analysis) {
+  await idle(); // a run in progress belongs to the shown tab ("+" during a live run)
   const s = get();
-  if (s.running) return;
   if (s.shown === kind) return void (s.tab !== kind && set({ tab: kind }));
   set({ tab: kind, ...swapTo(s, kind) });
   if (!get().sim) void simulate();
 }
 
 /** The shown results put away under their tab (if the schematic still has it), `kind`'s back. */
-function swapTo(s: State, kind: Analysis | null): Partial<State> {
+function swapTo(s: State, kind: Analysis | null, opts = analysesOf(s.items)): Partial<State> {
   const tabs = { ...s.tabs };
-  if (s.shown && analysesOf(s.items).some((o) => o.kind === s.shown)) tabs[s.shown] = { sim: s.sim, traces: s.traces, plot: s.plot, stale: s.stale, at: s.items };
+  if (s.shown && opts.some((o) => o.kind === s.shown)) tabs[s.shown] = { sim: s.sim, traces: s.traces, plot: s.plot, stale: s.stale, at: s.items };
   const next = kind ? tabs[kind] : undefined;
   if (kind) delete tabs[kind];
   const sim = next?.sim ?? null, view = viewOf(sim);
@@ -288,10 +293,10 @@ function swapTo(s: State, kind: Analysis | null): Partial<State> {
 useS.subscribe((s, prev) => {
   // after an edit, or when a run ends (an edit during it was skipped: its results are filed meanwhile)
   if ((s.items === prev.items && !(prev.running && !s.running)) || !s.shown || s.running) return;
-  const cur = currentTab(s);
+  const opts = analysesOf(s.items), cur = currentTab(s, opts);
   if (cur === s.shown) return;
-  const keep = !!s.tab && analysesOf(s.items).some((o) => o.kind === s.tab);
-  set({ tab: keep ? s.tab : null, ...swapTo(s, cur) });
+  const keep = !!s.tab && opts.some((o) => o.kind === s.tab);
+  set({ tab: keep ? s.tab : null, ...swapTo(s, cur, opts) });
 });
 
 export async function simulate() {
@@ -342,7 +347,7 @@ export async function simulate() {
   }
 }
 
-const idle = () =>
+export const idle = () =>
   new Promise<void>((resolve) => {
     if (!get().running) return resolve();
     const off = useS.subscribe((s) => !s.running && (off(), resolve()));

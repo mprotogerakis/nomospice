@@ -279,22 +279,31 @@ fn measurements(log: &[String]) -> Vec<(String, Option<f64>, String)> {
     for t in log.iter().map(|l| l.trim()) {
         if t.starts_with("Measurements for") {
             on = true;
-        } else if !on || t.is_empty() || ["error", "warning", "note"].iter().any(|w| t.to_ascii_lowercase().starts_with(w)) {
-            // (ngspice's error for a measurement stays inside the report)
-        } else if let Some(stmt) = t.strip_suffix("failed!") {
-            if let Some(name) = stmt.split_whitespace().nth(2) {
+            continue;
+        }
+        if !on || t.is_empty() {
+            continue;
+        }
+        // `.meas tran x … failed!`, `meas x failed!` or `x failed!`
+        if let Some(stmt) = t.strip_suffix("failed!") {
+            let w: Vec<&str> = stmt.split_whitespace().collect();
+            let name = if w.first().is_some_and(|f| f.starts_with('.')) { w.get(2) } else { w.last() };
+            if let Some(name) = name {
                 out.push((name.to_string(), None, "failed".into()));
             }
-        } else if let Some((name, rest)) = t.split_once('=').filter(|(n, _)| !n.trim().is_empty() && !n.trim().contains(char::is_whitespace)) {
-            // `name = <number> …` only (an error line inside the report does not end it)
+            continue;
+        }
+        // `name = <number> …` (also a name like error_pct)
+        let result = t.split_once('=').filter(|(n, _)| !n.trim().is_empty() && !n.trim().contains(char::is_whitespace)).and_then(|(n, rest)| {
             let rest = rest.trim();
             let (v, info) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
-            match v.trim_end_matches(',').parse::<f64>() {
-                Ok(v) => out.push((name.trim().to_string(), Some(v), info.trim().to_string())),
-                Err(_) => on = false, // not a result line: the report is over
-            }
-        } else {
-            on = false;
+            Some((n.trim().to_string(), Some(v.trim_end_matches(',').parse::<f64>().ok()?), info.trim().to_string()))
+        });
+        match result {
+            Some(r) => out.push(r),
+            // ngspice's error or warning for a measurement stays inside the report; anything else ends it
+            None if ["error", "warning", "note"].iter().any(|w| t.to_ascii_lowercase().starts_with(w)) => {}
+            None => on = false,
         }
     }
     out
@@ -371,9 +380,13 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
     }
     let sensors = &sensors[..];
     // ngspice makes a helper source per par() in its output lines, named pa_00, pa_01 …
-    let pars = netlist.lines().map(|l| l.trim_start().to_ascii_lowercase())
-        .filter(|l| [".meas", ".print", ".plot", ".four", ".save", "+"].iter().any(|d| l.starts_with(d))) // + lines of them too
-        .map(|l| l.matches("par(").count()).sum();
+    let mut output = false; // in an output statement (its + lines count too)
+    let pars = netlist.lines().map(|l| l.trim_start().to_ascii_lowercase()).filter(|l| {
+        if !l.starts_with('+') && !l.is_empty() && !l.starts_with('*') {
+            output = [".meas", ".print", ".plot", ".four", ".save"].iter().any(|d| l.starts_with(d));
+        }
+        output
+    }).map(|l| l.matches("par(").count()).sum();
     let (mut vectors, mut scale) = plot_vectors(api, &plot, sensors, pars);
     // one frequency (`.ac lin 1 50 50`): phasors, shown as a table like .op instead of a 1-point plot
     let phasors = scale == "frequency" && read(api, "frequency").is_some_and(|f| f.re.len() == 1);
@@ -479,6 +492,16 @@ pub static TEST_SIM: Mutex<()> = Mutex::new(());
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn measurement_report() {
+        let log: Vec<String> = ["Measurements for Transient Analysis", "error_pct           =  1.20000e-02", "Error: measure  w  (WHEN) : out of interval", " meas w failed!", ".meas tran p avg -i(v1) failed!", "tplh                =  5.4e-10 targ=  3.0e-08 trig=  3.0e-08", "Total elapsed = 3"]
+            .map(String::from).into();
+        let m = measurements(&log);
+        let names: Vec<&str> = m.iter().map(|x| x.0.as_str()).collect();
+        assert_eq!(names, ["error_pct", "w", "p", "tplh"], "{m:?}");
+        assert_eq!(m[3].2, "targ=  3.0e-08 trig=  3.0e-08");
+    }
 
     #[test]
     fn codemodel_path_with_spaces_loads() {

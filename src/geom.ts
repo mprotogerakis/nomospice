@@ -193,7 +193,7 @@ export function dragPlan(items: Item[], lib: Lib, sel: Set<number>) {
       (atEnd.get(key(...p)) ?? []).forEach(join); // its wire may now move whole too
     }
   }
-  const all: Item[] = [], pieces: Item[] = [];
+  const all: Item[] = [], pieces: Item[] = [], groups: number[][] = []; // groups: a cut wire's pieces, in order
   items.forEach((it, i) => {
     if (it.t !== "wire" || whole.has(i) || !(ends(it).some((p) => moving.has(key(...p))) || movingPts.some((p) => inside(p, it)))) return void all.push(it);
     // cut where it matters only: at a moving point inside it, and at the nearest connection on
@@ -204,11 +204,27 @@ export function dragPlan(items: Item[], lib: Lib, sel: Set<number>) {
     const cuts = inner.filter((p, k) => moving.has(key(...p)) || marks.some((m) =>
       (d(p) > m && (k === 0 || d(inner[k - 1]) <= m)) || (d(p) < m && (k === inner.length - 1 || d(inner[k + 1]) >= m))));
     const pts: Pt[] = [[it.x1, it.y1], ...cuts, [it.x2, it.y2]];
+    if (cuts.length) groups.push([all.length, ...cuts.map((_, k) => items.length + pieces.length + k)]);
     pts.slice(1).forEach(([x2, y2], k) => (k ? pieces : all).push({ ...it, x1: pts[k][0], y1: pts[k][1], x2, y2 }));
   });
   all.push(...pieces);
+  // pieces that end up in line again (not stretched, or dragged back) become one wire again: a
+  // junction inside a wire stays connected (LTspice's rule), so nothing is lost, and nothing piles up
+  const rejoin = (out: Item[]): Item[] => {
+    const gone = new Set<number>();
+    for (const g of groups) {
+      let cur = g[0];
+      for (const k of g.slice(1)) {
+        const [a, b] = [out[cur], out[k]] as Wire[];
+        const [ux, uy, vx, vy] = [a.x2 - a.x1, a.y2 - a.y1, b.x2 - b.x1, b.y2 - b.y1];
+        if (a.x2 === b.x1 && a.y2 === b.y1 && ux * vy === uy * vx && ux * vx + uy * vy > 0) (out[cur] = { ...a, x2: b.x2, y2: b.y2 }), gone.add(k);
+        else cur = k;
+      }
+    }
+    return gone.size ? out.filter((_, i) => !gone.has(i)) : out; // only appended pieces go: indices below stay
+  };
   return (dx: number, dy: number): Item[] =>
-    all.map((it, i) => {
+    rejoin(all.map((it, i) => {
       if (it.t === "raw") return it;
       if ((sel.has(i) || whole.has(i)) && i < items.length) {
         return it.t === "wire" ? { ...it, x1: it.x1 + dx, y1: it.y1 + dy, x2: it.x2 + dx, y2: it.y2 + dy } : { ...it, x: it.x + dx, y: it.y + dy };
@@ -219,7 +235,7 @@ export function dragPlan(items: Item[], lib: Lib, sel: Set<number>) {
       }
       if (it.t === "flag" && moving.has(key(it.x, it.y))) return { ...it, x: it.x + dx, y: it.y + dy };
       return it;
-    });
+    }));
 }
 
 const zeroWire = (it: Item) => it.t === "wire" && it.x1 === it.x2 && it.y1 === it.y2;

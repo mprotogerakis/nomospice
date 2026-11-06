@@ -34,8 +34,9 @@ function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: 
     // sorted as the .asc reader gives them, so an unchanged part compares equal
     if (it.t === "sym") {
       const own = Object.entries(it.attrs).filter(([k, v]) => SHOWN.includes(k) && (v.trim() || (k === "SpiceLine" && def?.spice_line)));
-      const more = extra.map(([k, v]) => [k.trim(), v] as [string, string]).filter(([k, v]) => k && !SHOWN.includes(k) && v.trim());
-      onDone({ ...it, attrs: Object.fromEntries([...own, ...more].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) });
+      // a row naming one of the fields above (Value …) sets it: rows come last and win
+      const more = extra.map(([k, v]) => [k.trim(), v] as [string, string]).filter(([k, v]) => k && v.trim());
+      onDone({ ...it, attrs: Object.fromEntries([...new Map([...own, ...more])].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) });
     }
     else if (it.t === "flag" && !it.name.trim()) close();
     else onDone(it);
