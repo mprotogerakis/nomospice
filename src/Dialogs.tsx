@@ -246,7 +246,8 @@ function PartsDialog({ replace, kind0 }: { replace?: number; kind0?: string }) {
     last.current = [e.clientX, e.clientY];
     setI(j);
   };
-  useEffect(() => listRef.current?.children[i]?.scrollIntoView({ block: "nearest" }), [i]);
+  // braces: Chromium's (WebView2) scrollIntoView returns a Promise, which React would call as the cleanup
+  useEffect(() => { listRef.current?.children[i]?.scrollIntoView({ block: "nearest" }); }, [i]);
   const symbols = useMemo<LibEntry[]>(
     () => Object.values(lib).filter((d) => !d.name.startsWith("subckt:")).map((d) => ({ name: d.name, kind: "SYMBOL", pins: d.pins.map((p) => p.name), source: d.desc, file: "", symbol: d.name })),
     [lib],
