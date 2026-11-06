@@ -386,7 +386,7 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
             output = [".meas", ".print", ".plot", ".four", ".save"].iter().any(|d| l.starts_with(d));
         }
         output
-    }).map(|l| l.matches("par(").count()).sum();
+    }).filter(|l| !l.starts_with('*')).map(|l| l.matches("par(").count()).sum(); // (not a commented-out one)
     let (mut vectors, mut scale) = plot_vectors(api, &plot, sensors, pars);
     // one frequency (`.ac lin 1 50 50`): phasors, shown as a table like .op instead of a 1-point plot
     let phasors = scale == "frequency" && read(api, "frequency").is_some_and(|f| f.re.len() == 1);

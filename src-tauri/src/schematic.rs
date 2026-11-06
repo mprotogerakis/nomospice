@@ -181,6 +181,7 @@ impl Library {
                 if let Ok(bytes) = std::fs::read(&p) {
                     self.0.insert(key.clone(), parse_asy(&key, &decode(&bytes)));
                     self.1.remove(&key);
+                    self.3 .3.remove(&key); // the folder's own now, no longer lent
                     self.3 .1.insert(key);
                 }
             }

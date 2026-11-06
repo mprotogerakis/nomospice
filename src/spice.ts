@@ -285,7 +285,9 @@ export function analysisLineIndex(lines: string[], kind: Analysis | null | undef
 /** `text` without its analysis statements (and their `+` lines): a result tab runs its own instead. */
 export function stripAnalyses(text: string) {
   const lines = text.split("\n"), drop = new Set<number>();
-  lines.forEach((l, i) => ANALYSIS.test(l.trim()) && [i, ...continuation(lines, i)].forEach((j) => drop.add(j)));
+  // also ngspice's analyses the form does not offer (.sp, .disto, .pss, .hb): only the tab's runs
+  const any = /^\.(tran|ac|dc|op|noise|tf|pz|sens|sp|disto|pss|hb)\b/i;
+  lines.forEach((l, i) => any.test(l.trim()) && [i, ...continuation(lines, i)].forEach((j) => drop.add(j)));
   return lines.filter((_, i) => !drop.has(i)).join("\n");
 }
 
@@ -302,7 +304,7 @@ export function continuation(lines: string[], li: number) {
 }
 
 /** The first analysis line of a directive text (the one the simulation dialog edits). */
-export const analysisIndex = (lines: string[]) => lines.findIndex((l) => ANALYSIS.test(l.trim()));
+export const analysisIndex = (lines: string[]) => analysisLineIndex(lines, null, true);
 export const analysisLine = (text: string) => { const l = text.split("\n"); return l[analysisIndex(l)] as string | undefined; };
 export type Fields = Record<string, string>;
 

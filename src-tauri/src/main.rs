@@ -262,6 +262,26 @@ async fn root_locus(items: Vec<Item>, dir: Option<String>, target: String, value
     }).await.map_err(|e| e.to_string())?
 }
 
+/// Save As into another folder: the schematic's own symbols (`<name>.asy` next to it) that `names`
+/// use and the new folder lacks; `copy`: copy them there (else only list them).
+#[tauri::command]
+async fn folder_symbols(from: String, to: String, names: Vec<String>, copy: bool) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut out: Vec<String> = vec![];
+        for n in names {
+            let file = format!("{}.asy", n.rsplit(['\\', '/']).next().unwrap_or(&n));
+            let (src, dst) = (std::path::Path::new(&from).join(&file), std::path::Path::new(&to).join(&file));
+            if src.is_file() && !dst.exists() && !out.contains(&file) {
+                if copy {
+                    std::fs::copy(&src, &dst).map_err(|e| format!("{file}: {e}"))?;
+                }
+                out.push(file);
+            }
+        }
+        Ok(out)
+    }).await.map_err(|e| e.to_string())?
+}
+
 /// Stops a running root locus at its next step (its panel's Halt; the toolbar Halt stops everything).
 #[tauri::command]
 fn cancel_locus() {
@@ -634,7 +654,7 @@ fn main() {
         // updates from the GitHub releases (latest.json, signed with the key in ~/.tauri; see scripts/publish-release.sh)
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .invoke_handler(tauri::generate_handler![symbols, examples, path_exists, open_asc, save_asc, export_svg, netlist, simulate, root_locus, cancel_locus, trace, halt, cli_args, quit, recovery_save, recovery_take, recovery_resolve, recovery_clear,
+        .invoke_handler(tauri::generate_handler![symbols, examples, path_exists, open_asc, save_asc, export_svg, netlist, simulate, root_locus, cancel_locus, folder_symbols, trace, halt, cli_args, quit, recovery_save, recovery_take, recovery_resolve, recovery_clear,
             library_sources, library_set_sources, library_search, library_text, library_fetch_microcap,
             git_status, git_log, git_show, git_commit, git_init])
         .setup(|app| {

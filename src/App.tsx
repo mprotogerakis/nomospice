@@ -16,7 +16,7 @@ import { PoleZero } from "./PoleZero";
 import { checkForUpdate, installUpdate, useUpdate } from "./updater";
 import { Dialogs } from "./Dialogs";
 import { Boundary } from "./Boundary";
-import { analysesOf, currentTab, docId, viewOf, loadDoc, loadSymbols, placeSymbol, plotKind, redo, refreshGit, refreshNets, relToDoc, selectTab, simulate, undo, useS, useStatus } from "./store";
+import { analysesOf, currentTab, dirOf, docId, viewOf, loadDoc, loadSymbols, placeSymbol, plotKind, redo, refreshGit, refreshNets, relToDoc, selectTab, simulate, undo, useS, useStatus } from "./store";
 import { History } from "./History";
 import { currentLabel, mirror, rotate } from "./geom";
 import { ANALYSES, si } from "./spice";
@@ -128,7 +128,8 @@ async function dropFiles(paths: string[]) {
 }
 
 async function saveFile(as = false) {
-  let path = useS.getState().path;
+  const prev = useS.getState().path;
+  let path = prev;
   if (as || !path) path = await save({ filters: FILTERS, defaultPath: path ?? "untitled.asc" });
   if (!path) return;
   if (!/\.asc$/i.test(path)) {
@@ -146,7 +147,14 @@ async function saveFile(as = false) {
     if (doc !== docId()) return; // another document was loaded meanwhile
     const moved = path !== useS.getState().path; // relative .include paths now resolve elsewhere
     useS.setState({ path, dirty: useS.getState().items !== items, ...(moved && useS.getState().sim && { stale: true }) });
-    if (moved) void loadSymbols(useS.getState().items).catch(() => {}).finally(refreshNets); // the new folder's symbols
+    if (moved) {
+      // symbols from next to the old file go with it on request (else its parts lose them)
+      const [from, to] = [dirOf(prev), dirOf(path)], names = items.flatMap((it) => (it.t === "sym" ? [it.sym] : []));
+      const own = from && to && from !== to ? await invoke<string[]>("folder_symbols", { from, to, names, copy: false }).catch(() => []) : [];
+      if (own.length && (await ask(`The schematic uses symbols from its old folder: ${own.join(", ")}. Copy them to the new folder?`, { title: "nomospice" })))
+        await invoke("folder_symbols", { from, to, names, copy: true }).catch(fail("Cannot copy the symbols"));
+      void loadSymbols(useS.getState().items).catch(() => {}).finally(refreshNets); // the new folder's symbols
+    }
     refreshGit();
   } catch (e) {
     await fail(`Cannot save ${path}`)(e);
