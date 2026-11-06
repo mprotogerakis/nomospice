@@ -150,19 +150,42 @@ export function connectivity(items: Item[], lib: Lib) {
   return { dots, open, isConn };
 }
 
-/** Rubber-band drag: selected items move, wire ends / flags touching them follow. */
+/** Rubber-band drag: selected items move, wire ends / flags touching them follow, and no
+ *  connection is lost (LTspice keeps them too):
+ *  - a wire that stretches (an end, or a point inside it, moves) is first cut at the connection
+ *    points inside it (T-junctions, pins, labels): only the piece at the moving point stretches,
+ *    so a junction further along does not slide off the slanted wire;
+ *  - an unselected wire ending inside a moving wire (a T-leg) follows it.
+ *  The cut pieces are appended (the items' indices, and so the selection, stay valid). */
 export function dragPlan(items: Item[], lib: Lib, sel: Set<number>) {
-  const moving = new Set<string>();
+  type Wire = Extract<Item, { t: "wire" }>;
+  const conn: Pt[] = [];
+  const moving = new Set<string>(), movingPts: Pt[] = [];
+  const move = (p: Pt) => moving.has(key(...p)) || (moving.add(key(...p)), movingPts.push(p));
   items.forEach((it, i) => {
-    if (!sel.has(i)) return;
-    if (it.t === "wire") moving.add(key(it.x1, it.y1)).add(key(it.x2, it.y2));
-    else if (it.t === "flag") moving.add(key(it.x, it.y));
-    else if (it.t === "sym") pins(it, defOf(lib, it)).forEach((p) => moving.add(key(...p)));
+    const ps: Pt[] = it.t === "wire" ? [[it.x1, it.y1], [it.x2, it.y2]] : it.t === "flag" ? [[it.x, it.y]] : it.t === "sym" ? pins(it, defOf(lib, it)) : [];
+    conn.push(...ps);
+    if (sel.has(i)) ps.forEach(move);
   });
+  const ends = (w: Wire): Pt[] => [[w.x1, w.y1], [w.x2, w.y2]];
+  items.forEach((it, i) => {
+    if (!sel.has(i) || it.t !== "wire") return;
+    items.forEach((o, j) => !sel.has(j) && o.t === "wire" && ends(o).forEach((p) => inside(p, it) && move(p))); // T-legs follow
+    items.forEach((o, j) => !sel.has(j) && o.t === "flag" && inside([o.x, o.y], it) && move([o.x, o.y]));
+  });
+  const all: Item[] = [], pieces: Item[] = [];
+  items.forEach((it, i) => {
+    if (it.t !== "wire" || sel.has(i) || !(ends(it).some((p) => moving.has(key(...p))) || movingPts.some((p) => inside(p, it)))) return void all.push(it);
+    const d = (p: Pt) => Math.abs(p[0] - it.x1) + Math.abs(p[1] - it.y1);
+    const cuts = [...new Map(conn.filter((p) => inside(p, it)).map((p) => [key(...p), p])).values()].sort((p, q) => d(p) - d(q));
+    const pts: Pt[] = [[it.x1, it.y1], ...cuts, [it.x2, it.y2]];
+    pts.slice(1).forEach(([x2, y2], k) => (k ? pieces : all).push({ ...it, x1: pts[k][0], y1: pts[k][1], x2, y2 }));
+  });
+  all.push(...pieces);
   return (dx: number, dy: number): Item[] =>
-    items.map((it, i) => {
+    all.map((it, i) => {
       if (it.t === "raw") return it;
-      if (sel.has(i)) {
+      if (sel.has(i) && i < items.length) {
         return it.t === "wire" ? { ...it, x1: it.x1 + dx, y1: it.y1 + dy, x2: it.x2 + dx, y2: it.y2 + dy } : { ...it, x: it.x + dx, y: it.y + dy };
       }
       if (it.t === "wire") {

@@ -1,5 +1,6 @@
 // Self-check of src/spice.ts (the form editors' SPICE parsing/formatting): node scripts/spice-check.ts
 import assert from "node:assert/strict";
+import { connectivity, dragPlan } from "../src/geom.ts";
 import {
   tokens, formatAnalysis, formatIc, formatInclude, formatMeas, formatModel, formatParams, formatSource, numInfo, parseAnalysis,
   parseIc, parseInclude, parseMeas, parseModel, parseParams, parseSource, sample, si, spiceNum, directiveKind, analysisRoundTrips, analysisEditable, analysisOptions, at, integrate, stripAnalyses, portablePaths, sourceRoundTrips,
@@ -126,4 +127,16 @@ assert.match(numInfo("1A", "A")!.warn!, /atto/);
 assert.deepEqual([parseSource(undefined, undefined, "Rser = 50").rser, parseSource(undefined, undefined, "Rser = 50").rest], ["50", ""]);
 assert.deepEqual(tokens('PWL file="my wave.txt" r=0'), ["PWL", 'file="my wave.txt"', "r=0"]); // double quotes like schematic.rs
 assert.equal(numInfo("1Meg", "Hz")!.text, "= 1MegHz"); // not "1M", the milli trap's spelling
+// dragging keeps every connection: a T-junction on a stretched wire, a T-leg on a moving wire
+{
+  const W = (x1: number, y1: number, x2: number, y2: number) => ({ t: "wire" as const, x1, y1, x2, y2 });
+  const items = [{ t: "flag" as const, x: 0, y: 0, name: "a" }, W(0, 0, 100, 0), W(50, 0, 50, 50)];
+  const dot = (its: typeof items) => connectivity(its as never, {}).dots.some(([x, y]) => x === 50 && y === 0);
+  assert.ok(dot(items));
+  const moved = dragPlan(items as never, {}, new Set([0]))(0, 20);
+  assert.ok(dot(moved as never), `the junction at 50,0 stays: ${JSON.stringify(moved)}`);
+  const leg = dragPlan(items as never, {}, new Set([1]))(0, 20).find((w) => w.t === "wire" && w.x1 === 50 && w.x2 === 50) as { y1: number; y2: number };
+  assert.ok(leg.y1 === 20 && leg.y2 === 50, `the T-leg follows the moved wire: ${JSON.stringify(leg)}`);
+  assert.equal(dragPlan(items as never, {}, new Set([0]))(0, 0).length, 4, "the stretched wire is cut at the junction");
+}
 console.log("spice-check: ok");
