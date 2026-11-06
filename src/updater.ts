@@ -41,7 +41,14 @@ export async function installUpdate() {
   asking = true;
   const notes = update.body?.trim() ? `\n\n${update.body.trim().slice(0, 600)}` : "";
   const unsaved = useS.getState().dirty ? "\n\nThe schematic has unsaved changes: they are lost unless you save first." : "";
-  const yes = await ask(`Install nomospice ${update.version} and restart?${notes}${unsaved}`, { title: "Update", kind: unsaved ? "warning" : "info" }).finally(() => (asking = false));
+  let yes = false;
+  try {
+    yes = await ask(`Install nomospice ${update.version} and restart?${notes}${unsaved}`, { title: "Update", kind: unsaved ? "warning" : "info" });
+  } catch (e) {
+    console.error("update confirmation:", e);
+  } finally {
+    asking = false;
+  }
   if (!yes) return;
   let total = 0, got = 0;
   try {
@@ -54,9 +61,15 @@ export async function installUpdate() {
       }
       if (e.event === "Finished") useUpdate.setState({ busy: "Installing…" });
     });
-    await relaunch(); // Windows: the installer has already closed the app
   } catch (e) {
     useUpdate.setState({ busy: "" });
-    await message(`The update failed: ${e}`, { title: "nomospice", kind: "error" });
+    return void (await message(`The update failed: ${e}`, { title: "nomospice", kind: "error" }));
+  }
+  // installed: from here on a failure is only the restart (do not offer the same update again)
+  useUpdate.setState({ busy: "Restart to finish" });
+  try {
+    await relaunch(); // Windows: the installer has already closed the app
+  } catch (e) {
+    await message(`nomospice ${update.version} is installed: restart nomospice to use it. (${e})`, { title: "nomospice" });
   }
 }

@@ -35,6 +35,18 @@ function branches(steps: P[][]): (P | null)[][] {
   return out;
 }
 
+/** `.param` names a root locus can sweep in a directive text (the rules of vary_spans in schematic.rs). */
+function topParams(text: string) {
+  let sub = 0;
+  return text.replace(/\n\s*\+/g, " ").split("\n").flatMap((l) => {
+    const first = l.trim().split(/\s+/)[0]?.toLowerCase() ?? "";
+    if (first === ".subckt") sub++;
+    if (first === ".ends") sub = Math.max(sub - 1, 0);
+    if (sub > 0 || first !== ".param") return [];
+    return parseParams(l.replace(/\s[;$].*$/, "")).map(([n]) => n).filter((n) => /^[a-z_]\w*$/i.test(n));
+  });
+}
+
 /** Tick step for a span: 1, 2 or 5 × 10^n, about six ticks. */
 const tickStep = (span: number) => { const e = 10 ** Math.floor(Math.log10(span / 6)); return [1, 2, 5, 10].map((m) => m * e).find((s) => span / s <= 8) ?? 10 * e; };
 
@@ -164,9 +176,9 @@ function Sidebar({ poles, zeros, locus, setLocus, error, setError }: {
   useEffect(() => () => void (runningRef.current && invoke("cancel_locus")), []); // the view goes: the sweep stops
   // sweepable: .param names and R/C/L instances
   const targets = useMemo(() => [...new Set([
-    // `+` continuation lines joined to their .param (names defined there can be swept too)
-    ...items.flatMap((it) => (it.t === "text" && it.directive ? it.text.replace(/\n\s*\+/g, " ").split("\n") : [])).filter((l) => /^\s*\.param\b/i.test(l))
-      .flatMap((l) => parseParams(l).map(([n]) => n).filter((n) => /^[a-z_]\w*$/i.test(n))),
+    // as the backend (vary_spans) reads them: `+` lines joined to their .param, not inside
+    // .subckt … .ends, nothing after an inline `;`/`$` comment
+    ...items.flatMap((it) => (it.t === "text" && it.directive ? topParams(it.text) : [])),
     ...circuitInsts(items, nets, lib).filter((x) => "RCL".includes(x.prefix || "-")).map((x) => x.inst),
   ])], [items, lib, nets]);
   const [f, setF] = useState({ target: targets[0] ?? "", from: "", to: "", steps: "40", scale: "log" });

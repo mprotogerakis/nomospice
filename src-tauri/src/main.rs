@@ -174,6 +174,14 @@ fn sim_deck(items: &[Item], dir: Option<&str>, lib: &mut Library, warnings: &mut
 static SWEEP: Mutex<()> = Mutex::new(());
 /// Bumped to stop a running sweep at its next step (a new simulation, or the locus panel's Halt).
 static SWEEP_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// A sweep is running: traces fail at once instead of waiting for all its steps.
+static SWEEPING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+struct Done;
+impl Drop for Done {
+    fn drop(&mut self) {
+        SWEEPING.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
 
 /// `dir`: folder of the .asc, for relative `.include`/`.lib` paths.
 #[tauri::command]
@@ -206,6 +214,7 @@ async fn simulate(items: Vec<Item>, dir: Option<String>, lib: tauri::State<'_, L
 #[tauri::command]
 async fn root_locus(items: Vec<Item>, dir: Option<String>, target: String, values: Vec<f64>, lib: tauri::State<'_, Lib>) -> Result<Vec<Option<Vec<(f64, f64)>>>, String> {
     let op = ngspice::begin();
+    let gen = SWEEP_GEN.load(std::sync::atomic::Ordering::SeqCst); // at once: a cancel while netlisting counts
     let deck = sim_deck(&items, dir.as_deref(), &mut lib.0.lock().unwrap_or_else(|e| e.into_inner()), &mut vec![]);
     let pz = deck.text().lines().map(|l| l.trim().to_lowercase()).find(|l| l.starts_with(".pz"));
     match pz {
@@ -215,11 +224,12 @@ async fn root_locus(items: Vec<Item>, dir: Option<String>, target: String, value
     }
     // where the value sits in the deck: found once, then spliced per step
     let spans = deck.spans(&target).ok_or_else(|| format!("`{target}` is neither a .param nor an R, C or L in the schematic"))?;
-    let gen = SWEEP_GEN.load(std::sync::atomic::Ordering::SeqCst);
     let stop = move || ngspice::halted() || SWEEP_GEN.load(std::sync::atomic::Ordering::SeqCst) != gen;
     tauri::async_runtime::spawn_blocking(move || {
         let _sweep = SWEEP.lock().unwrap_or_else(|e| e.into_inner());
         let _op = ngspice::enter(op);
+        SWEEPING.store(true, std::sync::atomic::Ordering::SeqCst);
+        let _done = Done;
         let (mut steps, mut first_error) = (vec![], None);
         for &v in &values {
             if stop() {
@@ -253,6 +263,9 @@ fn cancel_locus() {
 
 #[tauri::command]
 async fn trace(expr: String, scale: String) -> Result<ngspice::Trace, String> {
+    if SWEEPING.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err("a root locus is being computed: traces are available when it is done".into());
+    }
     tauri::async_runtime::spawn_blocking(move || {
         let _sweep = SWEEP.lock().unwrap_or_else(|e| e.into_inner()); // not from a locus step's plot
         ngspice::trace(&expr, &scale)

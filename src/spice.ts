@@ -157,7 +157,7 @@ function argList(func: Func, args: string[]) {
     // complete (time, value) rows only: a half-filled row must not shift the pairs after it
     const out: string[] = [];
     for (let i = 0; i < args.length; i += 2) if (args[i]?.trim() && args[i + 1]?.trim()) out.push(args[i].trim(), args[i + 1].trim());
-    return out;
+    return out.length ? out : ["0", "0"]; // no complete point: 0 (`PWL()` does not parse)
   }
   const defs = FUNCS[func];
   const last = lastFilled(args);

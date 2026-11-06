@@ -96,7 +96,8 @@ export function SourceEditor({ attrs: given, setAttrs, current, spiceLine }: { a
 function PwlTable({ args, set, y }: { args: string[]; set: (a: string[]) => void; y: string }) {
   const rows = Array.from({ length: Math.max(1, Math.ceil(args.length / 2)) }, (_, i) => [args[2 * i] ?? "", args[2 * i + 1] ?? ""]);
   return (
-    <Field label="Points" hint="time, value: linear in between, the last value holds">
+    <Field label="Points" hint="time, value: linear in between, the last value holds"
+      warn={rows.some(([t, v]) => t.trim() && v.trim()) ? undefined : "no complete point yet: the source is 0"}>
       <Rows rows={rows} set={(r) => set(r.flat())} a="time" b="value" sep="" units={["s", y]} add="Add point" />
     </Field>
   );
