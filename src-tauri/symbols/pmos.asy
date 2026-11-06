@@ -1,0 +1,29 @@
+Version 4
+SymbolType CELL
+LINE Normal 0 80 16 80
+LINE Normal 16 32 16 80
+LINE Normal 24 26 24 38
+LINE Normal 24 50 24 62
+LINE Normal 24 74 24 86
+LINE Normal 24 32 48 32
+LINE Normal 48 32 48 0
+LINE Normal 24 80 48 80
+LINE Normal 48 80 48 96
+LINE Normal 24 56 48 56
+LINE Normal 48 56 48 80
+LINE Normal 40 56 32 52
+LINE Normal 40 56 32 60
+WINDOW 0 56 32 Left 2
+WINDOW 3 56 72 Left 2
+SYMATTR Prefix M
+PIN 48 0 NONE 0
+PINATTR PinName D
+PINATTR SpiceOrder 1
+PIN 0 80 NONE 0
+PINATTR PinName G
+PINATTR SpiceOrder 2
+PIN 48 96 NONE 0
+PINATTR PinName S
+PINATTR SpiceOrder 3
+SYMATTR Value PMOS
+SYMATTR Description P-channel MOSFET (bulk tied to source)

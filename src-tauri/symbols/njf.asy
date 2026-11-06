@@ -1,0 +1,25 @@
+Version 4
+SymbolType CELL
+LINE Normal 0 64 20 64
+LINE Normal 20 24 20 72
+LINE Normal 22 24 22 72
+LINE Normal 22 32 48 32
+LINE Normal 48 32 48 0
+LINE Normal 22 64 48 64
+LINE Normal 48 64 48 96
+LINE Normal 18 64 10 60
+LINE Normal 18 64 10 68
+WINDOW 0 56 32 Left 2
+WINDOW 3 56 72 Left 2
+SYMATTR Prefix J
+PIN 48 0 NONE 0
+PINATTR PinName D
+PINATTR SpiceOrder 1
+PIN 0 64 NONE 0
+PINATTR PinName G
+PINATTR SpiceOrder 2
+PIN 48 96 NONE 0
+PINATTR PinName S
+PINATTR SpiceOrder 3
+SYMATTR Value NJF
+SYMATTR Description N-channel JFET

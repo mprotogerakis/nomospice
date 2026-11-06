@@ -1,0 +1,59 @@
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-22.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: src-tauri }
+
+      # ngspice as a shared library
+      - name: ngspice (macOS)
+        if: runner.os == 'macOS'
+        run: brew install libngspice
+      - name: ngspice + webview deps (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libngspice0-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - name: ngspice (Windows, bundled into the installer)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://downloads.sourceforge.net/project/ngspice/ng-spice-rework/47/ngspice-47_dll_64.7z" -OutFile ngspice.7z -UserAgent "Wget"
+          7z x ngspice.7z -o"ngspice-tmp" | Out-Null
+          Move-Item ngspice-tmp/Spice64_dll src-tauri/ngspice
+          "NGSPICE_LIB=$PWD/src-tauri/ngspice/dll-vs/ngspice.dll" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec tsc --noEmit
+      - name: Rust tests (netlister, ngspice FFI, MCP, git)
+        working-directory: src-tauri
+        run: cargo test
+      - uses: tauri-apps/tauri-action@v0
+        with:
+          args: ${{ runner.os == 'macOS' && '--target universal-apple-darwin' || '' }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nomospice-${{ matrix.os }}
+          path: |
+            src-tauri/target/**/release/bundle/**/*.msi
+            src-tauri/target/**/release/bundle/**/*.exe
+            src-tauri/target/**/release/bundle/**/*.dmg
+            src-tauri/target/**/release/bundle/**/*.AppImage
+            src-tauri/target/**/release/bundle/**/*.deb
