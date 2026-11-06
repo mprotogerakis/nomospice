@@ -97,4 +97,7 @@ assert.ok(sourceRoundTrips("") && sourceRoundTrips(undefined, "", "")); // an em
 assert.equal(analysisRoundTrips(".ac list 1k 2k 5k"), false); // the form has no `list` sweep
 assert.ok(holdsAnalysis({ t: "text", directive: true, text: ".param a=1\n.tran 1m" }) && !holdsAnalysis({ t: "text", directive: false, text: ".tran 1m" }));
 for (const v of ["AC 1 2 3", "DC PULSE(0 5 0 1n 1n 1m 2m)"]) assert.equal(sourceRoundTrips(v), false, v); // would change meaning
+assert.equal(formatSource(parseSource("SINE(0 'max(a,b)' 1k)")).Value, "SINE(0 'max(a,b)' 1k)"); // quoted commas stay
+assert.equal(formatSource({ ...parseSource("SINE(0 1 1k)"), args: [] }).Value, "SINE(0 1)"); // required ones: the shown defaults
+assert.equal(sample({ ...parseSource("SINE(0 1 1k)"), args: [] }), null); // frequency left to SPICE (from .tran): no preview
 console.log("spice-check: ok");

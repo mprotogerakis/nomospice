@@ -70,10 +70,10 @@ export const useStatus = create(() => ({ x: 0, y: 0, net: null as string | null,
 // ---------------------------------------------------------------- document
 
 export const dirOf = (path: string | null) => (path ? path.replace(/[\\/][^\\/]*$/, "") : null);
-/** `p` relative to the open schematic's folder when inside it (as LTspice writes includes), with `/`. */
+/** `p` relative to the open schematic's folder when inside it (as LTspice writes includes). */
 export const relToDoc = (p: string) => {
   const dir = dirOf(useS.getState().path);
-  return (dir && (p.startsWith(`${dir}/`) || p.startsWith(`${dir}\\`)) ? p.slice(dir.length + 1) : p).replaceAll("\\", "/");
+  return dir && (p.startsWith(`${dir}/`) || p.startsWith(`${dir}\\`)) ? p.slice(dir.length + 1) : p; // slashes: portablePaths at commit
 };
 
 /** Live netlist only if it belongs to the current items (it lags edits by a debounce + IPC). */

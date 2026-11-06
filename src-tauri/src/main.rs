@@ -181,10 +181,10 @@ async fn simulate(items: Vec<Item>, dir: Option<String>, lib: tauri::State<'_, L
 }
 
 /// Root locus: the schematic's `.pz` analysis once per value of `target` (a `.param` name or an
-/// R/C/L instance). Per step: the (name, re, im) of every pole and zero, or None where `.pz` failed
+/// R/C/L instance). Per step: the (re, im) of every pole, or None where `.pz` failed
 /// (it often does near a pole crossing; the view leaves a gap). Halt stops after the current step.
 #[tauri::command]
-async fn root_locus(items: Vec<Item>, dir: Option<String>, target: String, values: Vec<f64>, lib: tauri::State<'_, Lib>) -> Result<Vec<Option<Vec<(String, f64, f64)>>>, String> {
+async fn root_locus(items: Vec<Item>, dir: Option<String>, target: String, values: Vec<f64>, lib: tauri::State<'_, Lib>) -> Result<Vec<Option<Vec<(f64, f64)>>>, String> {
     ngspice::arm();
     let sim = schematic::netlist_for_sim(&items, &mut lib.0.lock().unwrap_or_else(|e| e.into_inner()));
     let deck = schematic::prepare(&sim.text, dir.as_deref().map(std::path::Path::new), &mut vec![]).with_sensors(sim.sensors);
@@ -203,7 +203,7 @@ async fn root_locus(items: Vec<Item>, dir: Option<String>, target: String, value
                 _ if ngspice::halted() => break,
                 // aborted by ngspice itself (no convergence near a crossing): a gap, the sweep goes on
                 Ok(run) if run.aborted => steps.push(None),
-                Ok(run) => steps.push(Some(run.op.into_iter().filter(|o| o.0.starts_with("pole") || o.0.starts_with("zero")).map(|o| (o.0, o.1, o.2)).collect())),
+                Ok(run) => steps.push(Some(run.op.into_iter().filter(|o| o.0.starts_with("pole")).map(|o| (o.1, o.2)).collect())),
                 Err(_) if ngspice::halted() => break, // the step Halt interrupted is not a failed .pz
                 Err(log) => {
                     first_error.get_or_insert(log.join("\n"));

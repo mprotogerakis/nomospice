@@ -57,7 +57,7 @@ export function SourceEditor({ attrs, setAttrs, current }: { attrs: Attrs; setAt
           {src.func === "PWL" ? <PwlTable args={src.args} set={(args) => update({ ...src, args })} y={y} />
             : src.func ? FUNCS[src.func].map((a, i) => (
               <NumField key={`${src.func}${i}`} label={a.label} value={src.args[i] ?? ""} set={(v) => setArg(i, v)} unit={a.unit === "y" ? y : a.unit}
-                placeholder={i < lastArg ? a.def : "SPICE default"} autofocus={i === 0} />
+                placeholder={i < lastArg || i < 2 ? a.def : "SPICE default"} autofocus={i === 0} />
             )) : null}
           {nDefs > 0 && (src.args.length > nDefs || more !== null) && (
             <TextField label="More arguments" value={more ?? src.args.slice(nDefs).join(" ")} hint="kept as written (e.g. a cycle count)"

@@ -102,7 +102,15 @@ export interface Source {
 export const lastFilled = (args: string[]) => args.reduce((n, a, i) => (a?.trim() ? i : n), -1);
 
 /** Commas outside `{…}` as spaces: argument separators (`PWL(0,0 1m,1)`), not `{max(a,b)}`. */
-const argCommas = (s: string) => { let d = 0, out = ""; for (const c of s) { d += c === "{" ? 1 : c === "}" ? -1 : 0; out += c === "," && d <= 0 ? " " : c; } return out; };
+const argCommas = (s: string) => {
+  let d = 0, q = false, out = "";
+  for (const c of s) {
+    if (c === "'") q = !q;
+    else if (!q) d += c === "{" ? 1 : c === "}" ? -1 : 0;
+    out += c === "," && d <= 0 && !q ? " " : c; // not inside {…} or '…'
+  }
+  return out;
+};
 
 /** Reads a source from its Value, Value2 and SpiceLine attributes (LTspice spreads it over all three). */
 export function parseSource(...parts: (string | undefined)[]): Source {
@@ -188,7 +196,8 @@ export function sample(s: Source, n = 240): [number, number][] | null {
   } else {
     // given arguments; a gap gets the form default (as written); trailing ones what SPICE does
     const last = lastFilled(s.args);
-    const a = FUNCS[s.func].map((d, i) => (i <= last || d.spice === undefined ? num(s.args[i], d.def) : d.spice === "inf" ? Infinity : d.spice === "?" ? null : spiceNum(d.spice)));
+    // the first two are required: blank means the form's default (as argList writes it)
+    const a = FUNCS[s.func].map((d, i) => (i <= last || i < 2 || d.spice === undefined ? num(s.args[i], d.def) : d.spice === "inf" ? Infinity : d.spice === "?" ? null : spiceNum(d.spice)));
     if (a.some((x) => x === null)) return null;
     const p = a as number[];
     if (s.func === "SINE") {

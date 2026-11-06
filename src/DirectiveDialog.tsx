@@ -77,10 +77,15 @@ export function DirectiveDialog({ item, title, raw, onDone }: { item: Text; titl
     include: () => formatInclude(s.inc.lib, s.inc.path, s.inc.section),
   })[k]();
   const line = lineOf(tab, st);
-  // "changed": the form writes something else than it read (a click alone, or Browse… cancelled, is no change)
-  const [base, setBase] = useState(line);
-  const touched = tab !== "text" && line !== base;
-  const load = (k: DirectiveKind, txt: string) => { const s = formState(k, txt); setSt(s); setBase(lineOf(k, s)); };
+  // "changed": the form's content differs from what it read (empty rows do not count, so Add or a
+  // cancelled Browse… is no change, but typing a value that equals a default is)
+  const sig = (k: DirectiveKind, s: typeof st) => {
+    const rows = (r: string[][]) => r.filter(([a, b]) => a.trim() || b.trim());
+    return JSON.stringify({ param: rows(s.params), model: [s.mName, s.mType, Object.entries(s.mKnown).filter(([, v]) => v.trim()), rows(s.mExtra)], meas: s.meas, ic: rows(s.ic), temp: s.temp.trim(), include: s.inc, text: "" }[k]);
+  };
+  const [base, setBase] = useState(() => sig(tab, st));
+  const touched = tab !== "text" && sig(tab, st) !== base;
+  const load = (k: DirectiveKind, txt: string) => { const s = formState(k, txt); setSt(s); setBase(sig(k, s)); };
 
   const known = MODEL_PARAMS[mType] ?? [];
   // another device type: its listed parameters move into the table, the rest become extra rows

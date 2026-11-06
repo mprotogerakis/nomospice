@@ -35,7 +35,7 @@ export function SimDialog({ index }: { index?: number }) {
     if (unchanged) return closeDialog();
     if (idx >= 0) {
       const it = items[idx] as Extract<Item, { t: "text" }>;
-      commit(items.map((x, i) => (i === idx ? { ...it, text: lines.map((l, j) => (j === li ? line : l)).join("\n") } : x)));
+      commit(items.map((x, i) => (i === idx ? { ...it, text: edited } : x)));
       closeDialog();
     } else useS.setState({ dialog: null, tool: { k: "place", item: { t: "text", x: 0, y: 0, text: line, directive: true } } });
   };
