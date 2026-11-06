@@ -210,7 +210,7 @@ macro_rules! examples {
     ($($n:literal),*) => { &[$(($n, include_str!(concat!("../../examples/", $n, ".asc")))),*] };
 }
 pub const EXAMPLES: &[(&str, &str)] =
-    examples!("rc_transient", "rc_bode", "opamp_inverting", "ce_amplifier", "diode_sweep");
+    examples!("rc_transient", "rc_bode", "opamp_inverting", "ce_amplifier", "diode_sweep", "bjt_curves", "noise_rc", "phasor_rlc", "pz_sallen_key");
 
 /// LTspice writes ASCII, Latin-1 or UTF-16LE.
 pub fn decode(bytes: &[u8]) -> String {
@@ -1391,10 +1391,39 @@ mod tests {
         for (name, src) in EXAMPLES {
             let nl = netlist_for_sim(&parse_asc(src), &mut Library::builtin());
             assert!(nl.warnings.is_empty(), "{name}: {:?}", nl.warnings);
-            let run = crate::ngspice::run(&prepare(&nl.text, None, &mut vec![])).unwrap_or_else(|log| panic!("{name}\n{}\n{}", nl.text, log.join("\n")));
-            assert!(!run.scale.is_empty(), "{name}: {run:?}");
-            let out = ["v(out)", "i(vsense_d1)"].iter().find_map(|e| crate::ngspice::trace(e, &run.scale).ok()).unwrap();
-            assert!(out.re.len() > 10, "{name}");
+            let deck = prepare(&nl.text, None, &mut vec![]).with_sensors(nl.sensors.clone());
+            let run = crate::ngspice::run(&deck).unwrap_or_else(|log| panic!("{name}\n{}\n{}", nl.text, log.join("\n")));
+            let op = |n: &str| run.op.iter().find(|o| o.0 == n).map(|o| o.1.hypot(o.2)).unwrap_or_else(|| panic!("{name}: no {n} in {:?}", run.op));
+            // the diagram-type examples: what their comments promise
+            match *name {
+                "bjt_curves" => {
+                    // 201 V_CE points x 6 base currents; at 50 µA the collector carries about beta * I_B
+                    let ic = crate::ngspice::trace("i(vsense_q1)", &run.scale).unwrap();
+                    assert_eq!(ic.re.len(), 6 * 201, "{name}");
+                    let top = ic.re[5 * 201 + 100].abs(); // V_CE = 5 V, I_B = 50 µA
+                    assert!((5e-3..15e-3).contains(&top), "{name}: Ic = {top}");
+                }
+                "noise_rc" => {
+                    let total = op("onoise_total"); // sqrt(kT/C) at 27 °C, 1 nF: 2.03 µV
+                    assert!((total - 2.03e-6).abs() < 0.1e-6, "{name}: {total}");
+                }
+                "phasor_rlc" => {
+                    // |V_C| = 230 V / |R + j(wL - 1/wC)| / (wC) = 731 V
+                    assert!((op("b") - 731.5).abs() < 2.0, "{name}: {}", op("b"));
+                }
+                "pz_sallen_key" => {
+                    // K = 2: Q = 1, w0 = 1/RC = 1e4 -> -5000 ± j8660; Rb = 30k (K = 4): right half-plane
+                    let p = run.op.iter().find(|o| o.0.starts_with("pole") && o.2 > 0.0).unwrap_or_else(|| panic!("{:?}", run.op));
+                    assert!((p.1 + 5000.0).abs() < 150.0 && (p.2 - 8660.0).abs() < 200.0, "{name}: {:?}", run.op);
+                    let k4 = crate::ngspice::run(&deck.varied("Rb", 30e3).unwrap()).unwrap();
+                    assert!(k4.op.iter().any(|o| o.0.starts_with("pole") && o.1 > 0.0), "{name}: {:?}", k4.op);
+                }
+                _ => {
+                    assert!(!run.scale.is_empty(), "{name}: {run:?}");
+                    let out = ["v(out)", "i(vsense_d1)"].iter().find_map(|e| crate::ngspice::trace(e, &run.scale).ok()).unwrap();
+                    assert!(out.re.len() > 10, "{name}");
+                }
+            }
         }
     }
 
