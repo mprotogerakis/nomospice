@@ -279,7 +279,8 @@ fn measurements(log: &[String]) -> Vec<(String, Option<f64>, String)> {
     for t in log.iter().map(|l| l.trim()) {
         if t.starts_with("Measurements for") {
             on = true;
-        } else if !on || t.is_empty() {
+        } else if !on || t.is_empty() || ["error", "warning", "note"].iter().any(|w| t.to_ascii_lowercase().starts_with(w)) {
+            // (ngspice's error for a measurement stays inside the report)
         } else if let Some(stmt) = t.strip_suffix("failed!") {
             if let Some(name) = stmt.split_whitespace().nth(2) {
                 out.push((name.to_string(), None, "failed".into()));
@@ -288,9 +289,12 @@ fn measurements(log: &[String]) -> Vec<(String, Option<f64>, String)> {
             // `name = <number> …` only (an error line inside the report does not end it)
             let rest = rest.trim();
             let (v, info) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
-            if let Ok(v) = v.trim_end_matches(',').parse::<f64>() {
-                out.push((name.trim().to_string(), Some(v), info.trim().to_string()));
+            match v.trim_end_matches(',').parse::<f64>() {
+                Ok(v) => out.push((name.trim().to_string(), Some(v), info.trim().to_string())),
+                Err(_) => on = false, // not a result line: the report is over
             }
+        } else {
+            on = false;
         }
     }
     out
@@ -368,7 +372,7 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
     let sensors = &sensors[..];
     // ngspice makes a helper source per par() in its output lines, named pa_00, pa_01 …
     let pars = netlist.lines().map(|l| l.trim_start().to_ascii_lowercase())
-        .filter(|l| [".meas", ".print", ".plot", ".four", ".save"].iter().any(|d| l.starts_with(d)))
+        .filter(|l| [".meas", ".print", ".plot", ".four", ".save", "+"].iter().any(|d| l.starts_with(d))) // + lines of them too
         .map(|l| l.matches("par(").count()).sum();
     let (mut vectors, mut scale) = plot_vectors(api, &plot, sensors, pars);
     // one frequency (`.ac lin 1 50 50`): phasors, shown as a table like .op instead of a 1-point plot

@@ -763,7 +763,7 @@ impl Netlist {
     /// .include/.lib files (can be slow): call it on a blocking thread, without the library lock.
     pub fn prepared(&self, dir: Option<&std::path::Path>, warnings: &mut Vec<String>) -> Prepared {
         let p = prepare(&self.text, dir, warnings);
-        Prepared(ltspice_meas(&p.0, &self.sensors), self.sensors.clone())
+        Prepared(ltspice_meas(&p.0, &self.sensors, warnings), self.sensors.clone())
     }
 }
 
@@ -775,10 +775,9 @@ impl Netlist {
 /// - `WHEN <a>=<b>`, unless `b` is a number, becomes `WHEN par('<a>-(<b>)')=0`;
 /// - `I(R1)` of a part with a current sensor becomes the sensor's current;
 /// - no analysis type (LTspice measures the simulation's) gets the deck's.
-fn ltspice_meas(text: &str, sensors: &[Sensor]) -> String {
+fn ltspice_meas(text: &str, sensors: &[Sensor], warnings: &mut Vec<String>) -> String {
     let lines = deck_lines(text);
-    const TYPES: [&str; 6] = ["tran", "ac", "dc", "op", "noise", "tf"];
-    let an = lines.iter().find_map(|l| l.head.strip_prefix('.').filter(|h| !l.skip && TYPES.contains(h))).unwrap_or("");
+    let an = lines.iter().find_map(|l| l.head.strip_prefix('.').filter(|h| !l.skip && TYPES_MEAS.contains(h))).unwrap_or("");
     let meas = |l: &DeckLine| l.head == ".meas" || l.head == ".measure";
     let mut out: Vec<String> = vec![];
     let mut i = 0;
@@ -794,28 +793,35 @@ fn ltspice_meas(text: &str, sensors: &[Sensor]) -> String {
             j += 1;
         }
         let stmt = &lines[i..j];
-        // each line without its inline comment (`;` LTspice, ` $` ngspice) before they are joined
-        let uncommented = |l: &str| -> String {
-            let l = l.split(';').next().unwrap_or("");
-            l.find(" $").map_or(l, |k| &l[..k]).to_string()
-        };
+        // each line without its inline comment before they are joined
         let joined = stmt.iter().filter(|l| !l.skip).map(|l| uncommented(l.line).trim().trim_start_matches('+').trim().to_string()).collect::<Vec<_>>().join(" ");
-        let new = meas_statement(&joined, sensors, an);
-        if spice_tokens(&new) == spice_tokens(&joined) {
-            out.extend(stmt.iter().map(|l| l.line.to_string())); // as written
-        } else {
-            out.push(new);
-            out.extend(stmt.iter().filter(|l| l.skip).map(|l| l.line.to_string())); // comments stay
+        match meas_statement(&joined, sensors, an) {
+            Ok(new) if spice_tokens(&new) == spice_tokens(&joined) => out.extend(stmt.iter().map(|l| l.line.to_string())), // as written
+            Ok(new) => {
+                out.push(new);
+                out.extend(stmt.iter().filter(|l| l.skip).map(|l| l.line.to_string())); // comments stay
+            }
+            // ngspice would measure something else without saying so: left out, and said
+            Err(why) => {
+                warnings.push(why);
+                out.extend(stmt.iter().map(|l| format!("* {}", l.line)));
+            }
         }
         i = j;
     }
     out.join("\n") + "\n"
 }
 
-/// One `.meas` statement (see [`ltspice_meas`]).
-fn meas_statement(s: &str, sensors: &[Sensor], an: &str) -> String {
-    // LTspice: `;` starts a comment; `FROM = 1m` is `FROM=1m` (the tokens below split at blanks)
-    let s = s.split(';').next().unwrap_or("");
+/// A line without its inline comment (`;` LTspice, ` $` ngspice).
+fn uncommented(l: &str) -> &str {
+    let l = l.split(';').next().unwrap_or("");
+    l.find(" $").map_or(l, |k| &l[..k])
+}
+
+/// One `.meas` statement (see [`ltspice_meas`]); Err: what ngspice would silently get wrong.
+fn meas_statement(s: &str, sensors: &[Sensor], an: &str) -> Result<String, String> {
+    // `FROM = 1m` is `FROM=1m` (the tokens below split at blanks)
+    let s = uncommented(s);
     let mut flat = String::with_capacity(s.len());
     for (i, c) in s.char_indices() {
         let near_eq = s[..i].trim_end().ends_with('=') || s[i..].trim_start().starts_with('=');
@@ -848,7 +854,8 @@ fn meas_statement(s: &str, sensors: &[Sensor], an: &str) -> String {
     let ac_vector = |x: &str| -> Option<String> {
         let (x, l) = (x.trim(), low(x.trim()));
         let o = l.find('(')?;
-        let f = [("mag", "vm"), ("db", "vdb"), ("ph", "vp"), ("phase", "vp"), ("re", "vr"), ("real", "vr"), ("im", "vi"), ("imag", "vi")].iter().find(|(n, _)| *n == &l[..o])?.1;
+        // (not ph(): LTspice's is in degrees, ngspice's vp() in radians)
+        let f = [("mag", "vm"), ("db", "vdb"), ("re", "vr"), ("real", "vr"), ("im", "vi"), ("imag", "vi")].iter().find(|(n, _)| *n == &l[..o])?.1;
         let inner = x.get(o + 1..x.len().checked_sub(1)?)?.trim();
         (l.ends_with(')') && low(inner).starts_with("v(") && inner.ends_with(')') && !inner[2..inner.len() - 1].contains(['(', ')'])).then(|| format!("{f}{}", &inner[1..]))
     };
@@ -858,13 +865,11 @@ fn meas_statement(s: &str, sensors: &[Sensor], an: &str) -> String {
     const OPTION: [&str; 8] = ["val", "td", "rise", "fall", "cross", "at", "from", "to"];
     let mut out: Vec<String> = toks.iter().take(1).cloned().collect();
     let mut i = 1;
-    match toks.get(1) {
-        Some(t) if TYPES_MEAS.contains(&low(t).as_str()) => {
-            out.push(t.clone());
-            i = 2;
-        }
-        _ if !an.is_empty() => out.push(an.to_string()),
-        _ => {}
+    if toks.get(1).is_some_and(|t| TYPES_MEAS.contains(&low(t).as_str())) {
+        out.push(toks[1].clone());
+        i = 2;
+    } else if !an.is_empty() {
+        out.push(an.to_string());
     }
     if let Some(name) = toks.get(i) {
         out.push(name.clone());
@@ -896,7 +901,10 @@ fn meas_statement(s: &str, sensors: &[Sensor], an: &str) -> String {
                     level = val_at.map(|j| toks[j][4..].to_string());
                 }
                 match level {
-                    Some(v) if !x.is_empty() && !number(&v) && typ != "ac" && !low(&x).starts_with("par(") => {
+                    Some(v) if !number(&v) && typ == "ac" => {
+                        return Err(format!("{}: in AC, ngspice takes only a number as the level ({v}), and would measure at its first number: left out", out.get(2).map_or(".meas", |n| n.as_str())));
+                    }
+                    Some(v) if !x.is_empty() && !number(&v) && !low(&x).starts_with("par(") => {
                         out.push(par(&format!("{x}-({v})")));
                         match val_at {
                             Some(j) => toks[j] = "VAL=0".into(),
@@ -933,7 +941,7 @@ fn meas_statement(s: &str, sensors: &[Sensor], an: &str) -> String {
             _ => out.push(t),
         }
     }
-    out.join(" ")
+    Ok(out.join(" "))
 }
 
 const TYPES_MEAS: [&str; 7] = ["tran", "ac", "dc", "op", "noise", "tf", "sp"];
@@ -1748,7 +1756,7 @@ mod tests {
     #[test]
     fn ltspice_meas_for_ngspice() {
         let r1 = [Sensor { source: "vsense_r1".into(), node: "x".into(), inst: "r1".into() }];
-        let m = |s: &str| meas_statement(s, &r1, "tran");
+        let m = |s: &str| meas_statement(s, &r1, "tran").unwrap_or_else(|e| e);
         assert_eq!(m(".MEAS TRAN P AVG -I(V1)*V(VDD)"), ".MEAS TRAN P AVG par('-I(V1)*V(VDD)')");
         assert_eq!(m(".meas tran t TRIG V(in) VAL=0.5*V(vdd) TD=2n RISE=1 TARG V(out) VAL=1 RISE=1"),
             ".meas tran t TRIG par('V(in)-(0.5*V(vdd))') VAL=0 TD=2n RISE=1 TARG V(out) VAL=1 RISE=1");
@@ -1772,11 +1780,16 @@ mod tests {
         assert_eq!(m(".meas ac g MAX mag(V(out))"), ".meas ac g MAX vm(out)", "AC: no par() (linearized), ngspice's vector form");
         assert_eq!(m(".meas ac bw WHEN db(V(out))=-3"), ".meas ac bw WHEN vdb(out)=-3");
         assert_eq!(m(".meas ac r MAX V(out)/V(in)"), ".meas ac r MAX V(out)/V(in)", "AC: as written rather than wrong");
-        let cont = ltspice_meas(".tran 1m\n.meas tran p AVG -I(V1)*V(in) ; power\n+ FROM=1m TO=2m\n.meas tran q AVG V(a)*2 $ note\n", &[]);
+        assert!(m(".meas ac f1 TRIG vm(out) VAL=0.5*vm(in) TARG vm(out) VAL=1").contains("left out"), "AC: an expression level is not silently cut");
+        assert_eq!(m(".meas ac p FIND ph(V(out)) AT=1k"), ".meas ac p FIND ph(V(out)) AT=1k", "degrees vs radians: not mapped");
+        let mut w = vec![];
+        let skipped = ltspice_meas(".ac dec 10 1 1k\n.meas ac f1 TRIG vm(out) VAL=0.5*vm(in) TARG vm(out) VAL=1\n", &[], &mut w);
+        assert!(skipped.contains("* .meas ac f1") && w.len() == 1, "{skipped} {w:?}");
+        let cont = ltspice_meas(".tran 1m\n.meas tran p AVG -I(V1)*V(in) ; power\n+ FROM=1m TO=2m\n.meas tran q AVG V(a)*2 $ note\n", &[], &mut vec![]);
         assert!(cont.contains(".meas tran p AVG par('-I(V1)*V(in)') FROM=1m TO=2m") && cont.contains(".meas tran q AVG par('V(a)*2')\n"), "comments cut per line: {cont}");
         // the manual's delay and power measurements, end to end
         let deck = "* m\nV1 in 0 PULSE(0 2 0 1n 1n 4n 10n)\nV2 vdd 0 2\nR1 out in 100\nC1 out 0 10p\n.tran 4e-11 40n 0.1n\n.MEAS TRAN TpLH\n* note\n+TRIG V(in) VAL=0.5*V(vdd) TD=22n RISE=1\n+TARG V(out) VAL=0.5*V(vdd) TD=22n RISE=1\n.meas tran pdyn AVG -I(V1)*V(in)\n.meas tran vmax MAX V(out)\n+ FROM=0 TO=10n\n.end\n";
-        let text = ltspice_meas(&prepare(deck, None, &mut vec![]).0, &[]);
+        let text = ltspice_meas(&prepare(deck, None, &mut vec![]).0, &[], &mut vec![]);
         assert!(text.contains(".MEAS TRAN TpLH TRIG par('V(in)-(0.5*V(vdd))') VAL=0 TD=22n RISE=1 TARG par('V(out)-(0.5*V(vdd))') VAL=0") && text.contains("* note"), "{text}");
         assert!(text.contains(".meas tran vmax MAX V(out)\n+ FROM=0 TO=10n"), "unchanged: as written\n{text}");
         let _s = SIM.lock();

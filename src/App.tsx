@@ -16,7 +16,7 @@ import { PoleZero } from "./PoleZero";
 import { checkForUpdate, installUpdate, useUpdate } from "./updater";
 import { Dialogs } from "./Dialogs";
 import { Boundary } from "./Boundary";
-import { analysesOf, currentTab, docId, viewOf, loadDoc, loadSymbols, placeSymbol, plotKind, redo, refreshGit, refreshNets, relToDoc, selectTab, simulate, undo, useS, useStatus } from "./store";
+import { analysesOf, docId, viewOf, loadDoc, loadSymbols, placeSymbol, plotKind, redo, refreshGit, refreshNets, relToDoc, selectTab, simulate, undo, useS, useStatus } from "./store";
 import { History } from "./History";
 import { currentLabel, mirror, rotate } from "./geom";
 import { ANALYSES, si } from "./spice";
@@ -434,7 +434,7 @@ function AnalysisTabs() {
   const items = useS((s) => s.items), tab = useS((s) => s.tab), running = useS((s) => s.running);
   const opts = useMemo(() => analysesOf(items), [items]);
   if (!opts.length) return null;
-  const cur = currentTab({ tab, items });
+  const cur = (tab && opts.some((o) => o.kind === tab) ? tab : opts.find((o) => o.active)?.kind) ?? null; // currentTab, on the parsed list
   const name = (k: string) => ANALYSES.find(([a]) => a === k)?.[1] ?? k;
   const more = ANALYSES.filter(([k]) => !opts.some((o) => o.kind === k));
   return (

@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import type { GitStatus, Item, Netlist, Sim, SymbolDef, Trace, TraceData } from "./types";
 import { currentLabel, defOf, symKey, vexpr, type Lib } from "./geom";
-import { analysisOptions, stripAnalyses, type Analysis } from "./spice";
+import { ANALYSIS, analysisOptions, stripAnalyses, type Analysis } from "./spice";
 
 export type Tool =
   | { k: "select" }
@@ -125,8 +125,9 @@ export function redo() {
   refreshNets();
 }
 
-/** The folder whose symbols the library holds (the schematic's: its .asy are listed too). */
-let symDir: string | null | undefined;
+/** The folder whose symbols the library holds (the schematic's: its .asy are listed too), and
+ *  the latest request (an older answer arriving late must not replace a newer one). */
+let symDir: string | null | undefined, symSeq = 0;
 /** `fresh`: a document is being loaded (the current one's symbols are not needed any more). */
 export async function loadSymbols(items: Item[] = [], dir = dirOf(get().path), { force = false, fresh = false } = {}) {
   const moved = dir !== symDir || force; // another folder (or other libraries): ask again for all
@@ -137,8 +138,10 @@ export async function loadSymbols(items: Item[] = [], dir = dirOf(get().path), {
   const s = get();
   const inUse = fresh ? [] : [s.items, ...s.past, ...s.future, s.diff?.items ?? []].flatMap(want);
   const names = [...new Set([...want(items), ...inUse])];
-  symDir = dir;
+  const seq = ++symSeq;
   const defs = await invoke<SymbolDef[]>("symbols", { names, dir });
+  if (seq !== symSeq) return;
+  symDir = dir; // only once answered: a failed request is asked again next time
   set({ lib: Object.fromEntries(defs.map((d) => [d.name, d])) }); // the backend's whole set
 }
 
@@ -160,7 +163,7 @@ export async function refreshLibrarySymbols() {
 }
 
 export async function loadDoc(items: Item[], path: string | null) {
-  await loadSymbols(items, dirOf(path), { fresh: true });
+  await loadSymbols(items, dirOf(path), { fresh: true, force: true }); // reopening reads edited symbols
   docGen++;
   autoPlotted = new Set();
   set({ dialog: null, menu: null, tab: null, tabs: {}, shown: null, items, path, past: [], future: [], sel: [], dirty: false, sim: null, traces: [], stale: false, nets: null, netsItems: null, plot: NO_PLOT, panel: get().panel === "op" ? null : get().panel, diff: null, tool: { k: "select" }, fitToken: get().fitToken + 1 });
@@ -247,10 +250,12 @@ export function analysisItem(items: Item[], kind: Analysis | null) {
  *  out, the tab's line goes last. Simulation and root locus use it. */
 export function simDeck(items: Item[], tab: Analysis | null) {
   const opts = analysesOf(items);
-  // several active analyses (ngspice would run them all and show the last): the shown tab's alone
-  const kind = tab ?? (opts.filter((o) => o.active).length > 1 ? currentTab({ tab, items }) : null);
+  // several active analyses (ngspice would run them all and show the last): the shown tab's alone;
+  // the schematic's only active analysis runs as it is (the live netlist stays the schematic's)
+  const actives = items.reduce((n, it) => n + (it.t === "text" && it.directive ? it.text.split("\n").filter((l) => ANALYSIS.test(l.trim())).length : 0), 0);
+  const kind = tab ?? (actives > 1 ? currentTab({ tab, items }) : null);
   const pick = kind ? opts.find((o) => o.kind === kind) : undefined;
-  if (!pick) return items;
+  if (!pick || (pick.active && actives === 1)) return items;
   return [...items.map((it) => (it.t === "text" && it.directive ? { ...it, text: stripAnalyses(it.text) } : it)), { t: "text", x: 0, y: 0, text: pick.line, directive: true } as Item];
 }
 
