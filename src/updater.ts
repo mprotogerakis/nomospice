@@ -11,6 +11,7 @@ export const useUpdate = create<{ update: Update | null; busy: string }>(() => (
 /** Looks for a newer release; `manual` (About dialog) also reports "up to date" and errors. */
 export async function checkForUpdate(manual = false) {
   if (import.meta.env.DEV && !manual) return; // dev builds are not the released app
+  if (useUpdate.getState().busy) return; // installing: the current handle is in use
   try {
     const update = await check();
     const old = useUpdate.getState().update;

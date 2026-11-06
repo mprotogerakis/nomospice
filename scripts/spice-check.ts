@@ -1,7 +1,7 @@
 // Self-check of src/spice.ts (the form editors' SPICE parsing/formatting): node scripts/spice-check.ts
 import assert from "node:assert/strict";
 import {
-  formatAnalysis, formatIc, formatInclude, formatMeas, formatModel, formatParams, formatSource, numInfo, parseAnalysis,
+  tokens, formatAnalysis, formatIc, formatInclude, formatMeas, formatModel, formatParams, formatSource, numInfo, parseAnalysis,
   parseIc, parseInclude, parseMeas, parseModel, parseParams, parseSource, sample, spiceNum, directiveKind, analysisRoundTrips, portablePaths, sourceRoundTrips, holdsAnalysis,
 } from "../src/spice.ts";
 
@@ -103,4 +103,5 @@ assert.equal(sample({ ...parseSource("SINE(0 1 1k)"), args: [] }), null); // fre
 assert.equal(spiceNum("1a"), 1e-18); // ngspice reads a as atto (checked against the shared library)
 assert.match(numInfo("1A", "A")!.warn!, /atto/);
 assert.deepEqual([parseSource(undefined, undefined, "Rser = 50").rser, parseSource(undefined, undefined, "Rser = 50").rest], ["50", ""]);
+assert.deepEqual(tokens('PWL file="my wave.txt" r=0'), ["PWL", 'file="my wave.txt"', "r=0"]); // double quotes like schematic.rs
 console.log("spice-check: ok");

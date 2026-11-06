@@ -398,16 +398,15 @@ fn token_spans(line: &str) -> Vec<(usize, usize)> {
     spice_tokens(line).into_iter().map(|t| { let a = t.as_ptr() as usize - line.as_ptr() as usize; (a, a + t.len()) }).collect()
 }
 
-/// `text` with `target` set to `value`: every top-level `.param` definition of that name (spaces
-/// around `=` allowed), or else the value of the top-level R, C or L instance of that name (the
-/// token after its two nodes). `.subckt` bodies are left alone. None if neither is in the deck.
-pub fn vary(text: &str, target: &str, value: f64) -> Option<String> {
+/// Where `target` is set in `text` (byte spans): every top-level `.param` definition of that name
+/// (spaces around `=` allowed), or else the value of the top-level R, C or L instance of that name
+/// (the token after its two nodes). `.subckt` bodies are left alone. None if neither is in the deck.
+pub fn vary_spans(text: &str, target: &str) -> Option<Vec<(usize, usize)>> {
     // ASCII names only, and ASCII lowercase: byte offsets in `low` are offsets in `line`
     let t = target.trim().to_ascii_lowercase();
     if t.is_empty() || !t.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_') {
         return None;
     }
-    let v = format!("{value:e}");
     // the value span of `t=` on a .param line, if it defines t: whole top-level tokens only, so
     // `{x==1?2:3}` (one token) and `µa=1` (another name) are not definitions of x / a.
     // Forms: `t=v`, `t= v`, `t =v`, `t = v`.
@@ -439,7 +438,10 @@ pub fn vary(text: &str, target: &str, value: f64) -> Option<String> {
     // top-level lines only (outside .subckt … .ends), with their lowercase twin and whether they
     // are part of a .param (its own line, or a `+` continuation of one)
     let (mut sub, mut in_param) = (0, false);
-    let lines: Vec<(&str, String, bool, bool)> = text.lines().map(|line| {
+    let mut at = 0;
+    let lines: Vec<(usize, &str, String, bool, bool)> = text.split_inclusive('\n').map(|piece| {
+        let (start, line) = (at, piece.trim_end_matches(['\n', '\r']));
+        at += piece.len();
         let low = line.to_ascii_lowercase();
         let first = low.split_whitespace().next().unwrap_or("");
         match first { ".subckt" => sub += 1, ".ends" => sub = (sub - 1).max(0), _ => {} } // a stray .ends must not hide the rest
@@ -447,22 +449,38 @@ pub fn vary(text: &str, target: &str, value: f64) -> Option<String> {
         let skip = first.is_empty() || first.starts_with('*');
         in_param = first == ".param" || (in_param && (first.starts_with('+') || skip));
         let top = sub == 0 && first != ".ends";
-        (line, low, top, in_param && !skip) // a comment line is never a definition
+        (start, line, low, top, in_param && !skip) // a comment line is never a definition
     }).collect();
     // a .param of that name wins over a part of the same name (pz_sallen_key: `.param Rb`, part Rb = {Rb})
-    let params = lines.iter().any(|(l, low, top, p)| *top && *p && param_value(l, low).is_some());
-    let mut found = false;
-    let out: Vec<String> = lines.iter().map(|(line, low, top, is_param)| {
+    let params = lines.iter().any(|(_, l, low, top, p)| *top && *p && param_value(l, low).is_some());
+    let mut spans = vec![];
+    for (start, line, low, top, is_param) in &lines {
         let span = if !top { None }
             else if params { is_param.then(|| param_value(line, low)).flatten() }
-            else if !found && low.split_whitespace().next() == Some(t.as_str()) && "rcl".contains(&t[..1]) { token_spans(line).get(3).copied() }
+            else if spans.is_empty() && low.split_whitespace().next() == Some(t.as_str()) && "rcl".contains(&t[..1]) { token_spans(line).get(3).copied() }
             else { None };
-        match span {
-            Some((a, e)) => { found = true; format!("{}{v}{}", &line[..a], &line[e..]) }
-            None => line.to_string(),
+        if let Some((a, e)) = span {
+            spans.push((start + a, start + e));
         }
-    }).collect();
-    found.then(|| out.join("\n") + "\n")
+    }
+    (!spans.is_empty()).then_some(spans)
+}
+
+/// `text` with every span replaced by `value` (the rest byte for byte as it was).
+pub fn splice(text: &str, spans: &[(usize, usize)], value: f64) -> String {
+    let (v, mut out, mut at) = (format!("{value:e}"), String::with_capacity(text.len()), 0);
+    for &(a, e) in spans {
+        out.push_str(&text[at..a]);
+        out.push_str(&v);
+        at = e;
+    }
+    out.push_str(&text[at..]);
+    out
+}
+
+/// `text` with `target` set to `value` (see [`vary_spans`]).
+pub fn vary(text: &str, target: &str, value: f64) -> Option<String> {
+    Some(splice(text, &vary_spans(text, target)?, value))
 }
 
 /// SPICE number with suffix (f p n u µ m k meg g t), trailing units ignored.
@@ -576,9 +594,16 @@ impl Prepared {
         self
     }
 
-    /// This deck with `target` set to `value` (see [`vary`]), for parameter sweeps such as a root locus.
+    /// Where `target` is set in this deck (see [`vary_spans`]): found once per sweep.
+    pub fn spans(&self, target: &str) -> Option<Vec<(usize, usize)>> {
+        vary_spans(&self.0, target)
+    }
+    /// This deck with the value at `spans` set to `value` (one step of a sweep such as a root locus).
+    pub fn at(&self, spans: &[(usize, usize)], value: f64) -> Prepared {
+        Prepared(splice(&self.0, spans, value), self.1.clone())
+    }
     pub fn varied(&self, target: &str, value: f64) -> Option<Prepared> {
-        Some(Prepared(vary(&self.0, target, value)?, self.1.clone()))
+        Some(self.at(&self.spans(target)?, value))
     }
 
     pub fn sensors(&self) -> &[Sensor] {

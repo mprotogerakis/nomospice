@@ -13,12 +13,13 @@ export function si(v: number, unit = "", digits = 4): string {
 /** Whitespace tokens; `{a * (b + c)}`, `'a * b'`, `NAME(args)` and `C={1/(2*pi)}` stay whole. */
 export function tokens(s: string): string[] {
   const out: string[] = [];
-  let cur = "", depth = 0, quote = false;
+  let cur = "", depth = 0, q = "";
   for (const c of s) {
-    if (c === "'") quote = !quote;
+    const quote = !!q;
+    if (c === "'" || c === '"') q = !q ? c : q === c ? "" : q; // like spice_tokens in schematic.rs
     else if (!quote && (c === "(" || c === "{")) depth++;
     else if (!quote && (c === ")" || c === "}")) depth = Math.max(0, depth - 1);
-    if (/\s/.test(c) && !depth && !quote) (cur && out.push(cur), (cur = ""));
+    if (/\s/.test(c) && !depth && !q && !quote) (cur && out.push(cur), (cur = ""));
     else cur += c;
   }
   if (cur) out.push(cur);
@@ -104,9 +105,9 @@ export const lastFilled = (args: string[]) => args.reduce((n, a, i) => (a?.trim(
 
 /** Commas outside `{…}` as spaces: argument separators (`PWL(0,0 1m,1)`), not `{max(a,b)}`. */
 const argCommas = (s: string) => {
-  let d = 0, q = false, out = "";
+  let d = 0, q = "", out = "";
   for (const c of s) {
-    if (c === "'") q = !q;
+    if (c === "'" || c === '"') q = !q ? c : q === c ? "" : q;
     else if (!q) d += c === "{" ? 1 : c === "}" ? -1 : 0;
     out += c === "," && d <= 0 && !q ? " " : c; // not inside {…} or '…'
   }

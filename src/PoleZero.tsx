@@ -176,7 +176,7 @@ function Sidebar({ poles, zeros, locus, setLocus, error, setError }: {
     if (n > 500) return setError("At most 500 steps (each is one .pz run).");
     // the locus is drawn over this run's poles: it must be the same circuit
     if (useS.getState().stale) return setError("The schematic changed since this run: run it again first.");
-    const gen = docId();
+    const gen = docId(), sim0 = useS.getState().sim;
     const values = Array.from({ length: n }, (_, i) => (f.scale === "log" ? a * (b / a) ** (i / (n - 1)) : a + ((b - a) * i) / (n - 1)));
     setError("");
     setRunning(true);
@@ -185,6 +185,7 @@ function Sidebar({ poles, zeros, locus, setLocus, error, setError }: {
       // a step is null where .pz failed (drawn as a gap); fewer steps than values: halted
       const steps = await invoke<([number, number][] | null)[]>("root_locus", { items, dir: dirOf(path), target: f.target.trim(), values });
       if (docId() !== gen) return; // another document was opened meanwhile
+      if (useS.getState().sim !== sim0) return setError("The circuit was simulated again meanwhile: draw the locus again."); // live mode, Run
       const failed = steps.filter((x) => !x).length;
       setError([failed && `${failed} of ${steps.length} steps found no poles (gaps in the paths).`, steps.length < values.length && `Halted after ${steps.length} of ${values.length} steps.`].filter(Boolean).join(" "));
       setLocus({ values: values.slice(0, steps.length), target: f.target.trim(), steps: steps.map((s) => (s ?? []).map(([re, im]) => ({ re, im }))) });

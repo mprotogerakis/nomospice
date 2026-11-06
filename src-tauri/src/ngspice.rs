@@ -52,8 +52,22 @@ static BG_DONE: AtomicBool = AtomicBool::new(true);
 /// entered concurrently. Cleared by `arm` when a new simulation request starts.
 static HALT: AtomicBool = AtomicBool::new(false);
 
-pub fn arm() {
-    HALT.store(false, Ordering::SeqCst);
+/// Operations in flight (simulations, root loci). Halt stops all of them; the flag is cleared only
+/// when the first of overlapping operations begins, so starting one cannot undo a Halt meant for another.
+static ACTIVE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// One user operation; hold the guard until it is done.
+pub struct Op;
+impl Drop for Op {
+    fn drop(&mut self) {
+        ACTIVE.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+pub fn begin() -> Op {
+    if ACTIVE.fetch_add(1, Ordering::SeqCst) == 0 {
+        HALT.store(false, Ordering::SeqCst);
+    }
+    Op
 }
 
 extern "C" fn on_char(s: *const c_char, _: c_int, _: *mut c_void) -> c_int {

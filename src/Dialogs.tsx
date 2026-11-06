@@ -41,7 +41,7 @@ function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: 
         <>
           <div className="text-2xs text-text-tertiary">{def?.desc ?? it.sym} · {it.sym}</div>
           <TextField label="Instance name" value={attr("InstName")} set={(v) => setAttr("InstName", v)} />
-          {source ? <SourceEditor attrs={it.attrs} setAttrs={(attrs) => setIt({ ...it, attrs })} current={def?.prefix?.[0]?.toUpperCase() === "I"} /> : (
+          {source ? <SourceEditor attrs={it.attrs} setAttrs={(attrs) => setIt({ ...it, attrs })} current={def?.prefix?.[0]?.toUpperCase() === "I"} spiceLine={def?.spice_line} /> : (
             <>
               <TextField label="Value" value={attr("Value")} set={(v) => setAttr("Value", v)} autofocus unit={unit}
                 {...(valueHelp ?? {})} hint={unit ? "e.g. 4.7k, 100n, 1Meg; LTspice extras like Rser=0.1 may follow" : undefined} />
@@ -315,7 +315,10 @@ export const Dialogs = memo(function Dialogs() {
   const dialog = useS((s) => s.dialog);
   const items = useS((s) => s.items);
   if (!dialog) return null;
-  const commitAt = (index: number) => (next: Item) => (commit(items.map((x, i) => (i === index ? next : x))), close());
+  const commitAt = (index: number) => (next: Item) => {
+    if (JSON.stringify(next) !== JSON.stringify(items[index])) commit(items.map((x, i) => (i === index ? next : x)));
+    close();
+  };
   /** A directive: the simulation form if it holds an analysis the form writes back unchanged, else the directive forms. */
   const directive = (index: number, raw?: boolean, draft?: string) => {
     const it = items[index] as Extract<Item, { t: "text" }>;

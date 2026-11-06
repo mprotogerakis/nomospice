@@ -8,7 +8,9 @@ import { Button } from "./ui/button";
 type Attrs = Record<string, string>;
 const KINDS: [Func | "", string][] = [["", "DC"], ["SINE", "Sine"], ["PULSE", "Pulse"], ["EXP", "Exponential"], ["SFFM", "FM"], ["PWL", "Piecewise linear"]];
 
-export function SourceEditor({ attrs, setAttrs, current }: { attrs: Attrs; setAttrs: (a: Attrs) => void; current: boolean }) {
+export function SourceEditor({ attrs: given, setAttrs, current, spiceLine }: { attrs: Attrs; setAttrs: (a: Attrs) => void; current: boolean; spiceLine?: string }) {
+  // no SpiceLine attribute: the symbol's default applies (as in the netlister)
+  const attrs = given.SpiceLine === undefined && spiceLine ? { ...given, SpiceLine: spiceLine } : given;
   const y = current ? "A" : "V";
   const [src, setSrc] = useState<Source>(() => parseSource(attrs.Value, attrs.Value2, attrs.SpiceLine));
   // what the form cannot read (e.g. `PWL file=…`, `SINE (…)`) opens as text instead of being rewritten
@@ -68,9 +70,13 @@ export function SourceEditor({ attrs, setAttrs, current }: { attrs: Attrs; setAt
           <Section>Small signal (.ac, .noise)</Section>
           <NumField label="AC amplitude" value={src.acMag} set={(acMag) => update({ ...src, acMag })} unit={y} hint={src.acMag ? undefined : "empty: no AC excitation"} />
           {src.acMag && <NumField label="AC phase" value={src.acPhase} set={(acPhase) => update({ ...src, acPhase })} unit="°" placeholder="0" />}
-          <Section>Parasitics</Section>
-          <NumField label="Series resistance" value={src.rser} set={(rser) => update({ ...src, rser })} unit="Ω" />
-          <NumField label="Parallel capacitance" value={src.cpar} set={(cpar) => update({ ...src, cpar })} unit="F" />
+          {!current && (
+            <>
+              <Section>Parasitics</Section>
+              <NumField label="Series resistance" value={src.rser} set={(rser) => update({ ...src, rser })} unit="Ω" />
+              <NumField label="Parallel capacitance" value={src.cpar} set={(cpar) => update({ ...src, cpar })} unit="F" />
+            </>
+          )}
           {(src.vrest || hadVrest) && <TextField label="Value options" value={src.vrest} set={(vrest) => update({ ...src, vrest })} hint="kept after the function, as written" />}
           {(src.rest || hadRest) && <TextField label="Other" value={src.rest} set={(rest) => update({ ...src, rest })} hint="kept as written" />}
         </div>
