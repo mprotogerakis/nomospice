@@ -47,7 +47,8 @@ function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: 
               <TextField label="Value" value={attr("Value")} set={(v) => setAttr("Value", v)} autofocus unit={unit}
                 {...(valueHelp ?? {})} hint={unit ? "e.g. 4.7k, 100n, 1Meg; LTspice extras like Rser=0.1 may follow" : undefined} />
               <TextField label="Value2" value={attr("Value2")} set={(v) => setAttr("Value2", v)} />
-              <TextField label="SpiceLine" value={attr("SpiceLine")} set={(v) => setAttr("SpiceLine", v)} placeholder={def?.spice_line} />
+              {/* the symbol's default shows as the value: emptying it visibly removes it (an empty attribute) */}
+              <TextField label="SpiceLine" value={it.attrs.SpiceLine ?? def?.spice_line ?? ""} set={(v) => setAttr("SpiceLine", v)} hint={def?.spice_line ? `symbol default: ${def.spice_line}` : undefined} />
             </>
           )}
         </>

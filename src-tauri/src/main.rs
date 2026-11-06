@@ -218,7 +218,8 @@ async fn root_locus(items: Vec<Item>, dir: Option<String>, target: String, value
         let deck = prepare_deck(sim, dir.as_deref(), &mut vec![]);
         match schematic::pz_statement(deck.text()) {
             None => return Err("the schematic has no .pz analysis (Simulation command → Poles/zeros)".into()),
-            Some(l) if l.split_whitespace().nth(6) == Some("zer") => return Err("the .pz analysis computes zeros only: a root locus needs the poles (Poles/zeros → Compute)".into()),
+            // the type (pz, pol, zer) is the last token before an inline comment
+            Some(l) if l.split_whitespace().take_while(|t| !t.starts_with(['$', ';'])).last() == Some("zer") => return Err("the .pz analysis computes zeros only: a root locus needs the poles (Poles/zeros → Compute)".into()),
             _ => {}
         }
         // where the value sits in the deck: found once, then spliced per step

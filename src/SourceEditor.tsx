@@ -21,7 +21,11 @@ export function SourceEditor({ attrs: given, setAttrs, current, spiceLine }: { a
   const [kept, setKept] = useState<Partial<Record<Func | "", { args: string[]; vrest: string }>>>({});
   const update = (next: Source) => {
     setSrc(next);
-    setAttrs({ ...attrs, ...formatSource(next) });
+    const out = formatSource(next);
+    // the symbol's default as it was: no attribute, so later changes to the default still apply
+    const isDefault = given.SpiceLine === undefined && !!spiceLine && out.SpiceLine === formatSource(parseSource("", "", spiceLine)).SpiceLine;
+    const { SpiceLine: _, ...rest } = { ...given, ...out };
+    setAttrs(isDefault ? rest : { ...given, ...out });
   };
   // no holes: a sparse array would reach formatSource as undefined
   const setArg = (i: number, v: string) => { const args = Array.from({ length: Math.max(src.args.length, i + 1) }, (_, k) => src.args[k] ?? ""); args[i] = v; update({ ...src, args }); };
@@ -44,9 +48,9 @@ export function SourceEditor({ attrs: given, setAttrs, current, spiceLine }: { a
   if (text) {
     return (
       <>
-        <TextField label="Value" value={attrs.Value ?? ""} set={(v) => setAttrs({ ...attrs, Value: v })} autofocus hint="SPICE syntax: 5 · SINE(off amp freq) · PULSE(v1 v2 td tr tf ton per)" />
-        <TextField label="Value2" value={attrs.Value2 ?? ""} set={(v) => setAttrs({ ...attrs, Value2: v })} hint="e.g. AC 1" />
-        <TextField label="SpiceLine" value={attrs.SpiceLine ?? ""} set={(v) => setAttrs({ ...attrs, SpiceLine: v })} hint="e.g. Rser=50" />
+        <TextField label="Value" value={attrs.Value ?? ""} set={(v) => setAttrs({ ...given, Value: v })} autofocus hint="SPICE syntax: 5 · SINE(off amp freq) · PULSE(v1 v2 td tr tf ton per)" />
+        <TextField label="Value2" value={attrs.Value2 ?? ""} set={(v) => setAttrs({ ...given, Value2: v })} hint="e.g. AC 1" />
+        <TextField label="SpiceLine" value={attrs.SpiceLine ?? ""} set={(v) => setAttrs({ ...given, SpiceLine: v })} hint="e.g. Rser=50" />
         {sourceRoundTrips(attrs.Value, attrs.Value2, attrs.SpiceLine)
           ? <Button type="button" size="sm" className="self-start" onClick={() => { setSrc(parseSource(attrs.Value, attrs.Value2, attrs.SpiceLine)); setMore(null); setText(false); }}>Back to the form</Button>
           : <p className="text-2xs text-text-tertiary">The form cannot show this source without changing it, so it stays text.</p>}

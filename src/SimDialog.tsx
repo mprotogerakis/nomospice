@@ -19,7 +19,11 @@ export function SimDialog({ index }: { index?: number }) {
   const idx = index ?? -1;
   const lines = idx >= 0 && items[idx].t === "text" ? items[idx].text.split("\n") : [];
   const li = analysisIndex(lines); // the same rule Dialogs used to pick this dialog
-  const [init] = useState(() => parseAnalysis(li >= 0 ? lines[li] : ".tran 1m"));
+  const [init] = useState(() => {
+    const a = parseAnalysis(li >= 0 ? lines[li] : ".tran 1m");
+    // a sweep the form does not know (`.ac list 1k 2k`): its values mean something else, start empty
+    return a.f.sweep !== undefined && !["dec", "oct", "lin"].includes(a.f.sweep) ? { kind: a.kind, f: {} } : a;
+  });
   const [kind, setKind] = useState<Analysis>(init.kind);
   const [forms, setForms] = useState<Partial<Record<Analysis, Fields>>>({ [init.kind]: init.f });
   const f = forms[kind] ?? {};

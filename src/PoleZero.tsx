@@ -47,7 +47,7 @@ export const PoleZero = memo(function PoleZero({ run }: { run: Run }) {
   const paths = useMemo(() => (locus ? branches(locus.steps) : []), [locus]);
   // a new run (edited circuit, live mode): an old locus and zoom would describe another circuit
   const [error, setError] = useState("");
-  useEffect(() => (setLocus(null), setView(null), setError("")), [run]);
+  useEffect(() => (setLocus(null), setView(null), setError(""), setHit(null)), [run]);
 
   // view: equal scale on both axes (angles = damping), wheel zoom around the cursor
   const host = useRef<HTMLDivElement>(null);
