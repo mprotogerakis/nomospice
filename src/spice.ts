@@ -274,8 +274,9 @@ function plausible(line: string) {
     case "tran": return num("stop") && words.every((w) => /^(startup|steady|nodiscard|step|uic)$/i.test(w));
     case "ac": case "noise": return num("fstart") && num("fstop");
     case "dc": return num("start") && num("stop");
-    default: return true; // .tf/.pz/.sens name nodes and sources
   }
+  const t = tokens(line).slice(1); // .tf/.pz/.sens: an output V(…)/I(…), or the four nodes and vol|cur
+  return kind === "pz" ? t.length >= 5 && /^(vol|cur)$/i.test(t[4]) && (!t[5] || /^(pol|zer|pz)$/i.test(t[5])) : /^[vi]\(/i.test(t[0] ?? "") && (kind !== "tf" || t.length >= 2);
 }
 
 /** `text` without its analysis statements (and their `+` lines): a result tab runs its own instead. */

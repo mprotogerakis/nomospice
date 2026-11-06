@@ -129,8 +129,11 @@ export function redo() {
 let symDir: string | null | undefined;
 export async function loadSymbols(items: Item[] = [], dir = dirOf(get().path), force = false) {
   const moved = dir !== symDir || force; // another folder (or other libraries): ask again for all
-  const names = [...new Set(items.flatMap((it) => (it.t === "sym" ? [it.sym] : [])))].filter((n) => moved || !get().lib[symKey(n)]);
-  if (Object.keys(get().lib).length && !names.length && !moved) return;
+  const want = (its: Item[]) => its.flatMap((it) => (it.t === "sym" ? [it.sym] : []));
+  if (Object.keys(get().lib).length && !moved && want(items).every((n) => get().lib[symKey(n)])) return;
+  // the placed parts' symbols too: the answer replaces ours, and the backend may have dropped
+  // symbols it had cached (switched-off libraries), so ask for everything in use
+  const names = [...new Set([...want(items), ...want(get().items)])];
   symDir = dir;
   const defs = await invoke<SymbolDef[]>("symbols", { names, dir });
   set({ lib: Object.fromEntries(defs.map((d) => [d.name, d])) }); // the backend's whole set

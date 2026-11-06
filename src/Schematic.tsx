@@ -460,7 +460,7 @@ export const Schematic = memo(function Schematic() {
     if (count > 1) return [...arrange, "-", del];
     switch (it.t) {
       case "sym": {
-        const prefix = defOf(lib, it)?.prefix?.[0]?.toUpperCase() ?? "";
+        const prefix = (it.attrs.Prefix?.trim() || defOf(lib, it)?.prefix || "")[0]?.toUpperCase() ?? ""; // the part's own Prefix wins, as in the netlist
         const kind = ({ D: "D", Q: "NPN|PNP", M: "NMOS|PMOS|VDMOS", J: "NJF|PJF", X: "SUBCKT" } as Record<string, string>)[prefix];
         return [
           { label: "Edit…", hint: probing ? undefined : "dbl-click", run: edit },

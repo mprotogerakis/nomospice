@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import type { Item } from "./types";
 import { Schematic } from "./Schematic";
-import { Waveform } from "./Waveform";
+import { Measurements, Waveform } from "./Waveform";
 import { PoleZero } from "./PoleZero";
 import { checkForUpdate, installUpdate, useUpdate } from "./updater";
 import { Dialogs } from "./Dialogs";
@@ -146,7 +146,7 @@ async function saveFile(as = false) {
     if (doc !== docId()) return; // another document was loaded meanwhile
     const moved = path !== useS.getState().path; // relative .include paths now resolve elsewhere
     useS.setState({ path, dirty: useS.getState().items !== items, ...(moved && useS.getState().sim && { stale: true }) });
-    if (moved) void loadSymbols(useS.getState().items).then(refreshNets); // the new folder's symbols
+    if (moved) void loadSymbols(useS.getState().items).catch(() => {}).finally(refreshNets); // the new folder's symbols
     refreshGit();
   } catch (e) {
     await fail(`Cannot save ${path}`)(e);
@@ -515,6 +515,7 @@ function BottomPanel() {
             <pre className="text-text">{simulated && sim?.simulated ? sim.simulated : nets?.text ?? ""}</pre>
           </>
         )}
+        {panel === "op" && <Measurements xUnit="" />}
         {panel === "op" && (
           <table className="w-auto">
             <tbody>

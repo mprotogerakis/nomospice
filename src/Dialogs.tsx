@@ -10,7 +10,7 @@ import { closeDialog as close, Field, FIELD, Modal, numHelp, Rows, TextField } f
 import { SourceEditor } from "./SourceEditor";
 import { SimDialog } from "./SimDialog";
 import { DirectiveDialog } from "./DirectiveDialog";
-import { analysisEditable, analysisLine, tokens } from "./spice";
+import { analysisEditable, analysisLine, analysisOptions, tokens } from "./spice";
 import { cn } from "@/lib/utils";
 import thirdParty from "./third-party.json";
 import { checkForUpdate } from "./updater";
@@ -368,7 +368,7 @@ export const Dialogs = memo(function Dialogs() {
     case "edit": {
       const it = items[dialog.index];
       if (!it) return null;
-      if (it.t === "text" && !it.directive && !dialog.raw && analysisLine(it.text) && analysisEditable(it.text)) return <SimDialog key={dialog.index} index={dialog.index} />; // an alternative analysis
+      if (it.t === "text" && !it.directive && !dialog.raw && analysisOptions([it]).length && analysisEditable(it.text)) return <SimDialog key={dialog.index} index={dialog.index} />; // an alternative analysis
       if (it.t === "text") return it.directive ? directive(dialog.index, dialog.raw, dialog.draft) : <DirectiveDialog key={dialog.index} item={dialog.draft === undefined ? it : { ...it, text: dialog.draft }} title="Comment" raw onDone={commitAt(dialog.index)} />;
       return <ItemForm key={dialog.index} item={it} title={it.t === "sym" ? `Edit ${it.attrs.InstName ?? it.sym}` : "Net Name"} onDone={commitAt(dialog.index)} />;
     }

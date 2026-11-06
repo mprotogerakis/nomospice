@@ -190,8 +190,13 @@ export function dragPlan(items: Item[], lib: Lib, sel: Set<number>) {
   const all: Item[] = [], pieces: Item[] = [];
   items.forEach((it, i) => {
     if (it.t !== "wire" || whole.has(i) || !(ends(it).some((p) => moving.has(key(...p))) || movingPts.some((p) => inside(p, it)))) return void all.push(it);
-    const d = (p: Pt) => Math.abs(p[0] - it.x1) + Math.abs(p[1] - it.y1);
-    const cuts = [...new Map(conn.filter((p) => inside(p, it)).map((p) => [key(...p), p])).values()].sort((p, q) => d(p) - d(q));
+    // cut where it matters only: at a moving point inside it, and at the nearest connection on
+    // each side of every moving point (further junctions stay on an unmoved piece: no fragments)
+    const d = (p: Pt) => Math.abs(p[0] - it.x1) + Math.abs(p[1] - it.y1); // along the wire
+    const inner = [...new Map(conn.filter((p) => inside(p, it)).map((p) => [key(...p), p])).values()].sort((p, q) => d(p) - d(q));
+    const marks = [...ends(it), ...inner].filter((p) => moving.has(key(...p))).map(d);
+    const cuts = inner.filter((p, k) => moving.has(key(...p)) || marks.some((m) =>
+      (d(p) > m && (k === 0 || d(inner[k - 1]) <= m)) || (d(p) < m && (k === inner.length - 1 || d(inner[k + 1]) >= m))));
     const pts: Pt[] = [[it.x1, it.y1], ...cuts, [it.x2, it.y2]];
     pts.slice(1).forEach(([x2, y2], k) => (k ? pieces : all).push({ ...it, x1: pts[k][0], y1: pts[k][1], x2, y2 }));
   });

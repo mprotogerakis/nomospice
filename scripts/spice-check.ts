@@ -84,7 +84,7 @@ assert.equal(analysisRoundTrips(".dc lin V1 0 5 0.1"), false);
 {
   const o = analysisOptions([{ text: ".ac dec 10 1 1k", directive: false }, { text: ".param R=1k\n.tran 0 1m\n+ 0 1u", directive: true }, { text: ".ac dec 50 1 1Meg", directive: true }, { text: "a note" }]);
   assert.deepEqual(o.map((x) => [x.kind, x.line, x.active]), [["tran", ".tran 0 1m\n+ 0 1u", true], ["ac", ".ac dec 50 1 1Meg", true]]);
-  assert.deepEqual(analysisOptions([{ text: ".op point is checked first" }, { text: ".tran is great" }, { text: ".tran 0 1m startup" }]).map((o) => o.kind), ["tran"], "notes are not analyses");
+  assert.deepEqual(analysisOptions([{ text: ".op point is checked first" }, { text: ".tran is great" }, { text: ".tran 0 1m startup" }, { text: ".pz shows poles" }, { text: ".tf is a transfer function" }, { text: ".pz in 0 out 0 vol pz" }]).map((o) => o.kind), ["tran", "pz"], "notes are not analyses");
   assert.equal(stripAnalyses(".param R=1k\n.tran 0 1m\n* c\n+ 0 1u\n.meas tran x AVG V(a)"), ".param R=1k\n* c\n.meas tran x AVG V(a)");
 }
 { const { f } = parseAnalysis(".sens V(out) dc"); assert.equal(formatAnalysis("sens", { ...f, mode: "ac" }), ".sens V(out) ac dec 10 10 1Meg"); } // `dc` is the mode, not an option
@@ -139,6 +139,10 @@ assert.equal(numInfo("1Meg", "Hz")!.text, "= 1MegHz"); // not "1M", the milli tr
   const leg = dragPlan(items as never, {}, new Set([1]))(0, 20).find((w) => w.t === "wire" && w.x1 === 50 && w.x2 === 50) as { y1: number; y2: number };
   assert.ok(leg.y1 === 20 && leg.y2 === 50, `the T-leg follows the moved wire: ${JSON.stringify(leg)}`);
   assert.equal(dragPlan(items as never, {}, new Set([0]))(0, 0).length, 4, "the stretched wire is cut at the junction");
+  // a bus with three junctions, dragged from one end: cut at the nearest junction only
+  const bus = [{ t: "flag" as const, x: 0, y: 0, name: "a" }, W(0, 0, 100, 0), W(25, 0, 25, 50), W(50, 0, 50, 50), W(75, 0, 75, 50)];
+  const busOut = dragPlan(bus as never, {}, new Set([0]))(0, 20);
+  assert.ok(busOut.length === 6 && [25, 50, 75].every((x) => connectivity(busOut as never, {}).dots.some((p) => p[0] === x && p[1] === 0)), JSON.stringify(busOut));
   // a wire between two moving parts moves whole (no V), its T-leg stretches
   const two = [{ t: "flag" as const, x: 0, y: 0, name: "a" }, { t: "flag" as const, x: 100, y: 0, name: "b" }, W(0, 0, 100, 0), W(50, 0, 50, 50)];
   const out = dragPlan(two as never, {}, new Set([0, 1]))(0, 20) as ReturnType<typeof W>[];

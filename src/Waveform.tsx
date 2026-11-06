@@ -321,7 +321,7 @@ export const Waveform = memo(function Waveform() {
 });
 
 /** `.meas` results of the run (ngspice reports them in the log; LTspice in its error log). */
-function Measurements({ xUnit }: { xUnit: string }) {
+export function Measurements({ xUnit }: { xUnit: string }) {
   const meas = useS((s) => s.sim?.run?.meas);
   if (!meas?.length) return null;
   return (
