@@ -53,6 +53,8 @@ interface State {
   tab: Analysis | null;
   /** The other tabs' results, kept while another tab is shown. */
   tabs: Partial<Record<Analysis, TabState>>;
+  /** The tab `sim`, `traces`, `plot` belong to (what was last run or brought back). */
+  shown: Analysis | null;
 }
 
 /** A result tab in the background: what `sim`, `traces`, `plot`, `stale` hold for the shown one;
@@ -69,7 +71,7 @@ export const plotKind = (sim: Sim | null) => `${sim?.run?.plot.replace(/\d+$/, "
 export const useS = create<State>(() => ({
   items: [], past: [], future: [], sel: [], tool: { k: "select" }, lib: {}, path: null, dirty: false,
   nets: null, netsItems: null, sim: null, running: false, stale: false, traces: [], live: false, panel: null, dialog: null,
-  fitToken: 0, plot: NO_PLOT, menu: null, git: null, diff: null, tab: null, tabs: {},
+  fitToken: 0, plot: NO_PLOT, menu: null, git: null, diff: null, tab: null, tabs: {}, shown: null,
 }));
 const set = useS.setState;
 const get = useS.getState;
@@ -156,7 +158,7 @@ export async function loadDoc(items: Item[], path: string | null) {
   await loadSymbols(items, dirOf(path));
   docGen++;
   autoPlotted = new Set();
-  set({ dialog: null, menu: null, tab: null, tabs: {}, items, path, past: [], future: [], sel: [], dirty: false, sim: null, traces: [], stale: false, nets: null, netsItems: null, plot: NO_PLOT, panel: get().panel === "op" ? null : get().panel, diff: null, tool: { k: "select" }, fitToken: get().fitToken + 1 });
+  set({ dialog: null, menu: null, tab: null, tabs: {}, shown: null, items, path, past: [], future: [], sel: [], dirty: false, sim: null, traces: [], stale: false, nets: null, netsItems: null, plot: NO_PLOT, panel: get().panel === "op" ? null : get().panel, diff: null, tool: { k: "select" }, fitToken: get().fitToken + 1 });
   refreshNets();
   refreshGit();
 }
@@ -248,25 +250,40 @@ export function simDeck(items: Item[], tab: Analysis | null) {
  *  that never ran runs now). Not while a simulation runs: its result belongs to the shown tab. */
 export function selectTab(kind: Analysis) {
   const s = get();
-  const cur = currentTab(s);
-  if (s.running || cur === kind) return;
+  if (s.running) return;
+  if (s.shown === kind) return void (s.tab !== kind && set({ tab: kind }));
+  set({ tab: kind, ...swapTo(s, kind) });
+  if (!get().sim) void simulate();
+}
+
+/** The shown results put away under their tab (if the schematic still has it), `kind`'s back. */
+function swapTo(s: State, kind: Analysis | null): Partial<State> {
   const tabs = { ...s.tabs };
-  if (cur) tabs[cur] = { sim: s.sim, traces: s.traces, plot: s.plot, stale: s.stale, at: s.items };
-  const next = tabs[kind];
-  delete tabs[kind];
+  if (s.shown && analysesOf(s.items).some((o) => o.kind === s.shown)) tabs[s.shown] = { sim: s.sim, traces: s.traces, plot: s.plot, stale: s.stale, at: s.items };
+  const next = kind ? tabs[kind] : undefined;
+  if (kind) delete tabs[kind];
   const sim = next?.sim ?? null, view = viewOf(sim);
-  set({
-    tabs, tab: kind, sim, traces: next?.traces ?? [], plot: next?.plot ?? NO_PLOT,
+  return {
+    tabs, shown: kind, sim, traces: next?.traces ?? [], plot: next?.plot ?? NO_PLOT,
     stale: !!sim && (next!.stale || next!.at !== s.items),
     panel: view === "table" ? "op" : s.panel === "op" ? null : s.panel,
-  });
-  if (!sim) void simulate();
+  };
 }
+
+// An edit deleted the shown results' analysis or made it another kind: the tab now shown gets
+// its own results (none yet: Run), never the other analysis' under its name.
+useS.subscribe((s, prev) => {
+  if (s.items === prev.items || !s.shown || s.running) return;
+  const cur = currentTab(s);
+  if (cur === s.shown) return;
+  const keep = !!s.tab && analysesOf(s.items).some((o) => o.kind === s.tab);
+  set({ tab: keep ? s.tab : null, ...swapTo(s, cur) });
+});
 
 export async function simulate() {
   if (get().running) return;
   const { items, path, tab } = get();
-  const deck = simDeck(items, tab);
+  const deck = simDeck(items, tab), shown = currentTab(get()); // the tab these results are for
   const gen = docGen;
   runSeq++;
   set({ running: true });
@@ -277,7 +294,7 @@ export async function simulate() {
     const op = isOp(sim);
     const newKind = !!sim.run && plotKind(sim) !== get().plot.kind;
     set({
-      sim, stale: changed, ...(!changed && { nets: sim.netlist, netsItems: items }),
+      sim, shown, stale: changed, ...(!changed && { nets: sim.netlist, netsItems: items }),
       // another analysis: fresh zoom/cursors, and old-kind data never drawn on the new axes
       ...(newKind && { plot: { ...NO_PLOT, kind: plotKind(sim) }, traces: get().traces.map((t) => ({ ...t, data: undefined })) }),
       panel: !sim.run || sim.run.aborted ? "log" : op ? "op" : get().panel === "op" && !sim.run.op.length ? null : get().panel,
@@ -304,7 +321,7 @@ export async function simulate() {
     }
   } catch (e) {
     // stale cleared so live mode does not retry a hard failure every 350 ms
-    if (gen === docGen) set({ sim: { netlist: get().nets ?? { text: "", nets: [], insts: [], probes: [], warnings: [] }, simulated: "", run: null, log: [String(e)], sweepable: [] }, panel: "log", stale: false });
+    if (gen === docGen) set({ shown, sim: { netlist: get().nets ?? { text: "", nets: [], insts: [], probes: [], warnings: [] }, simulated: "", run: null, log: [String(e)], sweepable: [] }, panel: "log", stale: false });
   } finally {
     set({ running: false });
   }

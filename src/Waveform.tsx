@@ -327,8 +327,8 @@ function Measurements({ xUnit }: { xUnit: string }) {
   return (
     <div className="border-b border-border px-2 py-1 font-mono text-2xs">
       <div className="text-text-tertiary">Measurements (.meas)</div>
-      {meas.map(([name, v, info]) => (
-        <div key={name} className="truncate" title={v == null ? "ngspice could not evaluate it: see the log (⌘L)" : info}>
+      {meas.map(([name, v, info], k) => (
+        <div key={`${name}${k}`} className="truncate" title={v == null ? "ngspice could not evaluate it: see the log (⌘L)" : info}>
           <span className="text-text">{name}</span> = {v == null ? <span className="text-status-danger">failed</span> : si(v, /targ=|trig=/.test(info) ? xUnit : "", 5)}
         </div>
       ))}
@@ -352,7 +352,8 @@ const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot }: { trac
   // average, RMS, integral (LTspice: ctrl-click a trace label) between the cursors, else over what is shown
   const zoom = useS((s) => s.plot.zoom);
   const [lo, hi] = dx ? [Math.min(a!, b!), Math.max(a!, b!)] : zoom ?? [Math.min(xs[0], xs[xs.length - 1]), Math.max(xs[0], xs[xs.length - 1])];
-  const stats = traces.flatMap((t) => panes.flatMap((p) => p.series.filter((s) => s.t === t && p.unit !== "dB" && p.unit !== "°").map((s) => ({ t, unit: p.unit, ...integrate(xs, s.y, lo, hi) }))));
+  const stats = useMemo(() => traces.flatMap((t) => panes.flatMap((p) => p.series.filter((s) => s.t === t && p.unit !== "dB" && p.unit !== "°").map((s) => ({ t, unit: p.unit, ...integrate(xs, s.y, lo, hi) })))),
+    [traces, panes, xs, lo, hi]); // not per hover move
   return (
     <>
       <table className="w-full table-fixed font-mono text-2xs">

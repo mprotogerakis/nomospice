@@ -280,7 +280,6 @@ export function stripAnalyses(text: string) {
 export const analysisIndex = (lines: string[]) => lines.findIndex((l) => ANALYSIS.test(l.trim()));
 export const analysisLine = (text: string) => { const l = text.split("\n"); return l[analysisIndex(l)] as string | undefined; };
 /** Whether a schematic item is a directive holding an analysis (the one the simulation dialog edits). */
-export const holdsAnalysis = (it?: { t: string; directive?: boolean; text?: string }) => it?.t === "text" && !!it.directive && !!analysisLine(it.text ?? "");
 export type Fields = Record<string, string>;
 
 /** `v(a)`, `v(a,b)`, `i(V1)` -> output fields (okind v|i, node, ref, isrc). */
@@ -480,7 +479,7 @@ export function formatMeas(m: Meas): string {
 /** Trapezoid integral of y over [lo, hi] (samples inside, ends interpolated), its average and RMS. */
 export function integrate(xs: number[], ys: (number | null)[], lo: number, hi: number) {
   const pts: [number, number][] = [[lo, at(xs, ys, lo)]];
-  xs.forEach((x, i) => x > lo && x < hi && ys[i] != null && pts.push([x, ys[i]!]));
+  xs.forEach((x, i) => x > lo && x < hi && pts.push([x, ys[i] ?? NaN])); // a gap's segments are left out
   pts.push([hi, at(xs, ys, hi)]);
   pts.sort((p, q) => p[0] - q[0]); // a sweep may run downwards
   // average and RMS over the part with data (a gap, or a range beyond the run, does not count as 0)

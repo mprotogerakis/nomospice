@@ -15,7 +15,7 @@ fn tools() -> Value {
     json!([
         {
             "name": "simulate",
-            "description": "Simulate a schematic with ngspice. Returns the analysis (plot, scale), all vector names, operating-point/result values, netlist warnings, the ngspice log tail on failure, and the requested traces downsampled to `points` samples. Trace expressions use ngspice syntax: v(\"net\"), v(\"a\")-v(\"b\"), i(vsense_r1) for the current into R1's pin 1 (every R C L D Q M J has such a sensor), i(v1) for sources, db(v(\"out\")).",
+            "description": "Simulate a schematic with ngspice. Returns the analysis (plot, scale), all vector names, operating-point/result values, .meas results (LTspice syntax works), netlist warnings, the ngspice log tail on failure, and the requested traces downsampled to `points` samples. Trace expressions use ngspice syntax: v(\"net\"), v(\"a\")-v(\"b\"), i(vsense_r1) for the current into R1's pin 1 (every R C L D Q M J has such a sensor), i(v1) for sources, db(v(\"out\")).",
             "inputSchema": { "type": "object", "properties": {
                 "path": path, "asc": asc,
                 "traces": { "type": "array", "items": { "type": "string" }, "description": "ngspice expressions to return as waveforms" },
@@ -118,6 +118,8 @@ fn call(base: &Path, name: &str, args: &Value) -> Result<Value, String> {
                 "ok": true, "plot": run.plot, "scale": run.scale, "aborted": run.aborted,
                 "vectors": run.vectors,
                 "values": run.op.iter().map(|(n, re, im, unit)| json!({ "name": n, "re": re, "im": im, "unit": unit })).collect::<Vec<_>>(),
+                // .meas results (value null: ngspice could not evaluate it)
+                "measurements": run.meas.iter().map(|(n, v, info)| json!({ "name": n, "value": v, "info": info })).collect::<Vec<_>>(),
                 "warnings": warnings, "traces": traces,
             }))
         }

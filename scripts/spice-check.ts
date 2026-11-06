@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import {
   tokens, formatAnalysis, formatIc, formatInclude, formatMeas, formatModel, formatParams, formatSource, numInfo, parseAnalysis,
-  parseIc, parseInclude, parseMeas, parseModel, parseParams, parseSource, sample, si, spiceNum, directiveKind, analysisRoundTrips, analysisEditable, analysisOptions, at, integrate, stripAnalyses, portablePaths, sourceRoundTrips, holdsAnalysis,
+  parseIc, parseInclude, parseMeas, parseModel, parseParams, parseSource, sample, si, spiceNum, directiveKind, analysisRoundTrips, analysisEditable, analysisOptions, at, integrate, stripAnalyses, portablePaths, sourceRoundTrips,
 } from "../src/spice.ts";
 
 // numbers and the classic pitfalls
@@ -76,6 +76,8 @@ assert.equal(analysisRoundTrips(".dc lin V1 0 5 0.1"), false);
   assert.ok(Math.abs(integrate([2, 1, 0], [2, 1, 0], 0.5, 1.5).avg - 1) < 1e-12);
   assert.equal(at([0, 1], [0, 10], 0.25), 2.5);
   assert.ok(Math.abs(integrate([0, 1, 2], [1, 1, 1], -5, 5).avg - 1) < 1e-12, "a range beyond the data: averaged over the data");
+  const g = integrate([0, 1, 2, 3, 4], [1, 1, null, 3, 3], 0, 4); // a gap between 1 and 3
+  assert.ok(Math.abs(g.area - 4) < 1e-12 && Math.abs(g.avg - 2) < 1e-12, JSON.stringify(g));
 }
 // result tabs: one per kind, the active one wins, alternatives from comments, fixed order
 {
@@ -115,7 +117,6 @@ assert.deepEqual(formatSource(parseSource("PWL(0 0 1m 1) r=0", "AC 1")), { Value
 assert.ok(sample(parseSource("EXP(0 1 0 0)"))!.every(([, v]) => Number.isFinite(v))); // tau 0: no NaN
 assert.ok(sourceRoundTrips("") && sourceRoundTrips(undefined, "", "")); // an empty source is DC 0, not text
 assert.equal(analysisRoundTrips(".ac list 1k 2k 5k"), false); // the form has no `list` sweep
-assert.ok(holdsAnalysis({ t: "text", directive: true, text: ".param a=1\n.tran 1m" }) && !holdsAnalysis({ t: "text", directive: false, text: ".tran 1m" }));
 for (const v of ["AC 1 2 3", "DC PULSE(0 5 0 1n 1n 1m 2m)"]) assert.equal(sourceRoundTrips(v), false, v); // would change meaning
 assert.equal(formatSource(parseSource("SINE(0 'max(a,b)' 1k)")).Value, "SINE(0 'max(a,b)' 1k)"); // quoted commas stay
 assert.equal(formatSource({ ...parseSource("SINE(0 1 1k)"), args: [] }).Value, "SINE(0 1)"); // required ones: the shown defaults

@@ -144,13 +144,16 @@ impl Library {
     /// comes back with another folder), not a built-in symbol. Another folder (or
     /// none) drops them again; `rescan` reloads the same folder (a symbol saved meanwhile).
     pub fn set_dir(&mut self, dir: Option<&std::path::Path>, rescan: bool) {
-        if !rescan && self.3 .0.as_deref() == dir {
+        let moved = self.3 .0.as_deref() != dir;
+        if !rescan && !moved {
             return;
         }
         for k in self.3 .1.drain() {
             self.0.remove(&k);
         }
-        self.1.clear(); // a name missing before may be in the new folder
+        if moved {
+            self.1.clear(); // a name missing before may be in the new folder (a rescan keeps the misses: they cost disk scans)
+        }
         self.3 .0 = dir.map(std::path::Path::to_path_buf);
         let Some(dir) = dir else { return };
         for p in std::fs::read_dir(dir).into_iter().flatten().flatten().map(|e| e.path()) {
@@ -160,6 +163,7 @@ impl Library {
             if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("asy")) && !builtin {
                 if let Ok(bytes) = std::fs::read(&p) {
                     self.0.insert(key.clone(), parse_asy(&key, &decode(&bytes)));
+                    self.1.remove(&key);
                     self.3 .1.insert(key);
                 }
             }
@@ -780,7 +784,16 @@ fn ltspice_meas(text: &str, sensors: &[Sensor]) -> String {
 
 /// One `.meas` statement (see [`ltspice_meas`]).
 fn meas_statement(s: &str, sensors: &[Sensor], an: &str) -> String {
-    let s = sensor_currents(s, sensors);
+    // LTspice: `;` starts a comment; `FROM = 1m` is `FROM=1m` (the tokens below split at blanks)
+    let s = s.split(';').next().unwrap_or("");
+    let mut flat = String::with_capacity(s.len());
+    for (i, c) in s.char_indices() {
+        let near_eq = s[..i].trim_end().ends_with('=') || s[i..].trim_start().starts_with('=');
+        if !(c.is_whitespace() && near_eq) {
+            flat.push(c);
+        }
+    }
+    let s = sensor_currents(flat.trim_end(), sensors);
     let toks = spice_tokens(&s);
     let low = |t: &str| t.to_ascii_lowercase();
     // a vector, V(..)/I(..) and ngspice's vdb(..), vm(..) … or a number: ngspice reads it as it is
@@ -1675,6 +1688,9 @@ mod tests {
         }
         assert_eq!(sensor_currents("I(R1)+I(R10)+II(R1)", &r1), "i(vsense_r1)+I(R10)+II(R1)");
         assert_eq!(m(".meas tran p AVG 1µ*I(R1)"), ".meas tran p AVG par('1µ*i(vsense_r1)')", "multi-byte text: no panic");
+        assert_eq!(m(".meas tran a AVG V(out) FROM = 1m TO =2m"), ".meas tran a AVG V(out) FROM=1m TO=2m", "blanks around =");
+        assert_eq!(m(".meas tran w WHEN V(out) = 0.5 RISE = 1"), ".meas tran w WHEN V(out)=0.5 RISE=1");
+        assert_eq!(m(".meas tran p AVG -I(V1)*V(in) ; dynamic power"), ".meas tran p AVG par('-I(V1)*V(in)')", "a ; comment is not part of it");
         // the manual's delay and power measurements, end to end
         let deck = "* m\nV1 in 0 PULSE(0 2 0 1n 1n 4n 10n)\nV2 vdd 0 2\nR1 out in 100\nC1 out 0 10p\n.tran 4e-11 40n 0.1n\n.MEAS TRAN TpLH\n* note\n+TRIG V(in) VAL=0.5*V(vdd) TD=22n RISE=1\n+TARG V(out) VAL=0.5*V(vdd) TD=22n RISE=1\n.meas tran pdyn AVG -I(V1)*V(in)\n.meas tran vmax MAX V(out)\n+ FROM=0 TO=10n\n.end\n";
         let text = ltspice_meas(&prepare(deck, None, &mut vec![]).0, &[]);

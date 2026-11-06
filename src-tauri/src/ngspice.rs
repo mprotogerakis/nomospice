@@ -279,18 +279,17 @@ fn measurements(log: &[String]) -> Vec<(String, Option<f64>, String)> {
     for t in log.iter().map(|l| l.trim()) {
         if t.starts_with("Measurements for") {
             on = true;
-        } else if !on {
+        } else if !on || t.is_empty() {
         } else if let Some(stmt) = t.strip_suffix("failed!") {
             if let Some(name) = stmt.split_whitespace().nth(2) {
                 out.push((name.to_string(), None, "failed".into()));
             }
-        } else if let Some((name, rest)) = t.split_once('=') {
-            let (name, rest) = (name.trim(), rest.trim());
-            if name.is_empty() || name.contains(char::is_whitespace) {
-                continue;
-            }
+        } else if let Some((name, rest)) = t.split_once('=').filter(|(n, _)| !n.trim().is_empty() && !n.trim().contains(char::is_whitespace)) {
+            let rest = rest.trim();
             let (v, info) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
-            out.push((name.to_string(), v.trim_end_matches(',').parse().ok(), info.trim().to_string()));
+            out.push((name.trim().to_string(), v.trim_end_matches(',').parse().ok(), info.trim().to_string()));
+        } else {
+            on = false; // the report is over: later `x = y` lines are not measurements
         }
     }
     out
