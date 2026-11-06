@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import {
   formatAnalysis, formatIc, formatInclude, formatMeas, formatModel, formatParams, formatSource, numInfo, parseAnalysis,
-  parseIc, parseInclude, parseMeas, parseModel, parseParams, parseSource, sample, spiceNum, directiveKind,
+  parseIc, parseInclude, parseMeas, parseModel, parseParams, parseSource, sample, spiceNum, directiveKind, analysisRoundTrips, portablePaths,
 } from "../src/spice.ts";
 
 // numbers and the classic pitfalls
@@ -59,4 +59,16 @@ for (const l of [".meas tran vavg AVG V(out) FROM=1m TO=2m", ".meas ac f3db WHEN
 assert.equal(directiveKind(".param a=1"), "param");
 assert.equal(directiveKind(".param a=1\n.param b=2"), "text");
 assert.equal(directiveKind(".meas tran x DERIV V(out) AT=1m"), "text");
+// a form never rewrites what it cannot show: such lines open as text
+for (const l of [".meas tran x FIND V(out) WHEN V(in)=0.5", ".meas tran a AVG V(out) TD=1m", ".param R=1k ; load", ".model D1 D(Is=1n) ; fast",
+  ".ic I(L1)=1m", ".ic V(out)=1 I(L1)=0", ".temp 25 50 75", ".model D1 D Is=1n"]) assert.equal(directiveKind(l), "text", l);
+for (const [l, k] of [[".ic V(out)=1", "ic"], [".temp 25", "temp"], [".meas ac f3db WHEN V(out)=0.707", "meas"], [".inc models/x.lib", "include"], [".model D1 D(Is=1n N = 1.8)", "model"]]) assert.equal(directiveKind(l), k, l);
+assert.equal(formatMeas(parseMeas(".meas ac f3db WHEN V(out)=0.707")!), ".meas ac f3db WHEN V(out)=0.707"); // no edge added
+assert.ok(analysisRoundTrips(".tran 1m startup") && analysisRoundTrips(".noise v(out) V1 dec 10 10 1Meg 1"));
+assert.equal(analysisRoundTrips(".dc lin V1 0 5 0.1"), false);
+// extra function arguments (PULSE cycles) survive an edit elsewhere
+const cyc = parseSource("PULSE(0 5 0 1n 1n 0.5m 1m 10)");
+cyc.acMag = "1";
+assert.equal(formatSource(cyc).Value, "PULSE(0 5 0 1n 1n 0.5m 1m 10)");
+assert.equal(portablePaths(".include C:\\models\\new.lib\nR1 a b 1k"), ".include C:/models/new.lib\nR1 a b 1k");
 console.log("spice-check: ok");

@@ -123,7 +123,8 @@ function argList(func: Func, args: string[]) {
   if (func === "PWL") return args.map((a) => a.trim()).filter(Boolean);
   const defs = FUNCS[func];
   const last = args.reduce((n, a, i) => (a.trim() ? i : n), -1);
-  return defs.slice(0, Math.max(last + 1, 2)).map((d, i) => args[i]?.trim() || d.def);
+  // arguments beyond the form's fields (PULSE cycles, LTspice's Ncycles ...) are kept as typed
+  return Array.from({ length: Math.max(last + 1, 2) }, (_, i) => args[i]?.trim() || defs[i]?.def || "0");
 }
 
 /** The attributes LTspice writes: Value (DC and/or function), Value2 (AC), SpiceLine (parasitics). */
@@ -255,14 +256,42 @@ export function formatAnalysis(kind: Analysis, f: Fields): string {
 
 export type DirectiveKind = "param" | "model" | "meas" | "ic" | "temp" | "include" | "text";
 
-/** Which form edits this directive text (one line of a known kind), else "text". */
+/** A line in comparable form: case, quotes, spaces around `=` and runs of spaces do not matter. */
+export const sameSpice = (a: string, b: string) => {
+  const n = (l: string) => l.toLowerCase().replace(/["']/g, "").replace(/\s*=\s*/g, "=").replace(/^\s*\.inc(lude)?\b/, ".include").replace(/^\s*\.measure\b/, ".meas").replace(/\s+/g, " ").trim();
+  return n(a) === n(b);
+};
+
+/** The line a form would write for `line` (null: the form cannot read it). */
+function viaForm(kind: DirectiveKind, line: string): string | null {
+  switch (kind) {
+    case "param": return formatParams(parseParams(line));
+    case "model": { const m = parseModel(line); return m && formatModel(m.name, m.type, m.params); }
+    case "meas": { const m = parseMeas(line); return m && formatMeas(m); }
+    case "ic": return formatIc(parseIc(line));
+    case "temp": return `.temp ${line.trim().split(/\s+/)[1] ?? ""}`;
+    case "include": { const i = parseInclude(line); return formatInclude(i.lib, i.path, i.section); }
+    default: return null;
+  }
+}
+
+/** Which form edits this directive: one line of a known kind that the form writes back unchanged
+ *  (an inline comment, `.ic I(L1)=…`, a `.meas … TD=1m` the form does not show: "text"). */
 export function directiveKind(text: string): DirectiveKind {
   const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
   if (lines.length !== 1) return "text";
-  const l = lines[0].toLowerCase();
-  return l.startsWith(".param ") ? "param" : l.startsWith(".model ") && parseModel(lines[0]) ? "model" : l.startsWith(".meas") && parseMeas(lines[0]) ? "meas"
-    : l.startsWith(".ic ") ? "ic" : l.startsWith(".temp ") ? "temp" : /^\.(inc|include|lib)\s/.test(l) ? "include" : "text";
+  const l = lines[0], low = l.toLowerCase();
+  const kind: DirectiveKind = low.startsWith(".param ") ? "param" : low.startsWith(".model ") ? "model" : /^\.meas(ure)?\s/.test(low) ? "meas"
+    : low.startsWith(".ic ") ? "ic" : low.startsWith(".temp ") ? "temp" : /^\.(inc|include|lib)\s/.test(low) ? "include" : "text";
+  const back = viaForm(kind, l);
+  return back !== null && sameSpice(back, l) ? kind : "text";
 }
+
+/** Whether the simulation dialog writes this analysis line back unchanged. */
+export const analysisRoundTrips = (line: string) => { const { kind, f } = parseAnalysis(line); return sameSpice(formatAnalysis(kind, f), line); };
+
+/** Include paths with forward slashes: portable, and safe from the .asc `\n` newline escape. */
+export const portablePaths = (text: string) => text.split("\n").map((l) => (/^\s*\.(inc|lib)/i.test(l) ? l.replaceAll("\\", "/") : l)).join("\n");
 
 /** `name = value` pairs, spaces around `=` allowed. */
 const pairs = (s: string) => tokens(s.replace(/\s*=\s*/g, "=")).map((p) => { const k = p.indexOf("="); return k > 0 ? [p.slice(0, k), p.slice(k + 1)] : [p, ""]; });
@@ -330,12 +359,12 @@ export function parseMeas(line: string): Meas | null {
 }
 export function formatMeas(m: Meas): string {
   const v = (k: string, d = "") => m.f[k]?.trim() || d;
-  const edge = (e: string, n: string) => `${(v(e) || "rise").toUpperCase()}=${v(n, "1")}`;
+  const edge = (e: string, n: string) => (v(e) ? ` ${v(e).toUpperCase()}=${v(n, "1")}` : ""); // none: the first crossing
   const body = {
     stat: () => [v("op", "AVG"), v("expr", "V(out)"), v("from") && `FROM=${v("from")}`, v("to") && `TO=${v("to")}`].filter(Boolean).join(" "),
     find: () => `FIND ${v("expr", "V(out)")} AT=${v("at", "1m")}`,
-    when: () => `WHEN ${v("expr", "V(out)")}=${v("val", "0")} ${edge("edge", "n")}`,
-    delay: () => `TRIG ${v("expr", "V(in)")} VAL=${v("val", "0.5")} ${edge("edge", "n")} TARG ${v("expr2", "V(out)")} VAL=${v("val2", "0.5")} ${edge("edge2", "n2")}`,
+    when: () => `WHEN ${v("expr", "V(out)")}=${v("val", "0")}${edge("edge", "n")}`,
+    delay: () => `TRIG ${v("expr", "V(in)")} VAL=${v("val", "0.5")}${edge("edge", "n")} TARG ${v("expr2", "V(out)")} VAL=${v("val2", "0.5")}${edge("edge2", "n2")}`,
   }[m.type]();
   return `.meas ${m.an} ${m.name.trim() || "result"} ${body}`;
 }

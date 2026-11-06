@@ -163,8 +163,11 @@ function Sidebar({ poles, zeros, locus, setLocus }: { poles: P[]; zeros: P[]; lo
     useS.setState({ running: true });
     try {
       const { items, path } = useS.getState();
-      const steps = await invoke<[string, number, number][][]>("root_locus", { items, dir: dirOf(path), target: f.target.trim(), values });
-      setLocus({ values, target: f.target.trim(), steps: steps.map((s) => s.filter(([n]) => n.startsWith("pole")).map(([, re, im]) => ({ re, im }))) });
+      // a step is null where .pz failed (drawn as a gap); fewer steps than values: halted
+      const steps = await invoke<([string, number, number][] | null)[]>("root_locus", { items, dir: dirOf(path), target: f.target.trim(), values });
+      const failed = steps.filter((x) => !x).length;
+      setError([failed && `${failed} of ${steps.length} steps found no poles (gaps in the paths).`, steps.length < values.length && `Halted after ${steps.length} of ${values.length} steps.`].filter(Boolean).join(" "));
+      setLocus({ values: values.slice(0, steps.length), target: f.target.trim(), steps: steps.map((s) => (s ?? []).filter(([n]) => n.startsWith("pole")).map(([, re, im]) => ({ re, im }))) });
     } catch (e) {
       setError(String(e));
     } finally {

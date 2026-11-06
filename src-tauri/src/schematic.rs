@@ -396,12 +396,16 @@ const BUILTIN_MODELS: &[(&str, &str)] = &[
 /// `text` with `target` set to `value`: a `.param` (`name=…`, spaces around `=` allowed) or the
 /// value of an R, C or L instance (the token after its two nodes). None if neither is in the deck.
 pub fn vary(text: &str, target: &str, value: f64) -> Option<String> {
-    let t = target.trim().to_lowercase();
+    // ASCII names only, and ASCII lowercase: byte offsets in `low` are offsets in `line`
+    let t = target.trim().to_ascii_lowercase();
+    if t.is_empty() || !t.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_') {
+        return None;
+    }
     let v = format!("{value:e}");
     let mut found = false;
     let out: Vec<String> = text.lines().map(|line| {
-        let low = line.trim_start().to_lowercase();
-        if low.starts_with(".param") {
+        let low = line.to_ascii_lowercase();
+        if low.trim_start().starts_with(".param") {
             // find `name =` at a word start, then replace the value token after it
             let b = line.as_bytes();
             let mut i = 0;
@@ -1288,6 +1292,8 @@ mod tests {
         assert!(vary(deck, "Cx", 1.0).unwrap().contains("Cx=1e0"));
         assert!(vary(deck, "c1", 1e-6).unwrap().contains("C1 b 0 1e-6"));
         assert_eq!(vary(deck, "R2", 1.0), None);
+        assert!(vary("  .param a=1 µ=2\n", "a", 5.0).unwrap().contains("  .param a=5e0 µ=2"), "indented, non-ASCII");
+        assert_eq!(vary(deck, "µ", 1.0), None);
         // RC low-pass: the pole moves with R (-1/RC)
         let _s = SIM.lock();
         let bode = EXAMPLES.iter().find(|e| e.0 == "rc_bode").unwrap().1.replace(".ac dec 50 10 1Meg", ".pz in 0 out 0 vol pz");

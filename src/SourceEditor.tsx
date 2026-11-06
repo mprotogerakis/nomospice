@@ -53,6 +53,10 @@ export function SourceEditor({ attrs, setAttrs, current }: { attrs: Attrs; setAt
             : src.func ? FUNCS[src.func].map((a, i) => (
               <NumField key={`${src.func}${i}`} label={a.label} value={src.args[i] ?? ""} set={(v) => setArg(i, v)} unit={a.unit === "y" ? y : a.unit} placeholder={a.def} autofocus={i === 0} />
             )) : null}
+          {src.func && src.func !== "PWL" && src.args.length > FUNCS[src.func].length && (
+            <TextField label="More arguments" value={src.args.slice(FUNCS[src.func].length).join(" ")} hint="kept as written (e.g. a cycle count)"
+              set={(v) => update({ ...src, args: [...src.args.slice(0, FUNCS[src.func as Exclude<Func, "PWL">].length), ...v.split(/\s+/)] })} />
+          )}
           <NumField label={src.func ? "DC value" : "Value"} value={src.dc} set={(dc) => update({ ...src, dc })} unit={y} autofocus={!src.func}
             hint={src.func ? "only for the operating point (.op, .dc)" : undefined} />
           <Section>Small signal (.ac, .noise)</Section>

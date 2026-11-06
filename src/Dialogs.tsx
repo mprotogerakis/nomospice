@@ -11,7 +11,7 @@ import { closeDialog, Field, FIELD, Modal, numHelp, TextField } from "./ui/dialo
 import { SourceEditor } from "./SourceEditor";
 import { SimDialog } from "./SimDialog";
 import { DirectiveDialog } from "./DirectiveDialog";
-import { ANALYSIS, tokens } from "./spice";
+import { analysisRoundTrips, ANALYSIS, portablePaths, tokens } from "./spice";
 import { cn, keys } from "@/lib/utils";
 import thirdParty from "./third-party.json";
 
@@ -27,8 +27,7 @@ function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: 
     if (it.t === "sym") onDone({ ...it, attrs: Object.fromEntries(Object.entries(it.attrs).filter(([, v]) => v.trim())) });
     else if ((it.t === "flag" && !it.name.trim()) || (it.t === "text" && !it.text.trim())) close();
     else if (it.t === "text" && it.directive) {
-      // forward slashes in include paths: portable, and safe from the .asc `\n` newline escape
-      onDone({ ...it, text: it.text.split("\n").map((l) => (/^\s*\.(inc|lib)/i.test(l) ? l.replaceAll("\\", "/") : l)).join("\n") });
+      onDone({ ...it, text: portablePaths(it.text) }); // a comment just turned into a directive
     } else onDone(it);
   };
   const def = it.t === "sym" ? defOf(lib, it) : undefined;
@@ -338,7 +337,9 @@ export const Dialogs = memo(function Dialogs() {
       if (!it) return null;
       const commitIt = (next: Item) => (commit(items.map((x, i) => (i === dialog.index ? next : x))), close());
       if (it.t === "text" && it.directive) {
-        if (!dialog.raw && it.text.split("\n").some((l) => ANALYSIS.test(l.trim()))) return <SimDialog key={dialog.index} index={dialog.index} />;
+        // the simulation form edits the first analysis line, if it can write it back unchanged
+        const first = it.text.split("\n").find((l) => ANALYSIS.test(l.trim()));
+        if (!dialog.raw && first && analysisRoundTrips(first)) return <SimDialog key={dialog.index} index={dialog.index} />;
         return <DirectiveDialog key={`${dialog.index}${dialog.raw ? "raw" : ""}`} item={it} title="SPICE Directive" raw={dialog.raw} onDone={commitIt} />;
       }
       return <ItemForm key={dialog.index} item={it} title={it.t === "sym" ? `Edit ${it.attrs.InstName ?? it.sym}` : it.t === "flag" ? "Net Name" : "Edit Text"}
@@ -351,7 +352,15 @@ export const Dialogs = memo(function Dialogs() {
       return <ItemForm item={dialog.item} title={dialog.item.t === "flag" ? "Net Name" : dialog.item.t === "text" && dialog.item.directive ? "SPICE Directive" : "Comment"}
         onDone={(it) => at && it.t !== "wire" && it.t !== "raw" ? (commit([...items, { ...it, x: at[0], y: at[1] }]), close()) : useS.setState({ dialog: null, tool: { k: "place", item: it } })} />;
     }
-    case "sim": return <SimDialog />;
+    case "sim": {
+      // an analysis the form cannot read (LTspice-only options, unusual syntax) opens as text
+      const i = items.findIndex((x) => x.t === "text" && x.directive && x.text.split("\n").some((l) => ANALYSIS.test(l.trim())));
+      const it = items[i];
+      const first = it?.t === "text" ? it.text.split("\n").find((l) => ANALYSIS.test(l.trim())) : undefined;
+      if (it?.t === "text" && first && !analysisRoundTrips(first))
+        return <DirectiveDialog key={i} item={it} title="SPICE Directive" raw onDone={(next) => (commit(items.map((x, j) => (j === i ? next : x))), close())} />;
+      return <SimDialog />;
+    }
     case "parts": return <PartsDialog replace={dialog.replace} kind0={dialog.kind} />;
     case "trace": return <TraceDialog />;
     case "about": return <AboutDialog />;

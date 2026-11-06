@@ -5,7 +5,7 @@ import type { Item } from "./types";
 import { dirOf, useS } from "./store";
 import {
   directiveKind, formatIc, formatInclude, formatMeas, formatModel, formatParams, MODEL_PARAMS, MODEL_TYPES, parseIc, parseInclude,
-  numInfo, parseMeas, parseModel, parseParams, type DirectiveKind, type Meas,
+  numInfo, parseMeas, parseModel, parseParams, portablePaths, type DirectiveKind, type Meas,
 } from "./spice";
 import { CircuitLists, Field, FIELD, Modal, NumField, Section, Select, SpiceLine, TextField } from "./ui/dialog";
 import { Button } from "./ui/button";
@@ -20,7 +20,7 @@ const MEAS_TYPES: [Meas["type"], string][] = [
   ["stat", "Statistic over an interval (average, RMS, min, max …)"], ["find", "Value at a point (FIND … AT)"],
   ["when", "Where a signal reaches a value (WHEN)"], ["delay", "Delay between two crossings (TRIG/TARG)"],
 ];
-const EDGES: [string, string][] = [["rise", "rising"], ["fall", "falling"], ["cross", "either"]];
+const EDGES: [string, string][] = [["", "the first one"], ["rise", "rising"], ["fall", "falling"], ["cross", "either direction"]];
 
 /** One model parameter: name, meaning, value, unit and how SPICE reads it, in one row. */
 function ParamRow({ name, desc, unit, value, set }: { name: string; desc: string; unit: string; value: string; set: (v: string) => void }) {
@@ -61,6 +61,7 @@ export function DirectiveDialog({ item, title, raw, onDone }: { item: Text; titl
   const one = item.text.trim();
   const [tab, setTab] = useState<DirectiveKind>(raw ? "text" : directiveKind(item.text));
   const [text, setText] = useState(item.text);
+  const [directive, setDirective] = useState(true); // the Text tab can turn it into a comment
   const [params, setParams] = useState(() => (tab === "param" ? parseParams(one) : [["", ""]]));
   const [model] = useState(() => (tab === "model" ? parseModel(one) : null));
   const [mName, setMName] = useState(model?.name ?? "");
@@ -95,7 +96,7 @@ export function DirectiveDialog({ item, title, raw, onDone }: { item: Text; titl
     const rel = dir && (path.startsWith(`${dir}/`) || path.startsWith(`${dir}\\`)) ? path.slice(dir.length + 1) : path;
     setInc({ ...inc, path: rel.replaceAll("\\", "/") });
   };
-  const done = () => (line.trim() ? onDone({ ...item, text: line }) : useS.setState({ dialog: null }));
+  const done = () => (line.trim() ? onDone({ ...item, text: portablePaths(line), directive: tab !== "text" || directive }) : useS.setState({ dialog: null }));
 
   return (
     <Modal title={title} onSubmit={done} wide>
@@ -113,6 +114,10 @@ export function DirectiveDialog({ item, title, raw, onDone }: { item: Text; titl
           <textarea data-autofocus rows={6} className={cn(FIELD_BASE, FIELD_FOCUS, "w-full p-2 font-mono")} value={text} spellCheck={false}
             placeholder={".tran 1m\n.param R=1k\n.model D1N4148 D(...)"} onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && (e.metaKey || e.ctrlKey) && (e.preventDefault(), done())} />
+          <label className="flex items-center gap-2 text-xs text-text-secondary">
+            <input type="checkbox" checked={directive} onChange={(e) => setDirective(e.target.checked)} />
+            SPICE directive (otherwise a comment, ignored by the simulation)
+          </label>
           <p className="text-2xs text-text-tertiary">Any SPICE directive, one per line · {keys("⌘↵")} to confirm · the other tabs build the common ones for you</p>
           <Button type="button" size="sm" className="self-start" onClick={() => useS.setState({ dialog: { k: "sim" } })}>Simulation command (.tran, .ac …)</Button>
         </>
@@ -159,8 +164,8 @@ export function DirectiveDialog({ item, title, raw, onDone }: { item: Text; titl
             <>
               <TextField label="Signal" value={mf("expr")} set={setMf("expr")} list="vexprs" placeholder="V(out)" />
               <NumField label="Reaches" value={mf("val")} set={setMf("val")} placeholder="0" />
-              <Select label="Crossing" value={mf("edge") || "rise"} set={setMf("edge")} options={EDGES} />
-              <NumField label="Number" value={mf("n")} set={setMf("n")} placeholder="1" hint="1 = the first one" />
+              <Select label="Crossing" value={mf("edge")} set={setMf("edge")} options={EDGES} />
+              {mf("edge") && <NumField label="Number" value={mf("n")} set={setMf("n")} placeholder="1" hint="1 = the first one" />}
             </>
           )}
           {meas.type === "delay" && (
@@ -168,13 +173,13 @@ export function DirectiveDialog({ item, title, raw, onDone }: { item: Text; titl
               <Section>From (trigger)</Section>
               <TextField label="Signal" value={mf("expr")} set={setMf("expr")} list="vexprs" placeholder="V(in)" />
               <NumField label="Reaches" value={mf("val")} set={setMf("val")} placeholder="0.5" />
-              <Select label="Crossing" value={mf("edge") || "rise"} set={setMf("edge")} options={EDGES} />
-              <NumField label="Number" value={mf("n")} set={setMf("n")} placeholder="1" />
+              <Select label="Crossing" value={mf("edge")} set={setMf("edge")} options={EDGES} />
+              {mf("edge") && <NumField label="Number" value={mf("n")} set={setMf("n")} placeholder="1" />}
               <Section>To (target)</Section>
               <TextField label="Signal" value={mf("expr2")} set={setMf("expr2")} list="vexprs" placeholder="V(out)" />
               <NumField label="Reaches" value={mf("val2")} set={setMf("val2")} placeholder="0.5" />
-              <Select label="Crossing" value={mf("edge2") || "rise"} set={setMf("edge2")} options={EDGES} />
-              <NumField label="Number" value={mf("n2")} set={setMf("n2")} placeholder="1" />
+              <Select label="Crossing" value={mf("edge2")} set={setMf("edge2")} options={EDGES} />
+              {mf("edge2") && <NumField label="Number" value={mf("n2")} set={setMf("n2")} placeholder="1" />}
             </>
           )}
         </>

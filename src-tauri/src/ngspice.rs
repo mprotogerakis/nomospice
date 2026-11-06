@@ -405,6 +405,11 @@ pub fn halt() {
     HALT.store(true, Ordering::SeqCst);
 }
 
+/// Whether Halt was pressed since `arm` (loops of runs, such as a root locus, stop there).
+pub fn halted() -> bool {
+    HALT.load(Ordering::SeqCst)
+}
+
 /// Tests that run simulations share the one ngspice engine: they take this lock.
 #[cfg(test)]
 pub static TEST_SIM: Mutex<()> = Mutex::new(());
