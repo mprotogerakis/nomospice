@@ -6,7 +6,7 @@ import type { Run } from "./types";
 import { dirOf, useS } from "./store";
 import { parseParams, si, spiceNum } from "./spice";
 import { defOf } from "./geom";
-import { FIELD, numHelp } from "./ui/dialog";
+import { NumField, Select, TextField } from "./ui/dialog";
 import { Button } from "./ui/button";
 import { cn } from "@/lib/utils";
 
@@ -86,13 +86,19 @@ export const PoleZero = memo(function PoleZero({ run }: { run: Run }) {
   const onWheel = (e: React.WheelEvent) => {
     const r = host.current!.getBoundingClientRect(), at = val(e.clientX - r.left, e.clientY - r.top);
     const f = Math.exp(-e.deltaY * 0.002), k = v.k * f;
+    if (f > 1 && size.w / k < Math.max(Math.abs(v.cx), Math.abs(v.cy)) * 1e-6) return; // no deeper than a millionth of the values
     setView({ k, cx: at.re - (at.re - v.cx) / f, cy: at.im - (at.im - v.cy) / f });
   };
 
   // grid and axes
   const lo = val(0, size.h), hi = val(size.w, 0);
   const step = tickStep(Math.max(hi.re - lo.re, hi.im - lo.im));
-  const ticks = (a: number, b: number) => { const t: number[] = []; for (let x = Math.ceil(a / step) * step; x <= b; x += step) t.push(Math.abs(x) < step * 1e-9 ? 0 : x); return t; };
+  // from an index, not by adding up steps (which stalls once step < the float spacing of x)
+  const ticks = (a: number, b: number) => {
+    const first = Math.ceil(a / step), n = Math.floor(b / step) - first;
+    if (!isFinite(n) || n < 0 || n > 200) return [];
+    return Array.from({ length: n + 1 }, (_, i) => { const x = (first + i) * step; return Math.abs(x) < step * 1e-9 ? 0 : x; });
+  };
   const [ox, oy] = px({ re: 0, im: 0 });
   const mark = 6;
 
@@ -147,14 +153,13 @@ function Sidebar({ poles, zeros, locus, setLocus }: { poles: P[]; zeros: P[]; lo
   const nets = useS((s) => s.nets);
   const running = useS((s) => s.running);
   // sweepable: .param names and R/C/L instances
-  const targets = useMemo(() => [
+  const targets = useMemo(() => [...new Set([
     ...items.flatMap((it) => (it.t === "text" && it.directive ? it.text.split("\n") : [])).filter((l) => /^\s*\.param\b/i.test(l))
       .flatMap((l) => parseParams(l).map(([n]) => n).filter((n) => /^[a-z_]\w*$/i.test(n))),
     ...items.flatMap((it, i) => (it.t === "sym" && "RCL".includes(defOf(lib, it)?.prefix?.[0]?.toUpperCase() ?? "-") ? [nets?.insts[i] || it.attrs.InstName || ""] : [])).filter(Boolean),
-  ], [items, lib, nets]);
+  ])], [items, lib, nets]);
   const [f, setF] = useState({ target: targets[0] ?? "", from: "", to: "", steps: "40", scale: "log" });
   const [error, setError] = useState("");
-  const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setF({ ...f, [k]: e.target.value });
 
   const compute = async () => {
     const [a, b, n] = [spiceNum(f.from), spiceNum(f.to), Math.round(spiceNum(f.steps) ?? 0)];
@@ -200,20 +205,11 @@ function Sidebar({ poles, zeros, locus, setLocus }: { poles: P[]; zeros: P[]; lo
       <div className="mt-2 font-medium text-text-strong">Root locus</div>
       <p className="text-2xs leading-4 text-text-tertiary">Sweeps a .param or an R/C/L value and draws the poles' paths (● start, ■ end). Each step is one .pz run.</p>
       <datalist id="locus-targets">{targets.map((t) => <option key={t} value={t} />)}</datalist>
-      <label className="grid grid-cols-[70px_1fr] items-center gap-2 text-text-secondary">Parameter<input className={FIELD} list="locus-targets" value={f.target} onChange={set("target")} placeholder="R1 or a .param" /></label>
-      {(["from", "to"] as const).map((k) => {
-        const h = numHelp(f[k], "", (v) => setF({ ...f, [k]: v }));
-        return (
-          <label key={k} className="grid grid-cols-[70px_1fr] items-center gap-x-2 gap-y-0.5 text-text-secondary">
-            {k === "from" ? "From" : "To"}<input className={FIELD} value={f[k]} onChange={set(k)} placeholder={k === "from" ? "100" : "100k"} />
-            {(h.warn || h.info) && <span className={cn("col-start-2 text-2xs", h.warn ? "text-status-warning" : "text-text-tertiary")}>{h.warn ? <>⚠ {h.warn}</> : h.info}</span>}
-          </label>
-        );
-      })}
-      <label className="grid grid-cols-[70px_1fr] items-center gap-2 text-text-secondary">Steps<input className={FIELD} value={f.steps} onChange={set("steps")} /></label>
-      <label className="grid grid-cols-[70px_1fr] items-center gap-2 text-text-secondary">Spacing
-        <select className={FIELD} value={f.scale} onChange={set("scale")}><option value="log">logarithmic</option><option value="lin">linear</option></select>
-      </label>
+      <TextField compact label="Parameter" value={f.target} set={(target) => setF({ ...f, target })} list="locus-targets" placeholder="R1 or a .param" hint="a .param wins over a part of the same name" />
+      <NumField compact label="From" value={f.from} set={(from) => setF({ ...f, from })} placeholder="100" />
+      <NumField compact label="To" value={f.to} set={(to) => setF({ ...f, to })} placeholder="100k" />
+      <NumField compact label="Steps" value={f.steps} set={(steps) => setF({ ...f, steps })} />
+      <Select compact label="Spacing" value={f.scale} set={(scale) => setF({ ...f, scale })} options={[["log", "logarithmic"], ["lin", "linear"]]} />
       <div className="flex gap-2">
         <Button type="button" variant="primary" disabled={running} onClick={compute}>{running ? "Computing…" : "Draw root locus"}</Button>
         {!!locus && <Button type="button" onClick={() => setLocus(null)}>Clear</Button>}

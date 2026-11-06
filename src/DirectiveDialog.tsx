@@ -5,9 +5,9 @@ import type { Item } from "./types";
 import { dirOf, useS } from "./store";
 import {
   directiveKind, formatIc, formatInclude, formatMeas, formatModel, formatParams, MODEL_PARAMS, MODEL_TYPES, parseIc, parseInclude,
-  numInfo, parseMeas, parseModel, parseParams, portablePaths, type DirectiveKind, type Meas,
+  analysisLine, analysisRoundTrips, parseMeas, parseModel, parseParams, portablePaths, type DirectiveKind, type Meas,
 } from "./spice";
-import { CircuitLists, Field, FIELD, Modal, NumField, Section, Select, SpiceLine, TextField } from "./ui/dialog";
+import { CircuitLists, Field, FIELD, Modal, numHelp, NumField, Section, Select, SpiceLine, TextField } from "./ui/dialog";
 import { Button } from "./ui/button";
 import { FIELD_BASE, FIELD_FOCUS } from "./ui/focus";
 import { cn, keys } from "@/lib/utils";
@@ -24,15 +24,15 @@ const EDGES: [string, string][] = [["", "the first one"], ["rise", "rising"], ["
 
 /** One model parameter: name, meaning, value, unit and how SPICE reads it, in one row. */
 function ParamRow({ name, desc, unit, value, set }: { name: string; desc: string; unit: string; value: string; set: (v: string) => void }) {
-  const info = numInfo(value, unit);
+  const help = numHelp(value, unit, set);
   return (
     <label className="grid grid-cols-[64px_1fr_150px_36px_64px] items-center gap-x-2 gap-y-0.5 text-xs">
       <span className="font-mono text-text-strong">{name}</span>
       <span className="truncate text-text-secondary" title={desc}>{desc}</span>
       <input className={FIELD} value={value} spellCheck={false} onChange={(e) => set(e.target.value)} />
       <span className="text-2xs text-text-tertiary">{unit}</span>
-      <span className="truncate font-mono text-2xs text-text-tertiary">{info && /[a-zµμ{']/i.test(value) ? info.text : ""}</span>
-      {info?.warn && <span className="col-span-2 col-start-3 text-2xs text-status-warning">⚠ {info.warn}</span>}
+      <span className="truncate font-mono text-2xs text-text-tertiary">{help.info}</span>
+      {help.warn && <span className="col-span-3 col-start-3 text-2xs text-status-warning">⚠ {help.warn}</span>}
     </label>
   );
 }
@@ -56,24 +56,43 @@ function Rows({ rows, set, a, b, list, unit }: { rows: string[][]; set: (r: stri
   );
 }
 
+/** What form `k` shows for `txt`: the directive's values if `txt` is exactly one of its kind, else empty. */
+function formState(k: DirectiveKind, txt: string) {
+  const one = directiveKind(txt) === k ? txt.trim() : "";
+  const m = k === "model" && one ? parseModel(one) : null;
+  return {
+    params: k === "param" && one ? parseParams(one) : [["", ""]],
+    mName: m?.name ?? "", mType: m?.type ?? "D", mParams: m?.params ?? [],
+    meas: (k === "meas" && one && parseMeas(one)) || ({ an: "tran", name: "", type: "stat", f: { op: "AVG" } } as Meas),
+    ic: k === "ic" && one ? parseIc(one) : [["", ""]],
+    temp: k === "temp" && one ? one.split(/\s+/)[1] ?? "" : "",
+    inc: k === "include" && one ? parseInclude(one) : { lib: false, path: "", section: "" },
+  };
+}
+
 /** New or edited directive; `onDone` gets the item (commit in place, or start placing it). */
 export function DirectiveDialog({ item, title, raw, onDone }: { item: Text; title: string; raw?: boolean; onDone: (it: Item) => void }) {
-  const one = item.text.trim();
+  // The text is the truth. A form, when entered, reads the text if the text is exactly one
+  // directive of its kind (then it edits it); otherwise it starts empty and adds its line.
+  // Leaving a form that was used writes its result into the text, so no tab loses edits.
   const [tab, setTab] = useState<DirectiveKind>(raw ? "text" : directiveKind(item.text));
   const [text, setText] = useState(item.text);
   const [directive, setDirective] = useState(true); // the Text tab can turn it into a comment
-  const [initial] = useState(tab);
-  const [touched, setTouched] = useState<Partial<Record<DirectiveKind, boolean>>>({});
+  const [touched, setTouched] = useState(false); // the current form was used
   const [tried, setTried] = useState(false);
-  const [params, setParams] = useState(() => (tab === "param" ? parseParams(one) : [["", ""]]));
-  const [model] = useState(() => (tab === "model" ? parseModel(one) : null));
-  const [mName, setMName] = useState(model?.name ?? "");
-  const [mType, setMType] = useState(model?.type ?? "D");
-  const [mParams, setMParams] = useState<string[][]>(model?.params ?? []);
-  const [meas, setMeas] = useState<Meas>(() => (tab === "meas" && parseMeas(one)) || { an: "tran", name: "", type: "stat", f: { op: "AVG" } });
-  const [ic, setIc] = useState(() => (tab === "ic" ? parseIc(one) : [["", ""]]));
-  const [temp, setTemp] = useState(() => (tab === "temp" ? one.split(/\s+/)[1] ?? "" : ""));
-  const [inc, setInc] = useState(() => (tab === "include" ? parseInclude(one) : { lib: false, path: "", section: "" }));
+  const [s0] = useState(() => formState(tab, item.text)); // the first tab reads the directive
+  const [params, setParams] = useState(s0.params);
+  const [mName, setMName] = useState(s0.mName);
+  const [mType, setMType] = useState(s0.mType);
+  const [mParams, setMParams] = useState<string[][]>(s0.mParams);
+  const [meas, setMeas] = useState<Meas>(s0.meas);
+  const [ic, setIc] = useState(s0.ic);
+  const [temp, setTemp] = useState(s0.temp);
+  const [inc, setInc] = useState(s0.inc);
+  const load = (k: DirectiveKind, txt: string) => {
+    const s = formState(k, txt);
+    setParams(s.params); setMName(s.mName); setMType(s.mType); setMParams(s.mParams); setMeas(s.meas); setIc(s.ic); setTemp(s.temp); setInc(s.inc);
+  };
 
   const mp = (k: string) => mParams.find(([n]) => n.toUpperCase() === k)?.[1] ?? "";
   const setMp = (k: string, v: string) => setMParams(mParams.some(([n]) => n.toUpperCase() === k) ? mParams.map((p) => (p[0].toUpperCase() === k ? [p[0], v] : p)) : [...mParams, [k, v]]);
@@ -100,9 +119,9 @@ export function DirectiveDialog({ item, title, raw, onDone }: { item: Text; titl
     setInc({ ...inc, path: rel.replaceAll("\\", "/") });
   };
   // a form replaces a directive of its own kind; any other text stays and gets the line added
-  const keeps = tab !== "text" && tab !== initial && text.trim() !== "";
-  const result = tab === "text" ? text : keeps ? `${text.trimEnd()}\n${line}` : line;
-  const invalid = tab === "param" && !params.some(([n]) => n.trim()) ? "Add a parameter name."
+  const keeps = tab !== "text" && directiveKind(text) !== tab && text.trim() !== "";
+  const result = tab === "text" || (!touched && keeps) ? text : keeps ? `${text.trimEnd()}\n${line}` : line;
+  const invalid = !touched && keeps ? "" : tab === "param" && !params.some(([n]) => n.trim()) ? "Add a parameter name."
     : tab === "ic" && !ic.some(([n]) => n.trim()) ? "Add a node."
     : tab === "include" && !inc.path.trim() ? "Choose a file." : "";
   const done = () => {
@@ -110,8 +129,19 @@ export function DirectiveDialog({ item, title, raw, onDone }: { item: Text; titl
     if (!result.trim()) return useS.setState({ dialog: null });
     onDone({ ...item, text: portablePaths(result), directive: tab !== "text" || directive });
   };
-  // to the Text tab: what the form built, if it was used (else the text stays as it was)
-  const toTab = (k: DirectiveKind) => { if (k === "text" && tab !== "text" && touched[tab]) setText(result); setTab(k); setTried(false); };
+  // leaving a used form writes its result into the text; the next form reads the text
+  const toTab = (k: DirectiveKind) => {
+    if (k === tab) return;
+    const next = tab !== "text" && touched && !invalid ? result : text;
+    setText(next);
+    if (k !== "text") load(k, next);
+    setTab(k);
+    setTouched(false);
+    setTried(false);
+  };
+  // an analysis the simulation form cannot read stays here (the button would only come back)
+  const analysis = analysisLine(text);
+  const simForm = !analysis || analysisRoundTrips(analysis);
 
   return (
     <Modal title={title} onSubmit={done} wide>
@@ -134,10 +164,11 @@ export function DirectiveDialog({ item, title, raw, onDone }: { item: Text; titl
             SPICE directive (otherwise a comment, ignored by the simulation)
           </label>
           <p className="text-2xs text-text-tertiary">Any SPICE directive, one per line · {keys("⌘↵")} to confirm · the other tabs build the common ones for you</p>
-          <Button type="button" size="sm" className="self-start" onClick={() => useS.setState({ dialog: { k: "sim" } })}>Simulation command (.tran, .ac …)</Button>
+          {simForm ? <Button type="button" size="sm" className="self-start" onClick={() => useS.setState({ dialog: { k: "sim" } })}>Simulation command (.tran, .ac …)</Button>
+            : <p className="text-2xs text-text-tertiary">This analysis uses options the simulation form does not know, so it is edited here as text.</p>}
         </>
       )}
-      <div className="contents" onInputCapture={() => setTouched({ ...touched, [tab]: true })} onClickCapture={(e) => (e.target as HTMLElement).closest("button") && setTouched({ ...touched, [tab]: true })}>
+      <div className="contents" onInputCapture={() => setTouched(true)} onClickCapture={(e) => (e.target as HTMLElement).closest("button") && setTouched(true)}>
       {tab === "param" && (
         <Field label="Parameters" hint="use them in values as {name}, e.g. {R*2}">
           <Rows rows={params} set={setParams} a="name" b="value" />

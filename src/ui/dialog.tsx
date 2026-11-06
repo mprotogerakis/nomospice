@@ -40,9 +40,9 @@ export function Modal({ title, children, onSubmit, wide, ok = "OK", cancel = tru
   );
 }
 
-export function Field({ label, children, hint, warn }: { label: string; children: React.ReactNode; hint?: React.ReactNode; warn?: React.ReactNode }) {
+export function Field({ label, children, hint, warn, compact }: { label: string; children: React.ReactNode; hint?: React.ReactNode; warn?: React.ReactNode; compact?: boolean }) {
   return (
-    <label className="grid grid-cols-[130px_1fr] items-center gap-x-2 gap-y-0.5 text-xs text-text-secondary">
+    <label className={cn("grid items-center gap-x-2 gap-y-0.5 text-xs text-text-secondary", compact ? "grid-cols-[70px_1fr]" : "grid-cols-[130px_1fr]")}>
       <span>{label}</span>
       {children}
       {warn ? <span className="col-start-2 text-2xs text-status-warning">⚠ {warn}</span>
@@ -52,14 +52,16 @@ export function Field({ label, children, hint, warn }: { label: string; children
 }
 
 /** A text input in a Field with a unit slot and an info slot (how SPICE reads it), aligned across fields. */
-export function TextField({ label, value, set, placeholder, list, unit, info, hint, warn, autofocus }: {
-  label: string; value: string; set: (v: string) => void; placeholder?: string; list?: string; unit?: string; info?: string; hint?: React.ReactNode; warn?: React.ReactNode; autofocus?: boolean;
+export function TextField({ label, value, set, placeholder, list, unit, info, hint, warn, autofocus, compact }: {
+  label: string; value: string; set: (v: string) => void; placeholder?: string; list?: string; unit?: string; info?: string; hint?: React.ReactNode; warn?: React.ReactNode; autofocus?: boolean; compact?: boolean;
 }) {
+  const input = <input className={FIELD} value={value} placeholder={placeholder} list={list} data-autofocus={autofocus || undefined} spellCheck={false} onChange={(e) => set(e.target.value)} />;
+  // compact (narrow panels): no side slots, the reading goes below
+  if (compact) return <Field label={label} compact hint={[info, hint].filter(Boolean).join(" · ") || undefined} warn={warn}>{input}</Field>;
   return (
     <Field label={label} hint={hint} warn={warn}>
       <span className="flex items-center gap-2">
-        <input className={FIELD} value={value} placeholder={placeholder} list={list} data-autofocus={autofocus || undefined} spellCheck={false}
-          onChange={(e) => set(e.target.value)} />
+        {input}
         <span className="w-8 shrink-0 text-2xs text-text-tertiary">{unit}</span>
         <span className="w-[72px] shrink-0 truncate font-mono text-2xs text-text-tertiary" title={info}>{info}</span>
       </span>
@@ -84,20 +86,25 @@ export function numHelp(value: string, unit: string | undefined, set: (v: string
 }
 
 /** A SPICE number field: unit, how SPICE reads it, and the M/F warnings. */
-export function NumField(p: { label: string; value: string; set: (v: string) => void; unit?: string; placeholder?: string; hint?: string; list?: string; autofocus?: boolean }) {
+export function NumField(p: { label: string; value: string; set: (v: string) => void; unit?: string; placeholder?: string; hint?: string; list?: string; autofocus?: boolean; compact?: boolean }) {
   return <TextField {...p} unit={p.unit ?? ""} {...numHelp(p.value, p.unit, p.set)} />;
 }
 
-export function Select({ label, value, set, options, hint }: { label: string; value: string; set: (v: string) => void; options: [string, string][]; hint?: string }) {
+export function Select({ label, value, set, options, hint, compact }: { label: string; value: string; set: (v: string) => void; options: [string, string][]; hint?: string; compact?: boolean }) {
+  const select = (
+    <select className={FIELD} value={value} onChange={(e) => set(e.target.value)}>
+      {options.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+    </select>
+  );
   return (
-    <Field label={label} hint={hint}>
-      <span className="flex items-center gap-2">
-        <select className={FIELD} value={value} onChange={(e) => set(e.target.value)}>
-          {options.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-        </select>
-        <span className="w-8 shrink-0" />
-        <span className="w-[72px] shrink-0" />
-      </span>
+    <Field label={label} hint={hint} compact={compact}>
+      {compact ? select : (
+        <span className="flex items-center gap-2">
+          {select}
+          <span className="w-8 shrink-0" />
+          <span className="w-[72px] shrink-0" />
+        </span>
+      )}
     </Field>
   );
 }

@@ -50,7 +50,7 @@ export function numInfo(s: string, unit = ""): { text: string; warn?: string } |
   const n = spiceNum(v);
   if (n === null) return { text: "", warn: "not a number: SPICE writes 4.7k, 10u, 1Meg, 2.5e-3" };
   const tail = v.match(/[a-zµμ]+$/i)?.[0] ?? "";
-  const warn = /^M/.test(tail) && !/^meg/i.test(tail) ? "M is milli in SPICE: write Meg for mega"
+  const warn = /^M/.test(tail) && !/^(meg|mil)/i.test(tail) ? "M is milli in SPICE: write Meg for mega"
     : /^F/.test(tail) ? "F is femto in SPICE (write 10u, not 10F)"
     : undefined;
   return { text: `= ${si(n, unit)}`, warn };
@@ -118,6 +118,14 @@ export function parseSource(...parts: (string | undefined)[]): Source {
   }
   s.rest = rest.join(" ");
   return s;
+}
+
+/** Whether the source form writes these attributes back with the same meaning (token order,
+ *  SIN/SINE, a leading DC and commas in argument lists do not matter); otherwise it opens as text. */
+export function sourceRoundTrips(...parts: (string | undefined)[]): boolean {
+  const norm = (s: string) => tokens(s.replace(/,/g, " ").replace(/\bsin\(/gi, "SINE(").replace(/(^|\s)dc\s+/gi, "$1").toUpperCase()).map((t) => t.replace(/\s+/g, " ")).sort().join(" ");
+  const f = formatSource(parseSource(...parts));
+  return norm(parts.filter(Boolean).join(" ")) === norm(`${f.Value} ${f.Value2} ${f.SpiceLine}`);
 }
 
 /** Function arguments for SPICE: gaps filled with defaults, trailing blanks dropped. */

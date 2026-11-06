@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import {
   formatAnalysis, formatIc, formatInclude, formatMeas, formatModel, formatParams, formatSource, numInfo, parseAnalysis,
-  parseIc, parseInclude, parseMeas, parseModel, parseParams, parseSource, sample, spiceNum, directiveKind, analysisRoundTrips, portablePaths,
+  parseIc, parseInclude, parseMeas, parseModel, parseParams, parseSource, sample, spiceNum, directiveKind, analysisRoundTrips, portablePaths, sourceRoundTrips,
 } from "../src/spice.ts";
 
 // numbers and the classic pitfalls
@@ -81,4 +81,8 @@ assert.ok(step.every(([t, v]) => (t < 1e-3 ? v === 0 : v === 5)));
 assert.equal(sample(parseSource("SINE(0 1)")), null); // frequency from .tran: no preview
 // TRIG without an edge does not borrow TARG's
 assert.equal(directiveKind(".meas tran tpd TRIG V(in) VAL=0.5 TARG V(out) VAL=0.5 FALL=1"), "meas");
+// sources the form cannot read open as text; harmless spelling differences do not count
+for (const v of [["SINE(0 10m 1k)", "AC 1", "Rser=50"], ["SIN(0 1 1k) AC 1"], ["DC 5"], ["PWL(0,0 1m,1)"], ["AC 1 SINE(0 1 1k)"], ["5 Rpar=1Meg"]]) assert.ok(sourceRoundTrips(...v), v.join(" "));
+for (const v of [["SINE (0 1 1k)"], ["PWL file=wave.txt"]]) assert.equal(sourceRoundTrips(...v), false, v.join(" "));
+assert.equal(numInfo("1Mil")!.warn, undefined); // mil is 25.4 um, not the milli trap
 console.log("spice-check: ok");

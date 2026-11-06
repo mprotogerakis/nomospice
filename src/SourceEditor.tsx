@@ -1,7 +1,7 @@
 // Independent source (V, I) as a form: waveform function with named fields, AC, parasitics,
 // a waveform preview, and the SPICE attributes it writes (Value, Value2, SpiceLine like LTspice).
 import { useMemo, useState } from "react";
-import { FUNCS, formatSource, parseSource, sample, si, type Func, type Source } from "./spice";
+import { FUNCS, formatSource, parseSource, sample, si, sourceRoundTrips, type Func, type Source } from "./spice";
 import { Field, FIELD, NumField, Section, SpiceLine, TextField } from "./ui/dialog";
 import { Button } from "./ui/button";
 import { cn } from "@/lib/utils";
@@ -12,7 +12,9 @@ const KINDS: [Func | "", string][] = [["", "DC"], ["SINE", "Sine"], ["PULSE", "P
 export function SourceEditor({ attrs, setAttrs, current }: { attrs: Attrs; setAttrs: (a: Attrs) => void; current: boolean }) {
   const y = current ? "A" : "V";
   const [src, setSrc] = useState<Source>(() => parseSource(attrs.Value, attrs.Value2, attrs.SpiceLine));
-  const [text, setText] = useState(false);
+  // what the form cannot read (e.g. `PWL file=…`, `SINE (…)`) opens as text instead of being rewritten
+  const [text, setText] = useState(() => !sourceRoundTrips(attrs.Value, attrs.Value2, attrs.SpiceLine));
+  const [hadRest] = useState(() => !!src.rest); // keep the "Other" field while it is being retyped
   // arguments per function, so switching away and back keeps what was typed
   const [kept, setKept] = useState<Partial<Record<Func, string[]>>>({});
   const update = (next: Source) => {
@@ -21,6 +23,7 @@ export function SourceEditor({ attrs, setAttrs, current }: { attrs: Attrs; setAt
   };
   const setArg = (i: number, v: string) => { const args = [...src.args]; args[i] = v; update({ ...src, args }); };
   const pick = (func: Func | "") => {
+    if (func === src.func) return; // the selected one: keep what was typed
     // a new function starts with every value written out: the line, the fields and the preview agree
     const args = func ? kept[func] ?? (func === "PWL" ? ["0", "0", "1m", "1"] : FUNCS[func].map((d) => d.def)) : [];
     if (src.func) setKept({ ...kept, [src.func]: src.args });
@@ -68,7 +71,7 @@ export function SourceEditor({ attrs, setAttrs, current }: { attrs: Attrs; setAt
           <Section>Parasitics</Section>
           <NumField label="Series resistance" value={src.rser} set={(rser) => update({ ...src, rser })} unit="Ω" />
           <NumField label="Parallel capacitance" value={src.cpar} set={(cpar) => update({ ...src, cpar })} unit="F" />
-          {src.rest && <TextField label="Other" value={src.rest} set={(rest) => update({ ...src, rest })} hint="kept as written" />}
+          {(src.rest || hadRest) && <TextField label="Other" value={src.rest} set={(rest) => update({ ...src, rest })} hint="kept as written" />}
         </div>
         <div className="flex flex-col gap-2">
           <Preview src={src} y={y} />

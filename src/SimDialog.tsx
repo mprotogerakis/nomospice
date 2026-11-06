@@ -137,7 +137,7 @@ export function SimDialog({ index }: { index?: number }) {
           {v("mode") === "ac" && sweep("10")}
         </>
       )}
-      {v("rest") && <TextField label="Other options" value={v("rest")} set={set("rest")} hint="kept as written" />}
+      {(v("rest") || (kind === init.kind && init.f.rest)) && <TextField label="Other options" value={v("rest")} set={set("rest")} hint="kept as written" />}
       <SpiceLine>{line}</SpiceLine>
       {idx >= 0 && (
         <Button type="button" size="sm" className="self-start" onClick={() => useS.setState({ dialog: { k: "edit", index: idx, raw: true } })}>Edit as text</Button>
