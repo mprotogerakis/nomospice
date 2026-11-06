@@ -274,6 +274,14 @@ function plausible(line: string) {
   return kind === "pz" ? t.length >= 5 && /^(vol|cur)$/i.test(t[4]) && (!t[5] || /^(pol|zer|pz)$/i.test(t[5])) : /^[vi]\(/i.test(t[0] ?? "") && (kind !== "tf" || t.length >= 2);
 }
 
+/** The line holding the analysis of `kind` (else the first), as the result tabs read the text:
+ *  in a comment only lines that read as an analysis count. -1: none. */
+export function analysisLineIndex(lines: string[], kind: Analysis | null | undefined, directive: boolean) {
+  const ok = (l: string) => ANALYSIS.test(l.trim()) && (directive || plausible(l.trim()));
+  const own = lines.findIndex((l) => ok(l) && parseAnalysis(l.trim()).kind === kind);
+  return own >= 0 ? own : lines.findIndex(ok);
+}
+
 /** `text` without its analysis statements (and their `+` lines): a result tab runs its own instead. */
 export function stripAnalyses(text: string) {
   const lines = text.split("\n"), drop = new Set<number>();

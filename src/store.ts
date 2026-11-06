@@ -269,6 +269,7 @@ export function simDeck(items: Item[], tab: Analysis | null) {
 export async function selectTab(kind: Analysis) {
   await idle(); // a run in progress belongs to the shown tab ("+" during a live run)
   const s = get();
+  if (!analysesOf(s.items).some((o) => o.kind === kind)) return; // no such tab: the shown results stay
   if (s.shown === kind) return void (s.tab !== kind && set({ tab: kind }));
   set({ tab: kind, ...swapTo(s, kind) });
   if (!get().sim) void simulate();

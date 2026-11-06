@@ -130,15 +130,20 @@ pub fn sym_key(name: &str) -> String {
 /// generated for, and the symbols loaded from the schematic's folder.
 pub struct Library(pub HashMap<String, SymbolDef>, HashSet<String>, u64, Local);
 
-/// The schematic's folder, the keys of the symbols loaded from it, and its .asy files' count and
-/// newest modification time when they were (a symbol added, removed or edited there changes it).
+/// The schematic's folder, the keys of the symbols loaded from it, a fingerprint of its .asy files
+/// when they were (a symbol added, removed, edited or replaced there changes it), and the keys of
+/// symbols lent by library folders (they go when the libraries change).
 #[derive(Default)]
-pub struct Local(Option<std::path::PathBuf>, HashSet<String>, Option<(usize, std::time::SystemTime)>);
+pub struct Local(Option<std::path::PathBuf>, HashSet<String>, Option<(usize, u128)>, HashSet<String>);
 
-/// (count, newest mtime) of the .asy files in `dir`.
-fn asy_stamp(dir: &std::path::Path) -> Option<(usize, std::time::SystemTime)> {
+/// (count, a sum over modification times and sizes) of the .asy files in `dir`.
+fn asy_stamp(dir: &std::path::Path) -> Option<(usize, u128)> {
     let asy = std::fs::read_dir(dir).ok()?.flatten().filter(|e| e.path().extension().is_some_and(|x| x.eq_ignore_ascii_case("asy")));
-    asy.filter_map(|e| e.metadata().and_then(|m| m.modified()).ok()).fold(Some((0, std::time::SystemTime::UNIX_EPOCH)), |acc, t| acc.map(|(n, m)| (n + 1, m.max(t))))
+    let each = asy.filter_map(|e| e.metadata().ok()).map(|m| {
+        let t = m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos());
+        t.wrapping_add((m.len() as u128).wrapping_mul(1_000_003))
+    });
+    Some(each.fold((0, 0u128), |(n, s), x| (n + 1, s.wrapping_add(x))))
 }
 
 impl Library {
@@ -200,8 +205,10 @@ impl Library {
         if self.2 != g {
             // other libraries now: regenerate subckt boxes, drop symbols a library folder lent (it
             // may be off now: they come back from where they are), retry what was missing
-            let local = &self.3 .1;
-            self.0.retain(|k, _| BUILTIN_SYMBOLS.iter().any(|(n, _)| n == k) || local.contains(k));
+            for k in self.3 .3.drain() {
+                self.0.remove(&k);
+            }
+            self.0.retain(|k, _| !k.starts_with("subckt:"));
             self.1.clear();
             self.2 = g;
         }
@@ -217,20 +224,23 @@ impl Library {
         }
         if !self.0.contains_key(&key) {
             let file = format!("{key}.asy");
-            let folders = crate::library::sources().into_iter().filter(|s| s.enabled).map(|s| s.path);
-            let def = ltspice_sym_dirs().into_iter().chain(folders).find_map(|dir| {
+            let folders = crate::library::sources().into_iter().filter(|s| s.enabled).map(|s| (s.path, true));
+            let found = ltspice_sym_dirs().into_iter().map(|d| (d, false)).chain(folders).find_map(|(dir, lent)| {
                 // folders only (the entry type comes with the listing: no stat per model file)
                 let folder = |e: &std::fs::DirEntry| e.file_type().is_ok_and(|t| t.is_dir() || (t.is_symlink() && e.path().is_dir()));
                 let subdirs = std::fs::read_dir(&dir).into_iter().flatten().flatten().filter(folder).map(|e| e.path());
                 let path = std::iter::once(dir.join(name.replace('\\', "/") + ".asy"))
                     .chain(std::iter::once(dir.clone()).chain(subdirs).map(|d| d.join(&file)))
                     .find(|p| p.is_file())?;
-                Some(parse_asy(&key, &decode(&std::fs::read(path).ok()?)))
+                Some((parse_asy(&key, &decode(&std::fs::read(path).ok()?)), lent))
             });
-            let Some(def) = def else {
+            let Some((def, lent)) = found else {
                 self.1.insert(key);
                 return None;
             };
+            if lent {
+                self.3 .3.insert(key.clone());
+            }
             self.0.insert(key.clone(), def);
         }
         self.0.get(&key)
@@ -926,6 +936,9 @@ fn meas_statement(s: &str, sensors: &[Sensor], an: &str) -> Result<String, Strin
                 }
                 let w = toks[start..i].join("");
                 match w.split_once('=') {
+                    Some((_, b)) if typ == "ac" && !(number(b) || simple(b)) => {
+                        return Err(format!("{}: in AC, ngspice takes only a number or a vector as the level ({b}), and would measure at its first number: left out", out.get(2).map_or(".meas", |n| n.as_str())));
+                    }
                     Some((a, b)) => {
                         let a = if typ == "ac" { ac_vector(a).unwrap_or(a.to_string()) } else { a.to_string() };
                         // ngspice reads `vector=number` and `vector=vector` itself (and AC stays as written)
@@ -1781,6 +1794,7 @@ mod tests {
         assert_eq!(m(".meas ac bw WHEN db(V(out))=-3"), ".meas ac bw WHEN vdb(out)=-3");
         assert_eq!(m(".meas ac r MAX V(out)/V(in)"), ".meas ac r MAX V(out)/V(in)", "AC: as written rather than wrong");
         assert!(m(".meas ac f1 TRIG vm(out) VAL=0.5*vm(in) TARG vm(out) VAL=1").contains("left out"), "AC: an expression level is not silently cut");
+        assert!(m(".meas ac bw WHEN vm(out)=0.707*vm(in)").contains("left out"), "the same for WHEN");
         assert_eq!(m(".meas ac p FIND ph(V(out)) AT=1k"), ".meas ac p FIND ph(V(out)) AT=1k", "degrees vs radians: not mapped");
         let mut w = vec![];
         let skipped = ltspice_meas(".ac dec 10 1 1k\n.meas ac f1 TRIG vm(out) VAL=0.5*vm(in) TARG vm(out) VAL=1\n", &[], &mut w);

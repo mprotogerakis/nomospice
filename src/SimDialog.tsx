@@ -2,7 +2,7 @@
 import { useState } from "react";
 import type { Item } from "./types";
 import { analysesOf, analysisItem, commit, currentTab, selectTab, useS } from "./store";
-import { ANALYSES, ANALYSIS, analysisEditableAt, continuation, analysisIndex, formatAnalysis, knownSweep, parseAnalysis, type Analysis, type Fields } from "./spice";
+import { ANALYSES, analysisEditableAt, analysisLineIndex, continuation, formatAnalysis, knownSweep, parseAnalysis, type Analysis, type Fields } from "./spice";
 import { CircuitLists, Tabs, closeDialog, Field, Modal, NumField, Section, Select, SpiceLine, TextField } from "./ui/dialog";
 import { Button } from "./ui/button";
 
@@ -15,9 +15,9 @@ export function SimDialog({ index, kind0, of }: { index?: number; kind0?: Analys
   const items = useS((s) => s.items);
   const idx = index ?? -1;
   const lines = idx >= 0 && items[idx].t === "text" ? items[idx].text.split("\n") : [];
-  // `of`: the result tab's analysis (a text may hold several), else its first
-  const own = lines.findIndex((l) => ANALYSIS.test(l.trim()) && parseAnalysis(l.trim()).kind === of);
-  const li = own >= 0 ? own : analysisIndex(lines);
+  // `of`: the result tab's analysis (a text may hold several), else its first; in a comment only
+  // lines that read as an analysis (not a note starting with .op)
+  const li = analysisLineIndex(lines, of, idx >= 0 && items[idx].t === "text" && !!items[idx].directive);
   const [init] = useState(() => {
     if (kind0) return { kind: kind0, f: {} as Fields };
     const a = parseAnalysis(li >= 0 ? lines[li] : ".tran 1m");
@@ -52,7 +52,7 @@ export function SimDialog({ index, kind0, of }: { index?: number; kind0?: Analys
       const at = ref?.t === "text" ? { x: ref.x, y: ref.y + 32 * ref.text.split("\n").length } : { x: 0, y: 0 };
       commit([...items, { t: "text", ...at, text: line, directive: !alternate }]);
       closeDialog();
-      selectTab(kind);
+      void selectTab(kind); // (not if the line does not read as an analysis: no tab to show)
     } else useS.setState({ dialog: null, tool: { k: "place", item: { t: "text", x: 0, y: 0, text: line, directive: !alternate } } });
   };
   // the schematic already runs an analysis: a new one is an alternative (a comment, as LTspice keeps

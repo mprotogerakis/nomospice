@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { connectivity, dragPlan } from "../src/geom.ts";
 import {
   tokens, formatAnalysis, formatIc, formatInclude, formatMeas, formatModel, formatParams, formatSource, numInfo, parseAnalysis,
-  parseIc, parseInclude, parseMeas, parseModel, parseParams, parseSource, sample, si, spiceNum, directiveKind, analysisRoundTrips, analysisEditable, analysisOptions, at, integrate, stripAnalyses, portablePaths, sourceRoundTrips,
+  parseIc, parseInclude, parseMeas, parseModel, parseParams, parseSource, sample, si, spiceNum, directiveKind, analysisRoundTrips, analysisEditable, analysisOptions, analysisLineIndex, at, integrate, stripAnalyses, portablePaths, sourceRoundTrips,
 } from "../src/spice.ts";
 
 // numbers and the classic pitfalls
@@ -84,6 +84,9 @@ assert.equal(analysisRoundTrips(".dc lin V1 0 5 0.1"), false);
 {
   const o = analysisOptions([{ text: ".ac dec 10 1 1k", directive: false }, { text: ".param R=1k\n.tran 0 1m\n+ 0 1u", directive: true }, { text: ".ac dec 50 1 1Meg", directive: true }, { text: "a note" }]);
   assert.deepEqual(o.map((x) => [x.kind, x.line, x.active]), [["tran", ".tran 0 1m\n+ 0 1u", true], ["ac", ".ac dec 50 1 1Meg", true]]);
+  const note = ".tran is great\n.tran 0 1m startup".split("\n");
+  assert.equal(analysisLineIndex(note, "tran", false), 1, "a comment's note line is not the analysis");
+  assert.equal(analysisLineIndex(note, "tran", true), 0, "a directive's line is");
   assert.deepEqual(analysisOptions([{ text: ".op point is checked first" }, { text: ".tran is great" }, { text: ".tran 0 1m startup" }, { text: ".pz shows poles" }, { text: ".tf is a transfer function" }, { text: ".pz in 0 out 0 vol pz" }]).map((o) => o.kind), ["tran", "pz"], "notes are not analyses");
   assert.equal(stripAnalyses(".param R=1k\n.tran 0 1m\n* c\n+ 0 1u\n.meas tran x AVG V(a)"), ".param R=1k\n* c\n.meas tran x AVG V(a)");
 }
