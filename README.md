@@ -27,11 +27,16 @@ files — with a modern UI, ngspice as the engine, a Rust core and a React front
   search the libraries (see below).
 - Context menus everywhere, light/dark theme, crash recovery for unsaved work, macOS / Windows / Linux.
 
-## Requirements
+## Download
+
+[Releases](https://github.com/mprotogerakis/nomospice/releases): Windows installer (x64) and a signed,
+notarized macOS app (Apple Silicon, macOS 11+). Both include ngspice.
+
+## Requirements (building from source)
 
 | | |
 |---|---|
-| ngspice shared library | macOS `brew install libngspice` · Debian/Ubuntu `apt install libngspice0` · Windows: bundled (or `NGSPICE_LIB=…\ngspice.dll`) |
+| ngspice shared library | macOS `brew install libngspice` · Debian/Ubuntu `apt install libngspice0` · Windows: `NGSPICE_LIB=…\ngspice.dll` |
 | Build | Rust (stable), Node ≥ 20, pnpm |
 
 ngspice is loaded at runtime (`NGSPICE_LIB`, next to the executable, Homebrew/Linux paths, or the
@@ -47,6 +52,8 @@ cd src-tauri && cargo test                       # netlister, ngspice, library, 
 NOMOSPICE_CORPUS=<folder with .asc> cargo test corpus -- --ignored      # .asc round-trip check
 NOMOSPICE_MC12=<Micro-Cap LIBRARY folder> cargo test microcap -- --ignored
 pnpm tauri build                                 # installers; CI builds all three OSes (.github/workflows)
+node scripts/licenses.mjs                        # after dependency changes: THIRD-PARTY-LICENSES.txt + NOTICE.md
+scripts/macos-release.sh                         # signed + notarized macOS app with its own ngspice (see script)
 ```
 
 ## MCP
@@ -72,4 +79,6 @@ Tools: `simulate` (traces downsampled), `netlist`, `read_schematic`, `write_sche
 
 ## License
 
-AGPL-3.0-or-later (it includes code from OpenPCB). Third-party notices: [NOTICE.md](NOTICE.md).
+AGPL-3.0-or-later (it includes code from OpenPCB). Third-party software and its licenses: [NOTICE.md](NOTICE.md)
+(overview) and [THIRD-PARTY-LICENSES.txt](THIRD-PARTY-LICENSES.txt) (every component with its full license
+text); in the app under About (ⓘ in the toolbar).

@@ -69,9 +69,9 @@ export function History() {
         <tbody>
           {log.map((c) => (
             <tr key={c.hash} className={cn("group h-[24px] border-b border-border-subtle", diff?.hash === c.hash && "bg-selection-soft")}>
-              <td className="w-16 text-text-tertiary">{c.hash.slice(0, 7)}</td>
-              <td className="w-32 text-text-secondary">{c.date}</td>
-              <td className="w-28 truncate text-text-secondary">{c.author}</td>
+              <td className="w-16 pr-3 text-text-tertiary">{c.hash.slice(0, 7)}</td>
+              <td className="w-32 pr-3 text-text-secondary">{c.date}</td>
+              <td className="w-32 truncate pr-3 text-text-secondary">{c.author}</td>
               <td className="truncate font-sans text-xs text-text">{c.subject}</td>
               <td className="row-actions w-44 text-right">
                 <Button size="sm" variant="ghost" onClick={act(async () => useS.setState({ diff: { hash: c.hash, items: await revision(c) } }))}>Compare</Button>

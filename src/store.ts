@@ -15,7 +15,8 @@ export type Dialog =
   | { k: "sim" }
   /** `replace`: choose a model for that part instead of placing a new one */
   | { k: "parts"; replace?: number; kind?: string }
-  | { k: "trace" };
+  | { k: "trace" }
+  | { k: "about" };
 
 interface State {
   items: Item[];

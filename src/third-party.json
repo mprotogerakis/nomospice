@@ -1,0 +1,28 @@
+{
+  "included": [
+    { "name": "ngspice", "url": "https://ngspice.sourceforge.io", "use": "Simulation engine (bundled with the Windows and macOS apps)", "license": "Modified BSD; parts LGPL-2.0+, GPL-2.0+, MPL-2.0, public domain" },
+    { "name": "Tauri", "url": "https://tauri.app", "use": "App framework (Rust)", "license": "MIT OR Apache-2.0" },
+    { "name": "React", "url": "https://react.dev", "use": "User interface", "license": "MIT" },
+    { "name": "uPlot", "url": "https://github.com/leeoniya/uPlot", "use": "Waveform plots", "license": "MIT" },
+    { "name": "Zustand", "url": "https://github.com/pmndrs/zustand", "use": "App state", "license": "MIT" },
+    { "name": "Tailwind CSS, tailwind-merge, clsx", "url": "https://tailwindcss.com", "use": "Styling", "license": "MIT" },
+    { "name": "Lucide", "url": "https://lucide.dev", "use": "Icons", "license": "ISC" },
+    { "name": "IBM Plex (via Fontsource)", "url": "https://github.com/IBM/plex", "use": "Fonts", "license": "OFL-1.1" },
+    { "name": "Vite", "url": "https://vite.dev", "use": "Build tool (small runtime helper in the app)", "license": "MIT" },
+    { "name": "OpenPCB", "url": "https://github.com/OpenPCB-app/OpenPCB", "use": "Design tokens, theme, UI primitives (code adapted)", "license": "AGPL-3.0-or-later" },
+    { "name": "SwiftFlow", "url": "https://github.com/aaurelions/SwiftFlow", "use": "Canvas interaction: zoom, MiniMap, Controls (code ported)", "license": "MIT" },
+    { "name": "libloading", "url": "https://github.com/nagisa/rust_libloading", "use": "Loads the ngspice library", "license": "ISC" },
+    { "name": "serde, serde_json", "url": "https://serde.rs", "use": "Data exchange", "license": "MIT OR Apache-2.0" },
+    { "name": "LLVM OpenMP runtime", "url": "https://openmp.llvm.org", "use": "Windows: needed by ngspice.dll", "license": "Apache-2.0 WITH LLVM-exception" },
+    { "name": "libsndfile", "url": "https://github.com/libsndfile/libsndfile", "use": "Windows: needed by ngspice.dll", "license": "LGPL-2.1-or-later" },
+    { "name": "libsamplerate", "url": "https://github.com/libsndfile/libsamplerate", "use": "Windows: needed by ngspice.dll", "license": "BSD-2-Clause" },
+    { "name": "About 290 further Rust crates", "url": "", "use": "Dependencies of Tauri and the above", "license": "MIT, Apache-2.0, ISC, BSD, Zlib, Unicode-3.0, MPL-2.0" }
+  ],
+  "external": [
+    { "name": "Git", "url": "https://git-scm.com", "use": "Version history: runs the installed git", "license": "GPL-2.0" },
+    { "name": "curl, tar / unzip", "url": "", "use": "Micro-Cap download: system tools", "license": "curl license, BSD-2-Clause / Info-ZIP" },
+    { "name": "WebView2 (Windows), WebKit (macOS, Linux)", "url": "", "use": "The system's web view", "license": "Microsoft license; LGPL-2.1 and BSD" },
+    { "name": "LTspice (Analog Devices)", "url": "https://www.analog.com/ltspice", "use": "Symbols and models of a local installation are read", "license": "Proprietary; not distributed with nomospice" },
+    { "name": "Micro-Cap 12 (Spectrum Software)", "url": "https://archive.org/details/mc12cd_202110", "use": "Model library, downloaded on request from the Internet Archive", "license": "Freeware, redistributable only complete and unmodified; not distributed with nomospice" }
+  ]
+}

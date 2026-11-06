@@ -119,7 +119,7 @@ pub fn parse_asy(name: &str, src: &str) -> SymbolDef {
 
 /// `Opamps\opamp` -> `opamp`
 pub fn sym_key(name: &str) -> String {
-    if name.len() > 7 && name[..7].eq_ignore_ascii_case("subckt:") {
+    if name.get(..7).is_some_and(|p| p.eq_ignore_ascii_case("subckt:")) { // not name[..7]: µ, Ω … are 2 bytes
         return name.to_lowercase(); // library subckt names may contain `/` (BS/MMBF170)
     }
     name.rsplit(['\\', '/']).next().unwrap_or(name).to_lowercase()
@@ -1159,6 +1159,13 @@ mod tests {
         let nl = netlist(&parse_asc(&src), &mut Library::builtin());
         assert!(nl.text.contains("SIN(0 1 1k) AC 1"), "{}", nl.text);
         assert!(crate::ngspice::run(&prepare(&nl.text, None, &mut vec![])).is_ok());
+    }
+
+    #[test]
+    fn sym_key_handles_multibyte_names() {
+        assert_eq!(sym_key("Opamps\\µA741x"), "µa741x");
+        assert_eq!(sym_key("abcdeµfgh"), "abcdeµfgh"); // byte 7 inside `µ`: no panic
+        assert_eq!(sym_key("SUBCKT:BS/MMBF170"), "subckt:bs/mmbf170");
     }
 
     #[test]

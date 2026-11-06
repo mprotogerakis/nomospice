@@ -6,12 +6,13 @@ import { listen } from "@tauri-apps/api/event";
 import { ask, message, open, save } from "@tauri-apps/plugin-dialog";
 import {
   Code, Component, Copy, FilePlus, FlipHorizontal2, FolderOpen, Moon, MousePointer2, Play, Redo2, RotateCw, Save,
-  Scissors, ScrollText, SlidersHorizontal, Spline, Square, Sun, Tag, Type, Undo2, Zap,
+  Info, Scissors, ScrollText, SlidersHorizontal, Spline, Square, Sun, Tag, Type, Undo2, Zap,
 } from "lucide-react";
 import type { Item } from "./types";
 import { Schematic } from "./Schematic";
 import { Waveform } from "./Waveform";
 import { Dialogs } from "./Dialogs";
+import { Boundary } from "./Boundary";
 import { docId, isOp, loadDoc, loadSymbols, placeSymbol, plotKind, redo, refreshGit, refreshNets, simulate, undo, useS, useStatus } from "./store";
 import { History } from "./History";
 import { currentLabel, mirror, rotate, si } from "./geom";
@@ -299,6 +300,7 @@ export function App() {
         <ToolbarSpacer />
         <ToolbarButton label="Log & netlist" hotkey="⌘L" icon={<ScrollText />} pressable active={!!s.panel} onClick={() => useS.setState({ panel: s.panel ? null : "netlist" })} />
         <ToolbarButton label="Toggle theme" icon={mode === "dark" ? <Sun /> : <Moon />} onClick={() => setMode(updateThemePreference(mode === "dark" ? "light" : "dark").mode)} />
+        <ToolbarButton label="About & licenses" icon={<Info />} onClick={() => useS.setState({ dialog: { k: "about" } })} />
       </Toolbar>
 
       <div ref={mainRef} className="flex min-h-0 flex-1 flex-col">
@@ -352,7 +354,9 @@ export function App() {
           {s.running ? "simulating…" : errors ? "simulation failed" : run ? `${run.plot}${run.aborted ? " (aborted, partial)" : ""}${s.stale ? " (stale)" : ""}` : "ngspice ready"}
         </StatusSegment>
       </StatusBar>
-      <Dialogs />
+      <Boundary onReset={() => useS.setState({ dialog: null })}>
+        <Dialogs />
+      </Boundary>
       <ContextMenu />
     </div>
   );

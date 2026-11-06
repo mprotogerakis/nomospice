@@ -1,50 +1,39 @@
-# Third-party notices
+# Third-party software
 
-## OpenPCB (AGPL-3.0-or-later)
+nomospice is licensed under the GNU Affero General Public License v3.0 or later ([LICENSE](LICENSE)).
+It is built on the software below. The full license texts of every component, including all
+Rust crates and JavaScript packages, are in [THIRD-PARTY-LICENSES.txt](THIRD-PARTY-LICENSES.txt);
+the app shows them under About (the ⓘ button in the toolbar).
 
-Design tokens (src/index.css), theme handling (src/lib/theme.ts, src/lib/utils.ts) and UI primitives
-(src/ui/*) are taken from OpenPCB, https://github.com/OpenPCB-app/OpenPCB. Net extraction follows its
-union-find approach (T-junctions connect, crossings do not).
+| Component | Used for | License |
+|---|---|---|
+| [ngspice](https://ngspice.sourceforge.io) | Simulation engine (bundled with the Windows and macOS apps) | Modified BSD; parts LGPL-2.0+, GPL-2.0+, MPL-2.0, public domain |
+| [Tauri](https://tauri.app) | App framework (Rust) | MIT OR Apache-2.0 |
+| [React](https://react.dev) | User interface | MIT |
+| [uPlot](https://github.com/leeoniya/uPlot) | Waveform plots | MIT |
+| [Zustand](https://github.com/pmndrs/zustand) | App state | MIT |
+| [Tailwind CSS, tailwind-merge, clsx](https://tailwindcss.com) | Styling | MIT |
+| [Lucide](https://lucide.dev) | Icons | ISC |
+| [IBM Plex (via Fontsource)](https://github.com/IBM/plex) | Fonts | OFL-1.1 |
+| [Vite](https://vite.dev) | Build tool (small runtime helper in the app) | MIT |
+| [OpenPCB](https://github.com/OpenPCB-app/OpenPCB) | Design tokens, theme, UI primitives (code adapted) | AGPL-3.0-or-later |
+| [SwiftFlow](https://github.com/aaurelions/SwiftFlow) | Canvas interaction: zoom, MiniMap, Controls (code ported) | MIT |
+| [libloading](https://github.com/nagisa/rust_libloading) | Loads the ngspice library | ISC |
+| [serde, serde_json](https://serde.rs) | Data exchange | MIT OR Apache-2.0 |
+| [LLVM OpenMP runtime](https://openmp.llvm.org) | Windows: needed by ngspice.dll | Apache-2.0 WITH LLVM-exception |
+| [libsndfile](https://github.com/libsndfile/libsndfile) | Windows: needed by ngspice.dll | LGPL-2.1-or-later |
+| [libsamplerate](https://github.com/libsndfile/libsamplerate) | Windows: needed by ngspice.dll | BSD-2-Clause |
+| About 290 further Rust crates | Dependencies of Tauri and the above | MIT, Apache-2.0, ISC, BSD, Zlib, Unicode-3.0, MPL-2.0 |
 
-## SwiftFlow (MIT)
+## Used, but not included
 
-The canvas interaction model (viewport transform, zoom limits, dot background, Controls, MiniMap,
-selection box, theme defaults) is ported from SwiftFlow, https://github.com/aaurelions/SwiftFlow:
+| Component | Used for | License |
+|---|---|---|
+| [Git](https://git-scm.com) | Version history: runs the installed git | GPL-2.0 |
+| curl, tar / unzip | Micro-Cap download: system tools | curl license, BSD-2-Clause / Info-ZIP |
+| WebView2 (Windows), WebKit (macOS, Linux) | The system's web view | Microsoft license; LGPL-2.1 and BSD |
+| [LTspice (Analog Devices)](https://www.analog.com/ltspice) | Symbols and models of a local installation are read | Proprietary; not distributed with nomospice |
+| [Micro-Cap 12 (Spectrum Software)](https://archive.org/details/mc12cd_202110) | Model library, downloaded on request from the Internet Archive | Freeware, redistributable only complete and unmodified; not distributed with nomospice |
 
-```
-MIT License
-
-Copyright (c) 2026 A.Aurelions
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-```
-
-## ngspice (BSD-3-Clause, loaded at runtime)
-
-https://ngspice.sourceforge.io — the simulation engine. Windows builds bundle ngspice's official
-DLL package (ngspice.dll, XSPICE code models, LLVM OpenMP runtime `libomp140.x86_64.dll`, Apache-2.0
-with LLVM exception) plus `sndfile.dll` (libsndfile, LGPL-2.1-or-later) and `samplerate.dll`
-(libsamplerate, BSD-2-Clause) from ngspice's console package, all unmodified and loaded at runtime.
-
-## LTspice and Micro-Cap 12 libraries
-
-nomospice does not ship them. It reads an existing local LTspice installation (lib/sym, lib/cmp, lib/sub)
-and, on request, downloads the freeware Micro-Cap 12 package (Spectrum Software, 2019) from the
-Internet Archive and unpacks its LIBRARY folder locally. The built-in symbols are original artwork with
-LTspice-compatible pin positions for .asc interoperability.
+The built-in symbols are original artwork with LTspice-compatible pin positions.
+<!-- generated by scripts/licenses.mjs from src/third-party.json -->

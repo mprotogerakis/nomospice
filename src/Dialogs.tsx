@@ -1,5 +1,6 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
 import { open } from "@tauri-apps/plugin-dialog";
 import type { Item, LibEntry, LibSource } from "./types";
 import { addTrace, commit, loadSymbols, placePart, placeSymbol, refreshLibrarySymbols, useS } from "./store";
@@ -7,11 +8,12 @@ import { defOf, vexpr } from "./geom";
 import { Button } from "./ui/button";
 import { FIELD_BASE, FIELD_FOCUS } from "./ui/focus";
 import { cn, keys } from "@/lib/utils";
+import thirdParty from "./third-party.json";
 
 const close = () => useS.setState({ dialog: null });
 const FIELD = cn(FIELD_BASE, FIELD_FOCUS, "h-[26px] w-full px-2 font-mono");
 
-function Modal({ title, children, onSubmit, wide, ok = "OK" }: { title: string; children: React.ReactNode; onSubmit: () => void; wide?: boolean | "xl"; ok?: string }) {
+function Modal({ title, children, onSubmit, wide, ok = "OK", cancel = true }: { title: string; children: React.ReactNode; onSubmit: () => void; wide?: boolean | "xl"; ok?: string; cancel?: boolean }) {
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     const d = ref.current!;
@@ -32,7 +34,7 @@ function Modal({ title, children, onSubmit, wide, ok = "OK" }: { title: string; 
         <header className="border-b border-border px-3 py-2 text-sm font-medium text-text-strong">{title}</header>
         <div className="flex flex-col gap-2.5 p-3">{children}</div>
         <footer className="flex justify-end gap-2 border-t border-border px-3 py-2">
-          <Button type="button" variant="ghost" onClick={close}>Cancel</Button>
+          {cancel && <Button type="button" variant="ghost" onClick={close}>Cancel</Button>}
           <Button type="submit" variant="primary">{ok}</Button>
         </footer>
       </form>
@@ -425,6 +427,50 @@ function TraceDialog() {
   );
 }
 
+/** Version, license, and every third-party component with its license (same list as NOTICE.md). */
+function AboutDialog() {
+  const [version, setVersion] = useState("");
+  const [texts, setTexts] = useState<string | null>(null);
+  useEffect(() => void getVersion().then(setVersion, () => {}), []);
+  const table = (list: typeof thirdParty.included) => (
+    <table className="w-full table-fixed text-xs">
+      <thead className="text-left text-text-tertiary">
+        <tr className="border-b border-border"><th className="w-[38%] py-1 font-normal">Component</th><th className="font-normal">Used for</th><th className="w-[30%] font-normal">License</th></tr>
+      </thead>
+      <tbody>
+        {list.map((c) => (
+          <tr key={c.name} className="border-b border-border-subtle align-top">
+            <td className="py-1 pr-2 text-text-strong">{c.name}{c.url && <div className="select-text truncate font-mono text-2xs text-text-tertiary">{c.url}</div>}</td>
+            <td className="py-1 pr-2 text-text-secondary">{c.use}</td>
+            <td className="py-1 font-mono text-2xs">{c.license}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+  return (
+    <Modal title="About nomospice" wide="xl" ok="Close" cancel={false} onSubmit={close}>
+      <div className="flex max-h-[70vh] flex-col gap-3 overflow-auto pr-1 text-xs">
+        <p className="leading-5 text-text-secondary">
+          <span className="font-medium text-text-strong">nomospice {version}</span> is free software under the GNU Affero General
+          Public License v3.0 or later. Source code: <span className="select-text font-mono">https://github.com/mprotogerakis/nomospice</span>
+        </p>
+        <h3 className="font-medium text-text-strong">Built with</h3>
+        {table(thirdParty.included)}
+        <h3 className="font-medium text-text-strong">Used, but not included</h3>
+        {table(thirdParty.external)}
+        {texts == null ? (
+          <Button type="button" className="self-start" onClick={() => Promise.all([import("../LICENSE?raw"), import("../THIRD-PARTY-LICENSES.txt?raw")]).then(([own, third]) => setTexts(`${third.default}\n\n${"=".repeat(80)}\nnomospice - GNU Affero General Public License v3.0\n${"=".repeat(80)}\n\n${own.default}`))}>
+            Show full license texts
+          </Button>
+        ) : (
+          <pre className="max-h-[40vh] select-text overflow-auto rounded-control border border-border bg-surface-panel p-2 font-mono text-2xs leading-4 text-text-secondary">{texts}</pre>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
 export const Dialogs = memo(function Dialogs() {
   const dialog = useS((s) => s.dialog);
   const items = useS((s) => s.items);
@@ -444,5 +490,6 @@ export const Dialogs = memo(function Dialogs() {
     case "sim": return <SimDialog />;
     case "parts": return <PartsDialog replace={dialog.replace} kind0={dialog.kind} />;
     case "trace": return <TraceDialog />;
+    case "about": return <AboutDialog />;
   }
 });

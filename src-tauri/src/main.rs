@@ -16,7 +16,7 @@ struct Lib(Mutex<Library>);
 // Async commands run off the main thread (symbol lookup may hit the disk).
 #[tauri::command]
 async fn symbols(names: Vec<String>, lib: tauri::State<'_, Lib>) -> Result<Vec<SymbolDef>, String> {
-    let mut lib = lib.0.lock().map_err(|e| e.to_string())?;
+    let mut lib = lib.0.lock().unwrap_or_else(|e| e.into_inner());
     names.iter().for_each(|n| _ = lib.get(n));
     Ok(lib.0.values().cloned().collect())
 }
@@ -136,7 +136,7 @@ async fn save_asc(path: String, items: Vec<Item>) -> Result<(), String> {
 /// Live netlist for the UI; includes are resolved too, only to surface their warnings.
 #[tauri::command]
 async fn netlist(items: Vec<Item>, dir: Option<String>, lib: tauri::State<'_, Lib>) -> Result<Netlist, String> {
-    let mut nl = schematic::netlist(&items, &mut *lib.0.lock().map_err(|e| e.to_string())?);
+    let mut nl = schematic::netlist(&items, &mut *lib.0.lock().unwrap_or_else(|e| e.into_inner()));
     schematic::prepare_warnings(&nl.text, dir.as_deref().map(std::path::Path::new), &mut nl.warnings);
     Ok(nl)
 }
@@ -156,7 +156,7 @@ async fn simulate(items: Vec<Item>, dir: Option<String>, lib: tauri::State<'_, L
     ngspice::arm(); // a Halt pressed from here on (netlisting, include expansion) still counts
     // the UI gets the clean netlist (same nets/insts/probes); the one with current sensors runs
     let (mut netlist, sim) = {
-        let mut lib = lib.0.lock().map_err(|e| e.to_string())?;
+        let mut lib = lib.0.lock().unwrap_or_else(|e| e.into_inner());
         (schematic::netlist(&items, &mut lib), schematic::netlist_for_sim(&items, &mut lib))
     };
     let prepared = schematic::prepare(&sim.text, dir.as_deref().map(std::path::Path::new), &mut netlist.warnings).with_sensors(sim.sensors);
@@ -482,6 +482,19 @@ fn config_dir() -> Option<std::path::PathBuf> {
 }
 
 fn main() {
+    // a panic fails only its command; no console on Windows, so keep it for bug reports
+    let log = config_dir().map(|d| d.join("panic.log"));
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if let Some(p) = &log {
+            let _ = std::fs::create_dir_all(p.parent().unwrap());
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(p) {
+                use std::io::Write;
+                let _ = writeln!(f, "nomospice {}: {info}", env!("CARGO_PKG_VERSION"));
+            }
+        }
+        default_hook(info);
+    }));
     let started_in = std::env::current_dir().unwrap_or_default();
     let args = std::env::args().skip(1).map(|a| std::fs::canonicalize(&a).map_or(a, |p| p.display().to_string()));
     ARGS.set(args.collect()).ok();

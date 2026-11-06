@@ -131,7 +131,8 @@ export const Waveform = memo(function Waveform() {
         // click: no-op so uPlot does not swallow slightly-moved clicks; our handler decides (3 px rule)
         cursor: { sync: { key: "nomospice" }, drag: { x: true, y: false, setScale: true, dist: CLICK_DIST, click: () => {} }, points: { size: 6 } },
         scales: {
-          x: { time: false, distr: logX ? 3 : 1 },
+          // exactly the data: a log axis would otherwise round up to whole decades (1 MHz data -> 10 MHz)
+          x: { time: false, distr: logX ? 3 : 1, ...(logX ? { range: (_u, lo, hi): uPlot.Range.MinMax => (lo < hi ? [lo, hi] : [lo / 2, hi * 2]) } : {}) },
           // dB/phase: at least `span` tall, so 0.1 dB of ripple does not fill the pane like a resonance
           ...(span ? { y: { range: (_u, lo, hi): uPlot.Range.MinMax => {
             if (lo == null || hi == null) return [lo, hi];

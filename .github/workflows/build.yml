@@ -19,8 +19,6 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: pnpm }
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.os == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
       - uses: Swatinem/rust-cache@v2
         with: { workspaces: src-tauri }
 
@@ -51,9 +49,8 @@ jobs:
       - name: Rust tests (netlister, ngspice FFI, MCP, git)
         working-directory: src-tauri
         run: cargo test
+      # macOS: Apple Silicon; the signed release with a bundled ngspice comes from scripts/macos-release.sh
       - uses: tauri-apps/tauri-action@v0
-        with:
-          args: ${{ runner.os == 'macOS' && '--target universal-apple-darwin' || '' }}
       - uses: actions/upload-artifact@v4
         with:
           name: nomospice-${{ matrix.os }}

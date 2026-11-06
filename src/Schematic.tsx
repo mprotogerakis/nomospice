@@ -192,7 +192,8 @@ export const Schematic = memo(function Schematic() {
     const b = union(items.map((it) => box(it, lib, left)));
     const { w, h } = size;
     if (!b) return setView({ x: w / 2, y: h / 2, k: 1.5 });
-    const k = clampZoom(Math.min((w - 2 * FIT_PADDING) / Math.max(b[2] - b[0], 1), (h - 2 * FIT_PADDING) / Math.max(b[3] - b[1], 1), FIT_MAX));
+    const pad = Math.min(FIT_PADDING, w / 8, h / 8); // a low canvas (plot + panel open) must not shrink the circuit to nothing
+    const k = clampZoom(Math.min((w - 2 * pad) / Math.max(b[2] - b[0], 1), (h - 2 * pad) / Math.max(b[3] - b[1], 1), FIT_MAX));
     setView({ k, x: w / 2 - ((b[0] + b[2]) / 2) * k, y: h / 2 - ((b[1] + b[3]) / 2) * k });
   };
   // refit on document load, and on layout changes (waveform pane opening) while still auto-fitted
