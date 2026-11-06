@@ -71,4 +71,14 @@ const cyc = parseSource("PULSE(0 5 0 1n 1n 0.5m 1m 10)");
 cyc.acMag = "1";
 assert.equal(formatSource(cyc).Value, "PULSE(0 5 0 1n 1n 0.5m 1m 10)");
 assert.equal(portablePaths(".include C:\\models\\new.lib\nR1 a b 1k"), ".include C:/models/new.lib\nR1 a b 1k");
+// PWL: a half-filled row is left out, not shifted into the next pair
+const pwl = parseSource("PWL(0 0 2m 1)");
+pwl.args = ["0", "0", "1m", "", "2m", "1"];
+assert.equal(formatSource(pwl).Value, "PWL(0 0 2m 1)");
+// preview of a PULSE without width/period: one step, not a 1 ms square wave
+const step = sample(parseSource("PULSE(0 5 1m)"))!;
+assert.ok(step.every(([t, v]) => (t < 1e-3 ? v === 0 : v === 5)));
+assert.equal(sample(parseSource("SINE(0 1)")), null); // frequency from .tran: no preview
+// TRIG without an edge does not borrow TARG's
+assert.equal(directiveKind(".meas tran tpd TRIG V(in) VAL=0.5 TARG V(out) VAL=0.5 FALL=1"), "meas");
 console.log("spice-check: ok");

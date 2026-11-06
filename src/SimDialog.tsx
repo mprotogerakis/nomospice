@@ -2,7 +2,7 @@
 import { useState } from "react";
 import type { Item } from "./types";
 import { commit, useS } from "./store";
-import { ANALYSIS, formatAnalysis, parseAnalysis, type Analysis, type Fields } from "./spice";
+import { ANALYSIS, analysisLine, formatAnalysis, parseAnalysis, type Analysis, type Fields } from "./spice";
 import { CircuitLists, closeDialog, Field, Modal, NumField, Section, Select, SpiceLine, TextField } from "./ui/dialog";
 import { Button } from "./ui/button";
 import { cn } from "@/lib/utils";
@@ -17,7 +17,7 @@ const PER: Record<string, string> = { dec: "Points per decade", oct: "Points per
 /** Edits the analysis line of directive `index` (or the first analysis directive), else places a new one. */
 export function SimDialog({ index }: { index?: number }) {
   const items = useS((s) => s.items);
-  const isAnalysis = (it?: Item) => it?.t === "text" && it.directive && it.text.split("\n").some((l) => ANALYSIS.test(l.trim()));
+  const isAnalysis = (it?: Item) => it?.t === "text" && it.directive && !!analysisLine(it.text);
   const idx = index !== undefined && isAnalysis(items[index]) ? index : items.findIndex((it) => isAnalysis(it));
   const lines = idx >= 0 && items[idx].t === "text" ? items[idx].text.split("\n") : [];
   const li = lines.findIndex((l) => ANALYSIS.test(l.trim()));

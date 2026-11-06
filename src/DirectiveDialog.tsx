@@ -62,6 +62,9 @@ export function DirectiveDialog({ item, title, raw, onDone }: { item: Text; titl
   const [tab, setTab] = useState<DirectiveKind>(raw ? "text" : directiveKind(item.text));
   const [text, setText] = useState(item.text);
   const [directive, setDirective] = useState(true); // the Text tab can turn it into a comment
+  const [initial] = useState(tab);
+  const [touched, setTouched] = useState<Partial<Record<DirectiveKind, boolean>>>({});
+  const [tried, setTried] = useState(false);
   const [params, setParams] = useState(() => (tab === "param" ? parseParams(one) : [["", ""]]));
   const [model] = useState(() => (tab === "model" ? parseModel(one) : null));
   const [mName, setMName] = useState(model?.name ?? "");
@@ -96,14 +99,26 @@ export function DirectiveDialog({ item, title, raw, onDone }: { item: Text; titl
     const rel = dir && (path.startsWith(`${dir}/`) || path.startsWith(`${dir}\\`)) ? path.slice(dir.length + 1) : path;
     setInc({ ...inc, path: rel.replaceAll("\\", "/") });
   };
-  const done = () => (line.trim() ? onDone({ ...item, text: portablePaths(line), directive: tab !== "text" || directive }) : useS.setState({ dialog: null }));
+  // a form replaces a directive of its own kind; any other text stays and gets the line added
+  const keeps = tab !== "text" && tab !== initial && text.trim() !== "";
+  const result = tab === "text" ? text : keeps ? `${text.trimEnd()}\n${line}` : line;
+  const invalid = tab === "param" && !params.some(([n]) => n.trim()) ? "Add a parameter name."
+    : tab === "ic" && !ic.some(([n]) => n.trim()) ? "Add a node."
+    : tab === "include" && !inc.path.trim() ? "Choose a file." : "";
+  const done = () => {
+    if (invalid) return setTried(true);
+    if (!result.trim()) return useS.setState({ dialog: null });
+    onDone({ ...item, text: portablePaths(result), directive: tab !== "text" || directive });
+  };
+  // to the Text tab: what the form built, if it was used (else the text stays as it was)
+  const toTab = (k: DirectiveKind) => { if (k === "text" && tab !== "text" && touched[tab]) setText(result); setTab(k); setTried(false); };
 
   return (
     <Modal title={title} onSubmit={done} wide>
       <CircuitLists />
       <div role="tablist" className="flex flex-wrap border-b border-border">
         {TABS.map(([k, label]) => (
-          <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => (k === "text" && tab !== "text" && setText(line), setTab(k))}
+          <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => toTab(k)}
             className={cn("-mb-px border-b-2 px-2.5 py-1 text-xs", tab === k ? "border-selection text-text-strong" : "border-transparent text-text-secondary hover:text-text-strong")}>
             {label}
           </button>
@@ -122,6 +137,7 @@ export function DirectiveDialog({ item, title, raw, onDone }: { item: Text; titl
           <Button type="button" size="sm" className="self-start" onClick={() => useS.setState({ dialog: { k: "sim" } })}>Simulation command (.tran, .ac …)</Button>
         </>
       )}
+      <div className="contents" onInputCapture={() => setTouched({ ...touched, [tab]: true })} onClickCapture={(e) => (e.target as HTMLElement).closest("button") && setTouched({ ...touched, [tab]: true })}>
       {tab === "param" && (
         <Field label="Parameters" hint="use them in values as {name}, e.g. {R*2}">
           <Rows rows={params} set={setParams} a="name" b="value" />
@@ -202,7 +218,10 @@ export function DirectiveDialog({ item, title, raw, onDone }: { item: Text; titl
           {inc.lib && <TextField label="Section" value={inc.section} set={(section) => setInc({ ...inc, section })} hint="empty: the whole file" />}
         </>
       )}
+      </div>
       {tab !== "text" && <SpiceLine>{line}</SpiceLine>}
+      {keeps && <p className="text-2xs text-text-tertiary">Added as a new line; the directive keeps {text.split("\n").filter((l) => l.trim()).length} line(s): {text.trim().split("\n")[0]}{text.trim().includes("\n") ? " …" : ""}</p>}
+      {tried && invalid && <p className="text-2xs text-status-danger">{invalid}</p>}
     </Modal>
   );
 }

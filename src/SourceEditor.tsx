@@ -21,11 +21,13 @@ export function SourceEditor({ attrs, setAttrs, current }: { attrs: Attrs; setAt
   };
   const setArg = (i: number, v: string) => { const args = [...src.args]; args[i] = v; update({ ...src, args }); };
   const pick = (func: Func | "") => {
-    const args = func ? kept[func] ?? (func === "PWL" ? ["0", "0", "1m", "1"] : []) : [];
+    // a new function starts with every value written out: the line, the fields and the preview agree
+    const args = func ? kept[func] ?? (func === "PWL" ? ["0", "0", "1m", "1"] : FUNCS[func].map((d) => d.def)) : [];
     if (src.func) setKept({ ...kept, [src.func]: src.args });
     update({ ...src, func, args });
   };
   const out = formatSource(src);
+  const lastArg = src.args.reduce((n, a, i) => (a?.trim() ? i : n), -1); // empty fields after it: SPICE's defaults
 
   if (text) {
     return (
@@ -51,7 +53,8 @@ export function SourceEditor({ attrs, setAttrs, current }: { attrs: Attrs; setAt
         <div className="flex flex-col gap-2">
           {src.func === "PWL" ? <PwlTable args={src.args} set={(args) => update({ ...src, args })} y={y} />
             : src.func ? FUNCS[src.func].map((a, i) => (
-              <NumField key={`${src.func}${i}`} label={a.label} value={src.args[i] ?? ""} set={(v) => setArg(i, v)} unit={a.unit === "y" ? y : a.unit} placeholder={a.def} autofocus={i === 0} />
+              <NumField key={`${src.func}${i}`} label={a.label} value={src.args[i] ?? ""} set={(v) => setArg(i, v)} unit={a.unit === "y" ? y : a.unit}
+                placeholder={i < lastArg ? a.def : "SPICE default"} autofocus={i === 0} />
             )) : null}
           {src.func && src.func !== "PWL" && src.args.length > FUNCS[src.func].length && (
             <TextField label="More arguments" value={src.args.slice(FUNCS[src.func].length).join(" ")} hint="kept as written (e.g. a cycle count)"

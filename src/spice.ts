@@ -59,25 +59,27 @@ export function numInfo(s: string, unit = ""): { text: string; warn?: string } |
 // ---------------------------------------------------------------- independent sources (V, I)
 
 export type Func = "SINE" | "PULSE" | "EXP" | "SFFM" | "PWL";
-/** One function argument; unit "y" is the source's own unit (V or A). */
-export interface Arg { label: string; unit: string; def: string }
+/** One function argument; unit "y" is the source's own unit (V or A). `def` fills a gap before a
+ *  given argument; `spice` is what SPICE uses when trailing arguments are left out (for the
+ *  preview): a number, "inf" (PULSE width/period: no repetition) or "?" (depends on .tran). */
+export interface Arg { label: string; unit: string; def: string; spice?: string }
 export const FUNCS: Record<Exclude<Func, "PWL">, Arg[]> = {
   SINE: [
-    { label: "Offset", unit: "y", def: "0" }, { label: "Amplitude", unit: "y", def: "1" }, { label: "Frequency", unit: "Hz", def: "1k" },
-    { label: "Delay", unit: "s", def: "0" }, { label: "Damping", unit: "1/s", def: "0" }, { label: "Phase", unit: "°", def: "0" },
+    { label: "Offset", unit: "y", def: "0", spice: "0" }, { label: "Amplitude", unit: "y", def: "1", spice: "0" }, { label: "Frequency", unit: "Hz", def: "1k", spice: "?" },
+    { label: "Delay", unit: "s", def: "0", spice: "0" }, { label: "Damping", unit: "1/s", def: "0", spice: "0" }, { label: "Phase", unit: "°", def: "0", spice: "0" },
   ],
   PULSE: [
-    { label: "Initial value", unit: "y", def: "0" }, { label: "Pulsed value", unit: "y", def: "5" }, { label: "Delay", unit: "s", def: "0" },
-    { label: "Rise time", unit: "s", def: "1n" }, { label: "Fall time", unit: "s", def: "1n" }, { label: "Pulse width", unit: "s", def: "0.5m" },
-    { label: "Period", unit: "s", def: "1m" },
+    { label: "Initial value", unit: "y", def: "0", spice: "0" }, { label: "Pulsed value", unit: "y", def: "5", spice: "0" }, { label: "Delay", unit: "s", def: "0", spice: "0" },
+    { label: "Rise time", unit: "s", def: "1n", spice: "0" }, { label: "Fall time", unit: "s", def: "1n", spice: "0" }, { label: "Pulse width", unit: "s", def: "0.5m", spice: "inf" },
+    { label: "Period", unit: "s", def: "1m", spice: "inf" },
   ],
   EXP: [
-    { label: "Initial value", unit: "y", def: "0" }, { label: "Pulsed value", unit: "y", def: "1" }, { label: "Rise delay", unit: "s", def: "0" },
-    { label: "Rise time constant", unit: "s", def: "0.1m" }, { label: "Fall delay", unit: "s", def: "1m" }, { label: "Fall time constant", unit: "s", def: "0.1m" },
+    { label: "Initial value", unit: "y", def: "0", spice: "0" }, { label: "Pulsed value", unit: "y", def: "1", spice: "0" }, { label: "Rise delay", unit: "s", def: "0", spice: "0" },
+    { label: "Rise time constant", unit: "s", def: "0.1m", spice: "1f" }, { label: "Fall delay", unit: "s", def: "1m", spice: "inf" }, { label: "Fall time constant", unit: "s", def: "0.1m", spice: "1f" },
   ],
   SFFM: [
-    { label: "Offset", unit: "y", def: "0" }, { label: "Amplitude", unit: "y", def: "1" }, { label: "Carrier frequency", unit: "Hz", def: "10k" },
-    { label: "Modulation index", unit: "", def: "5" }, { label: "Signal frequency", unit: "Hz", def: "1k" },
+    { label: "Offset", unit: "y", def: "0", spice: "0" }, { label: "Amplitude", unit: "y", def: "1", spice: "0" }, { label: "Carrier frequency", unit: "Hz", def: "10k", spice: "?" },
+    { label: "Modulation index", unit: "", def: "5", spice: "0" }, { label: "Signal frequency", unit: "Hz", def: "1k", spice: "?" },
   ],
 };
 
@@ -120,7 +122,12 @@ export function parseSource(...parts: (string | undefined)[]): Source {
 
 /** Function arguments for SPICE: gaps filled with defaults, trailing blanks dropped. */
 function argList(func: Func, args: string[]) {
-  if (func === "PWL") return args.map((a) => a.trim()).filter(Boolean);
+  if (func === "PWL") {
+    // complete (time, value) rows only: a half-filled row must not shift the pairs after it
+    const out: string[] = [];
+    for (let i = 0; i < args.length; i += 2) if (args[i]?.trim() && args[i + 1]?.trim()) out.push(args[i].trim(), args[i + 1].trim());
+    return out;
+  }
   const defs = FUNCS[func];
   const last = args.reduce((n, a, i) => (a.trim() ? i : n), -1);
   // arguments beyond the form's fields (PULSE cycles, LTspice's Ncycles ...) are kept as typed
@@ -158,7 +165,9 @@ export function sample(s: Source, n = 240): [number, number][] | null {
       return x1 === x0 ? y1 : y0 + ((y1 - y0) * (t - x0)) / (x1 - x0);
     };
   } else {
-    const a = FUNCS[s.func].map((d, i) => num(s.args[i], d.def));
+    // given arguments; a gap gets the form default (as written); trailing ones what SPICE does
+    const last = s.args.reduce((n, a, i) => (a?.trim() ? i : n), -1);
+    const a = FUNCS[s.func].map((d, i) => (i <= last || d.spice === undefined ? num(s.args[i], d.def) : d.spice === "inf" ? Infinity : d.spice === "?" ? null : spiceNum(d.spice)));
     if (a.some((x) => x === null)) return null;
     const p = a as number[];
     if (s.func === "SINE") {
@@ -168,15 +177,16 @@ export function sample(s: Source, n = 240): [number, number][] | null {
     } else if (s.func === "PULSE") {
       const [v1, v2, td, tr, tf, pw, per] = p;
       const one = tr + pw + tf;
-      end = td + (per > 0 ? 2.2 * per : 1.5 * one || 1);
+      const periodic = isFinite(per) && per > 0;
+      end = td + (periodic ? 2.2 * per : isFinite(one) && one > 0 ? 1.5 * one : td || 1);
       f = (t) => {
         if (t < td) return v1;
-        const x = per > 0 ? (t - td) % per : t - td;
+        const x = periodic ? (t - td) % per : t - td;
         return x < tr ? v1 + ((v2 - v1) * x) / tr : x < tr + pw ? v2 : x < one ? v2 + ((v1 - v2) * (x - tr - pw)) / tf : v1;
       };
     } else if (s.func === "EXP") {
       const [v1, v2, td1, tau1, td2, tau2] = p;
-      end = Math.max(td2 + 5 * tau2, td1 + 5 * tau1, 1e-12);
+      end = isFinite(td2) ? Math.max(td2 + 5 * tau2, td1 + 5 * tau1, 1e-12) : Math.max(td1 + 5 * tau1, 2 * td1, 1e-12);
       f = (t) => v1 + (t < td1 ? 0 : (v2 - v1) * (1 - Math.exp(-(t - td1) / tau1))) + (t < td2 ? 0 : (v1 - v2) * (1 - Math.exp(-(t - td2) / tau2)));
     } else {
       const [off, amp, fc, mdi, fs] = p;
@@ -192,6 +202,8 @@ export function sample(s: Source, n = 240): [number, number][] | null {
 
 export type Analysis = "tran" | "ac" | "dc" | "noise" | "op" | "tf" | "pz" | "sens";
 export const ANALYSIS = /^\.(tran|ac|dc|op|noise|tf|pz|sens)\b/i;
+/** The first analysis line of a directive text (the one the simulation dialog edits). */
+export const analysisLine = (text: string) => text.split("\n").find((l) => ANALYSIS.test(l.trim()));
 export type Fields = Record<string, string>;
 
 /** `v(a)`, `v(a,b)`, `i(V1)` -> output fields (okind v|i, node, ref, isrc). */
@@ -343,7 +355,7 @@ export function parseMeas(line: string): Meas | null {
   if (!/^\.meas(ure)?$/i.test(t[0] ?? "") || t.length < 4) return null;
   const [an, name, op] = [t[1].toLowerCase(), t[2], t[3].toUpperCase()];
   const kv = (k: string, from = 4) => t.slice(from).find((x) => x.toUpperCase().startsWith(`${k}=`))?.slice(k.length + 1) ?? "";
-  const edge = (from: number) => { const e = t.slice(from).find((x) => /^(rise|fall|cross)=/i.test(x)); return e ? { edge: e.split("=")[0].toLowerCase(), n: e.split("=")[1] } : { edge: "", n: "" }; };
+  const edge = (from: number, to = t.length) => { const e = t.slice(from, to).find((x) => /^(rise|fall|cross)=/i.test(x)); return e ? { edge: e.split("=")[0].toLowerCase(), n: e.split("=")[1] } : { edge: "", n: "" }; };
   if (!["tran", "ac", "dc"].includes(an)) return null;
   if (["AVG", "RMS", "MIN", "MAX", "PP", "INTEG"].includes(op)) return { an, name, type: "stat", f: { op, expr: t[4] ?? "", from: kv("FROM"), to: kv("TO") } };
   if (op === "FIND") return { an, name, type: "find", f: { expr: t[4] ?? "", at: kv("AT") } };
@@ -351,7 +363,7 @@ export function parseMeas(line: string): Meas | null {
   if (op === "TRIG") {
     const k = t.findIndex((x) => x.toUpperCase() === "TARG");
     if (k < 0) return null;
-    const side = (from: number, to: number) => ({ expr: t[from + 1] ?? "", val: t.slice(from, to).find((x) => /^val=/i.test(x))?.slice(4) ?? "", ...edge(from) });
+    const side = (from: number, to: number) => ({ expr: t[from + 1] ?? "", val: t.slice(from, to).find((x) => /^val=/i.test(x))?.slice(4) ?? "", ...edge(from, to) });
     const [a, b] = [side(3, k), side(k, t.length)];
     return { an, name, type: "delay", f: { expr: a.expr, val: a.val, edge: a.edge, n: a.n, expr2: b.expr, val2: b.val, edge2: b.edge, n2: b.n } };
   }

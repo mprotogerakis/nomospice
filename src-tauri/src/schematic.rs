@@ -393,8 +393,21 @@ const BUILTIN_MODELS: &[(&str, &str)] = &[
     ("opamp", ".subckt opamp inn inp out params: Aol=100K GBW=10Meg\nG1 0 n inp inn 1m\nR1 n 0 {Aol*1k}\nC1 n 0 {1/(6.2832*1k*GBW)}\nE1 out 0 n 0 1\n.ends opamp"),
 ];
 
+/// Byte spans of the whitespace-separated tokens of `line`; `{a * b}`, `(…)` and `'…'` stay whole.
+fn token_spans(line: &str) -> Vec<(usize, usize)> {
+    let (b, mut out, mut start, mut depth, mut quote) = (line.as_bytes(), vec![], None, 0i32, false);
+    for (i, &c) in b.iter().enumerate() {
+        if c == b'\'' { quote = !quote; } else if !quote && (c == b'{' || c == b'(') { depth += 1; } else if !quote && (c == b'}' || c == b')') { depth -= 1; }
+        let gap = c.is_ascii_whitespace() && depth <= 0 && !quote;
+        match (gap, start) { (true, Some(s)) => { out.push((s, i)); start = None; } (false, None) => start = Some(i), _ => {} }
+    }
+    if let Some(s) = start { out.push((s, b.len())); }
+    out
+}
+
 /// `text` with `target` set to `value`: a `.param` (`name=…`, spaces around `=` allowed) or the
-/// value of an R, C or L instance (the token after its two nodes). None if neither is in the deck.
+/// value of a top-level R, C or L instance (the token after its two nodes; `.subckt` bodies are
+/// left alone). None if neither is in the deck.
 pub fn vary(text: &str, target: &str, value: f64) -> Option<String> {
     // ASCII names only, and ASCII lowercase: byte offsets in `low` are offsets in `line`
     let t = target.trim().to_ascii_lowercase();
@@ -402,42 +415,43 @@ pub fn vary(text: &str, target: &str, value: f64) -> Option<String> {
         return None;
     }
     let v = format!("{value:e}");
-    let mut found = false;
+    let (mut found, mut sub) = (false, 0);
     let out: Vec<String> = text.lines().map(|line| {
         let low = line.to_ascii_lowercase();
-        if low.trim_start().starts_with(".param") {
-            // find `name =` at a word start, then replace the value token after it
-            let b = line.as_bytes();
+        let first = low.split_whitespace().next().unwrap_or("");
+        match first {
+            ".subckt" => sub += 1,
+            ".ends" => sub -= 1,
+            _ => {}
+        }
+        if found || sub > 0 {
+            return line.to_string();
+        }
+        // replace the token span [a, e) of `line` with the value
+        let put = |a: usize, e: usize| format!("{}{v}{}", &line[..a], &line[e..]);
+        if first == ".param" {
+            // `name =` at a word start; the value is the next top-level token (after `=` and spaces)
+            let b = low.as_bytes();
             let mut i = 0;
             while let Some(k) = low[i..].find(&t).map(|k| k + i) {
-                let start_ok = k == 0 || !(b[k - 1].is_ascii_alphanumeric() || b[k - 1] == b'_');
                 let mut j = k + t.len();
                 while j < b.len() && b[j] == b' ' { j += 1; }
-                if start_ok && j < b.len() && b[j] == b'=' {
+                if (k == 0 || !(b[k - 1].is_ascii_alphanumeric() || b[k - 1] == b'_')) && j < b.len() && b[j] == b'=' {
                     j += 1;
                     while j < b.len() && b[j] == b' ' { j += 1; }
-                    let (mut e, mut depth) = (j, 0i32); // the value: up to whitespace outside {} () ''
-                    let mut quote = false;
-                    while e < b.len() && (depth > 0 || quote || !b[e].is_ascii_whitespace()) {
-                        match b[e] { b'\'' => quote = !quote, b'{' | b'(' if !quote => depth += 1, b'}' | b')' if !quote => depth -= 1, _ => {} }
-                        e += 1;
-                    }
+                    let e = token_spans(&line[j..]).first().map_or(j, |&(_, e)| j + e);
                     found = true;
-                    return format!("{}{v}{}", &line[..j], &line[e..]);
+                    return put(j, e);
                 }
                 i = k + 1;
             }
-            line.to_string()
-        } else {
-            let toks: Vec<&str> = line.split_whitespace().collect();
-            if !found && toks.len() >= 4 && toks[0].to_lowercase() == t && "rcl".contains(&t[..1]) {
+        } else if first == t && "rcl".contains(&t[..1]) {
+            if let Some(&(a, e)) = token_spans(line).get(3) {
                 found = true;
-                let mut toks: Vec<String> = toks.iter().map(|s| s.to_string()).collect();
-                toks[3] = v.clone();
-                return toks.join(" ");
+                return put(a, e);
             }
-            line.to_string()
         }
+        line.to_string()
     }).collect();
     found.then(|| out.join("\n") + "\n")
 }
@@ -1294,6 +1308,9 @@ mod tests {
         assert_eq!(vary(deck, "R2", 1.0), None);
         assert!(vary("  .param a=1 µ=2\n", "a", 5.0).unwrap().contains("  .param a=5e0 µ=2"), "indented, non-ASCII");
         assert_eq!(vary(deck, "µ", 1.0), None);
+        // a brace expression with spaces is one value; subcircuit bodies are not top-level instances
+        assert!(vary("R1 a b {R * 2} tc=1\n", "R1", 5.0).unwrap().contains("R1 a b 5e0 tc=1"));
+        assert_eq!(vary(".subckt opamp a b c\nR1 n 0 {Aol*1k}\n.ends opamp\n", "R1", 1.0), None);
         // RC low-pass: the pole moves with R (-1/RC)
         let _s = SIM.lock();
         let bode = EXAMPLES.iter().find(|e| e.0 == "rc_bode").unwrap().1.replace(".ac dec 50 10 1Meg", ".pz in 0 out 0 vol pz");

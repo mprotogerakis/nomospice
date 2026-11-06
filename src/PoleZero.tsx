@@ -1,12 +1,12 @@
 // Pole-zero map of a .pz analysis in the s-plane, and the root locus: the poles' paths while one
 // parameter (.param or an R/C/L value) is swept, one .pz run per step (root_locus in main.rs).
-import { memo, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { Run } from "./types";
 import { dirOf, useS } from "./store";
-import { si, spiceNum } from "./spice";
+import { parseParams, si, spiceNum } from "./spice";
 import { defOf } from "./geom";
-import { FIELD } from "./ui/dialog";
+import { FIELD, numHelp } from "./ui/dialog";
 import { Button } from "./ui/button";
 import { cn } from "@/lib/utils";
 
@@ -44,6 +44,8 @@ export const PoleZero = memo(function PoleZero({ run }: { run: Run }) {
   const zeros = useMemo(() => run.op.filter((o) => o[0].startsWith("zero")).map(([, re, im]) => ({ re, im })), [run]);
   const [locus, setLocus] = useState<{ values: number[]; steps: P[][]; target: string } | null>(null);
   const paths = useMemo(() => (locus ? branches(locus.steps) : []), [locus]);
+  // a new run (edited circuit, live mode): an old locus and zoom would describe another circuit
+  useEffect(() => (setLocus(null), setView(null)), [run]);
 
   // view: equal scale on both axes (angles = damping), wheel zoom around the cursor
   const host = useRef<HTMLDivElement>(null);
@@ -147,7 +149,7 @@ function Sidebar({ poles, zeros, locus, setLocus }: { poles: P[]; zeros: P[]; lo
   // sweepable: .param names and R/C/L instances
   const targets = useMemo(() => [
     ...items.flatMap((it) => (it.t === "text" && it.directive ? it.text.split("\n") : [])).filter((l) => /^\s*\.param\b/i.test(l))
-      .flatMap((l) => [...l.replace(/^\s*\.param/i, "").matchAll(/([a-z_]\w*)\s*=/gi)].map((m) => m[1])),
+      .flatMap((l) => parseParams(l).map(([n]) => n).filter((n) => /^[a-z_]\w*$/i.test(n))),
     ...items.flatMap((it, i) => (it.t === "sym" && "RCL".includes(defOf(lib, it)?.prefix?.[0]?.toUpperCase() ?? "-") ? [nets?.insts[i] || it.attrs.InstName || ""] : [])).filter(Boolean),
   ], [items, lib, nets]);
   const [f, setF] = useState({ target: targets[0] ?? "", from: "", to: "", steps: "40", scale: "log" });
@@ -199,8 +201,15 @@ function Sidebar({ poles, zeros, locus, setLocus }: { poles: P[]; zeros: P[]; lo
       <p className="text-2xs leading-4 text-text-tertiary">Sweeps a .param or an R/C/L value and draws the poles' paths (● start, ■ end). Each step is one .pz run.</p>
       <datalist id="locus-targets">{targets.map((t) => <option key={t} value={t} />)}</datalist>
       <label className="grid grid-cols-[70px_1fr] items-center gap-2 text-text-secondary">Parameter<input className={FIELD} list="locus-targets" value={f.target} onChange={set("target")} placeholder="R1 or a .param" /></label>
-      <label className="grid grid-cols-[70px_1fr] items-center gap-2 text-text-secondary">From<input className={FIELD} value={f.from} onChange={set("from")} placeholder="100" /></label>
-      <label className="grid grid-cols-[70px_1fr] items-center gap-2 text-text-secondary">To<input className={FIELD} value={f.to} onChange={set("to")} placeholder="100k" /></label>
+      {(["from", "to"] as const).map((k) => {
+        const h = numHelp(f[k], "", (v) => setF({ ...f, [k]: v }));
+        return (
+          <label key={k} className="grid grid-cols-[70px_1fr] items-center gap-x-2 gap-y-0.5 text-text-secondary">
+            {k === "from" ? "From" : "To"}<input className={FIELD} value={f[k]} onChange={set(k)} placeholder={k === "from" ? "100" : "100k"} />
+            {(h.warn || h.info) && <span className={cn("col-start-2 text-2xs", h.warn ? "text-status-warning" : "text-text-tertiary")}>{h.warn ? <>⚠ {h.warn}</> : h.info}</span>}
+          </label>
+        );
+      })}
       <label className="grid grid-cols-[70px_1fr] items-center gap-2 text-text-secondary">Steps<input className={FIELD} value={f.steps} onChange={set("steps")} /></label>
       <label className="grid grid-cols-[70px_1fr] items-center gap-2 text-text-secondary">Spacing
         <select className={FIELD} value={f.scale} onChange={set("scale")}><option value="log">logarithmic</option><option value="lin">linear</option></select>
