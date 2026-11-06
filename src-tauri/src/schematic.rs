@@ -398,69 +398,101 @@ fn token_spans(line: &str) -> Vec<(usize, usize)> {
     spice_tokens(line).into_iter().map(|t| { let a = t.as_ptr() as usize - line.as_ptr() as usize; (a, a + t.len()) }).collect()
 }
 
-/// Where `target` is set in `text` (byte spans): every top-level `.param` definition of that name
-/// (spaces around `=` allowed), or else the value of the top-level R, C or L instance of that name
-/// (the token after its two nodes). `.subckt` bodies are left alone. None if neither is in the deck.
-pub fn vary_spans(text: &str, target: &str) -> Option<Vec<(usize, usize)>> {
-    // ASCII names only, and ASCII lowercase: byte offsets in `low` are offsets in `line`
-    let t = target.trim().to_ascii_lowercase();
-    if t.is_empty() || !t.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_') {
-        return None;
-    }
-    // the value spans of `t=` on a .param line (every definition on it: SPICE uses the last): whole
-    // top-level tokens only, so `{x==1?2:3}` (one token) and `µa=1` (another name) are not
-    // definitions of x / a. Forms: `t=v`, `t= v`, `t =v`, `t = v`.
-    let param_value = |line: &str, low: &str| {
-        let mut found = vec![];
-        let sp = token_spans(line);
-        for (i, &(a, e)) in sp.iter().enumerate() {
-            if low[a..].starts_with(';') || low[a..].starts_with('$') {
-                break; // an inline comment: `.param a=1 ; R1=5` does not define R1
-            }
-            // `+Rb=10k`: a continuation's first token carries the `+`
-            let a = if low[a..e].starts_with('+') && e > a + 1 { a + 1 } else { a };
-            let tok = &low[a..e];
-            let Some(after) = tok.strip_prefix(t.as_str()) else { continue };
-            let (rest, next) = (after, sp.get(i + 1).map(|&(a, e)| (a, e, &low[a..e])));
-            let val = match (rest, next) {
-                (r, _) if r.starts_with('=') && !r.starts_with("==") && r.len() > 1 => Some((a + t.len() + 1, e)),
-                ("=", Some((na, ne, _))) => Some((na, ne)),
-                ("", Some((na, ne, n))) if n.starts_with('=') && !n.starts_with("==") => {
-                    if n.len() > 1 { Some((na + 1, ne)) } else { sp.get(i + 2).copied() }
-                }
-                _ => None,
-            };
-            found.extend(val);
-        }
-        found
-    };
-    // top-level lines only (outside .subckt … .ends), with their lowercase twin and whether they
-    // are part of a .param (its own line, or a `+` continuation of one)
-    let (mut sub, mut in_param) = (0, false);
-    let mut at = 0;
-    let lines: Vec<(usize, &str, String, bool, bool)> = text.split_inclusive('\n').map(|piece| {
+/// One line of a deck as sweeps read it.
+struct DeckLine<'a> {
+    start: usize,
+    line: &'a str,
+    /// ASCII lowercase: the same byte offsets as `line`
+    low: String,
+    /// outside `.subckt … .ends`
+    top: bool,
+    /// a `.param` line or a `+` continuation of one (comment and blank lines in between allowed)
+    param: bool,
+}
+
+fn deck_lines(text: &str) -> Vec<DeckLine<'_>> {
+    let (mut sub, mut in_param, mut at) = (0, false, 0);
+    text.split_inclusive('\n').map(|piece| {
         let (start, line) = (at, piece.trim_end_matches(['\n', '\r']));
         at += piece.len();
         let low = line.to_ascii_lowercase();
-        let first = low.split_whitespace().next().unwrap_or("");
-        match first { ".subckt" => sub += 1, ".ends" => sub = (sub - 1).max(0), _ => {} } // a stray .ends must not hide the rest
-        // `+` continues a .param, also across comment and blank lines in between (SPICE skips those)
-        let skip = first.is_empty() || first.starts_with('*');
+        let first = low.split_whitespace().next().unwrap_or("").to_string();
+        match first.as_str() { ".subckt" => sub += 1, ".ends" => sub = (sub - 1).max(0), _ => {} } // a stray .ends must not hide the rest
+        let skip = first.is_empty() || first.starts_with('*'); // SPICE skips these inside a continuation
         in_param = first == ".param" || (in_param && (first.starts_with('+') || skip));
-        let top = sub == 0 && first != ".ends";
-        (start, line, low, top, in_param && !skip) // a comment line is never a definition
-    }).collect();
-    // a .param of that name wins over a part of the same name (pz_sallen_key: `.param Rb`, part Rb = {Rb})
-    let params = lines.iter().any(|(_, l, low, top, p)| *top && *p && !param_value(l, low).is_empty());
-    let mut spans = vec![];
-    for (start, line, low, top, is_param) in &lines {
-        let here: Vec<(usize, usize)> = if !top { vec![] }
-            else if params { if *is_param { param_value(line, low) } else { vec![] } }
-            else if spans.is_empty() && low.split_whitespace().next() == Some(t.as_str()) && "rcl".contains(&t[..1]) { token_spans(line).get(3).copied().into_iter().collect() }
-            else { vec![] };
-        spans.extend(here.into_iter().map(|(a, e)| (start + a, start + e)));
+        DeckLine { start, line, low, top: sub == 0 && first != ".ends", param: in_param && !skip }
+    }).collect()
+}
+
+/// The definitions on a `.param` line: (name as written, value span). Whole top-level tokens only,
+/// so `{x==1?2:3}` (one token) and `µa=1` (another name) define neither x nor a, and nothing after
+/// an inline `;`/`$` comment counts. Forms: `n=v`, `n= v`, `n =v`, `n = v`, `+n=v`.
+fn param_defs<'a>(line: &'a str, low: &str) -> Vec<(&'a str, (usize, usize))> {
+    let ident = |n: &str| n.bytes().next().is_some_and(|c| c.is_ascii_alphabetic() || c == b'_') && n.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_');
+    let sp = token_spans(line);
+    let mut out = vec![];
+    for (i, &(a0, e)) in sp.iter().enumerate() {
+        if low[a0..].starts_with(';') || low[a0..].starts_with('$') {
+            break;
+        }
+        let a = if low[a0..e].starts_with('+') && e > a0 + 1 { a0 + 1 } else { a0 }; // `+Rb=10k`
+        let tok = &low[a..e];
+        let next = |k: usize| sp.get(k).copied();
+        let def = match tok.find('=') {
+            Some(k) if k > 0 && ident(&tok[..k]) && !tok[k..].starts_with("==") => {
+                Some((&line[a..a + k], if tok.len() > k + 1 { Some((a + k + 1, e)) } else { next(i + 1) }))
+            }
+            None if ident(tok) => next(i + 1).filter(|&(na, ne)| low[na..ne].starts_with('=') && !low[na..ne].starts_with("==")).map(|(na, ne)| {
+                (&line[a..e], if ne > na + 1 { Some((na + 1, ne)) } else { next(i + 2) })
+            }),
+            _ => None,
+        };
+        if let Some((name, Some(v))) = def {
+            out.push((name, v));
+        }
     }
-    (!spans.is_empty()).then_some(spans)
+    out
+}
+
+/// Where `target` is set in `text` (byte spans): every top-level `.param` definition of that name
+/// (SPICE uses the last), or else the value of the top-level R, C or L instance of that name (the
+/// token after its two nodes). `.subckt` bodies are left alone. None if neither is in the deck.
+pub fn vary_spans(text: &str, target: &str) -> Option<Vec<(usize, usize)>> {
+    let t = target.trim();
+    if t.is_empty() || !t.is_ascii() {
+        return None;
+    }
+    let lines = deck_lines(text);
+    let defs: Vec<(usize, usize)> = lines.iter().filter(|l| l.top && l.param)
+        .flat_map(|l| param_defs(l.line, &l.low).into_iter().filter(|(n, _)| n.eq_ignore_ascii_case(t)).map(move |(_, (a, e))| (l.start + a, l.start + e)))
+        .collect();
+    // a .param of that name wins over a part of the same name (pz_sallen_key: `.param Rb`, part Rb = {Rb})
+    if !defs.is_empty() {
+        return Some(defs);
+    }
+    let low = t.to_ascii_lowercase();
+    if !"rcl".contains(&low[..1]) {
+        return None;
+    }
+    lines.iter().filter(|l| l.top).find(|l| l.low.split_whitespace().next() == Some(low.as_str()))
+        .and_then(|l| token_spans(l.line).get(3).map(|&(a, e)| vec![(l.start + a, l.start + e)]))
+}
+
+/// What a sweep can vary in `text`: top-level `.param` names and R, C, L instances (vary_spans' rules).
+pub fn sweepable(text: &str) -> Vec<String> {
+    let lines = deck_lines(text);
+    let params = lines.iter().filter(|l| l.top && l.param).flat_map(|l| param_defs(l.line, &l.low).into_iter().map(|(n, _)| n.to_string()));
+    let parts = lines.iter().filter(|l| l.top && token_spans(l.line).len() >= 4).filter_map(|l| {
+        let first = l.line.split_whitespace().next()?;
+        "rclRCL".contains(&first[..1]).then(|| first.to_string())
+    });
+    let mut out: Vec<String> = vec![];
+    for n in params.chain(parts) {
+        if !out.iter().any(|o| o.eq_ignore_ascii_case(&n)) {
+            out.push(n);
+        }
+    }
+    out
 }
 
 /// `text` with every span replaced by `value` (the rest byte for byte as it was).
@@ -592,6 +624,16 @@ impl Prepared {
         self
     }
 
+    /// This deck with its other analyses commented out (a sweep step needs only `.pz`; a `.tran`
+    /// or `.meas` would run every step for nothing).
+    pub fn only_pz(&self) -> Prepared {
+        const OTHER: [&str; 12] = [".tran", ".ac", ".dc", ".op", ".noise", ".tf", ".sens", ".four", ".meas", ".measure", ".disto", ".pss"];
+        let text = self.0.lines().map(|l| {
+            let first = l.split_whitespace().next().unwrap_or("").to_ascii_lowercase();
+            if OTHER.contains(&first.as_str()) { format!("* {l}") } else { l.to_string() }
+        }).collect::<Vec<_>>().join("\n") + "\n";
+        Prepared(text, self.1.clone())
+    }
     /// Where `target` is set in this deck (see [`vary_spans`]): found once per sweep.
     pub fn spans(&self, target: &str) -> Option<Vec<(usize, usize)>> {
         vary_spans(&self.0, target)
@@ -1354,6 +1396,8 @@ mod tests {
         assert!(vary(".param Ra=1k\n\n+ Rb=10k\n", "Rb", 2e4).unwrap().contains("+ Rb=2e4"), "blank line between");
         assert!(vary(".ends\nR1 a b 1k\n", "R1", 2.0).unwrap().contains("R1 a b 2e0"), "stray .ends");
         assert_eq!(vary(".param Rb=10k Rb=20k\n", "Rb", 3.0).unwrap(), ".param Rb=3e0 Rb=3e0\n", "every definition on a line");
+        // what the root-locus panel offers: the same rules
+        assert_eq!(sweepable(".param a=1 b = {a*2} ; c=3\n.subckt x 1 2\nR9 1 2 1k\n.ends\nR1 n1 n2 1k\nC1 n2 0 1n\nV1 n1 0 1\n"), ["a", "b", "R1", "C1"]);
         // comments are not definitions: the part R1 is varied
         let c = vary(".param a=1 ; R1=5\n* R1=old value\nR1 x y 1k\n", "R1", 2e3).unwrap();
         assert!(c.contains("R1 x y 2e3") && c.contains("; R1=5") && c.contains("* R1=old value"), "{c}");

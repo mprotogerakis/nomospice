@@ -1,12 +1,13 @@
 // Pole-zero map of a .pz analysis in the s-plane, and the root locus: the poles' paths while one
 // parameter (.param or an R/C/L value) is swept, one .pz run per step (root_locus in main.rs).
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { Run } from "./types";
-import { currentNets, dirOf, docId, useS } from "./store";
-import { parseParams, si, spiceNum } from "./spice";
-import { circuitInsts, NumField, Select, TextField } from "./ui/dialog";
+import { dirOf, docId, useS } from "./store";
+import { si, spiceNum } from "./spice";
+import { NumField, Select, TextField } from "./ui/dialog";
 import { Button } from "./ui/button";
+import { useSize } from "./lib/useSize";
 import { cn } from "@/lib/utils";
 
 type P = { re: number; im: number };
@@ -35,22 +36,6 @@ function branches(steps: P[][]): (P | null)[][] {
   return out;
 }
 
-/** `.param` names a root locus can sweep in a directive text (the rules of vary_spans in schematic.rs). */
-function topParams(text: string) {
-  const defs: string[] = [];
-  let sub = 0, inParam = false;
-  for (const l of text.split("\n")) {
-    const first = l.trim().split(/\s+/)[0]?.toLowerCase() ?? "";
-    if (first === ".subckt") sub++;
-    if (first === ".ends") sub = Math.max(sub - 1, 0);
-    const skip = !first || first.startsWith("*"); // comment and blank lines do not end a .param
-    if (first === ".param") (inParam = true), sub || defs.push(l.trim().slice(6));
-    else if (inParam && first.startsWith("+")) sub || defs.push(l.trim().slice(1));
-    else if (!skip) inParam = false;
-  }
-  return defs.flatMap((d) => parseParams(d.replace(/(^|\s)[;$].*$/, "")).map(([n]) => n).filter((n) => /^[a-z_]\w*$/i.test(n)));
-}
-
 /** Tick step for a span: 1, 2 or 5 × 10^n, about six ticks. */
 const tickStep = (span: number) => { const e = 10 ** Math.floor(Math.log10(span / 6)); return [1, 2, 5, 10].map((m) => m * e).find((s) => span / s <= 8) ?? 10 * e; };
 
@@ -65,13 +50,7 @@ export const PoleZero = memo(function PoleZero({ run }: { run: Run }) {
 
   // view: equal scale on both axes (angles = damping), wheel zoom around the cursor
   const host = useRef<HTMLDivElement>(null);
-  const [size, setSize] = useState({ w: 0, h: 0 });
-  useLayoutEffect(() => {
-    const el = host.current!;
-    const ro = new ResizeObserver(() => setSize({ w: el.clientWidth, h: el.clientHeight }));
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
+  const size = useSize(host);
   const fit = useMemo(() => {
     const all = [...poles, ...zeros, ...paths.flat().filter((p): p is P => !!p), { re: 0, im: 0 }];
     let [x0, x1] = [Math.min(...all.map((p) => p.re)), Math.max(...all.map((p) => p.re))];
@@ -162,29 +141,28 @@ export const PoleZero = memo(function PoleZero({ run }: { run: Run }) {
         )}
         {!poles.length && !zeros.length && <div className="absolute inset-0 flex items-center justify-center text-xs text-text-tertiary">No poles or zeros found: check the .pz input and output nodes (see Log).</div>}
       </div>
-      <Sidebar poles={poles} zeros={zeros} locus={locus} setLocus={setLocus} error={error} setError={setError} />
+      <Sidebar run={run} poles={poles} zeros={zeros} locus={locus} setLocus={setLocus} error={error} setError={setError} />
     </div>
   );
 });
 
-function Sidebar({ poles, zeros, locus, setLocus, error, setError }: {
-  poles: P[]; zeros: P[]; locus: unknown; setLocus: (l: { values: number[]; steps: P[][]; target: string } | null) => void; error: string; setError: (e: string) => void;
+function Sidebar({ run, poles, zeros, locus, setLocus, error, setError }: {
+  run: Run; poles: P[]; zeros: P[]; locus: unknown; setLocus: (l: { values: number[]; steps: P[][]; target: string } | null) => void; error: string; setError: (e: string) => void;
 }) {
-  const items = useS((s) => s.items);
-  const lib = useS((s) => s.lib);
-  const nets = useS(currentNets); // null while the netlist lags the items: no index-aligned names then
   // its own busy state: the global `running` would make simulate() drop a Run meanwhile
   const [running, setRunning] = useState(false);
   const runningRef = useRef(false);
   runningRef.current = running;
   useEffect(() => () => void (runningRef.current && invoke("cancel_locus")), []); // the view goes: the sweep stops
   // sweepable: .param names and R/C/L instances
-  const targets = useMemo(() => [...new Set([
-    // as the backend (vary_spans) reads them: `+` lines joined to their .param, not inside
-    // .subckt … .ends, nothing after an inline `;`/`$` comment
-    ...items.flatMap((it) => (it.t === "text" && it.directive ? topParams(it.text) : [])),
-    ...circuitInsts(items, nets, lib).filter((x) => "RCL".includes(x.prefix || "-")).map((x) => x.inst),
-  ])], [items, lib, nets]);
+  // what the sweep can vary, by its own rules (the backend reads the deck that runs, includes too)
+  const [targets, setTargets] = useState<string[]>([]);
+  useEffect(() => {
+    let live = true;
+    const { items, path } = useS.getState();
+    invoke<string[]>("locus_targets", { items, dir: dirOf(path) }).then((t) => live && setTargets(t), () => {});
+    return () => void (live = false);
+  }, [run]);
   const [f, setF] = useState({ target: targets[0] ?? "", from: "", to: "", steps: "40", scale: "log" });
   // the names arrive with the netlist (it may lag the run): fill in the first one if still empty
   useEffect(() => { if (targets[0]) setF((x) => (x.target ? x : { ...x, target: targets[0] })); }, [targets]);

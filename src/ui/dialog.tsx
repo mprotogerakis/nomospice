@@ -158,7 +158,7 @@ export const SpiceLine = ({ children }: { children: React.ReactNode }) => (
 );
 
 /** The parts of the schematic: SPICE instance name (from the netlist when current) and prefix letter. */
-export const circuitInsts = (items: Item[], nets: Netlist | null, lib: Lib) =>
+const circuitInsts = (items: Item[], nets: Netlist | null, lib: Lib) =>
   items.flatMap((it, i) => (it.t === "sym" ? [{ inst: nets?.insts[i] || it.attrs.InstName || "", prefix: defOf(lib, it)?.prefix?.[0]?.toUpperCase() ?? "" }] : [])).filter((x) => x.inst);
 
 /** <datalist>s for the fields: "nets", "sources" (V/I), "sweepable" (sources, R, TEMP), "vexprs" (V(net)). */

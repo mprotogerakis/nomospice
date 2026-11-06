@@ -22,6 +22,7 @@ MAC=$OUT/nomospice_${VERSION}_aarch64.app.tar.gz
 RUN=$(gh run list -R $REPO --commit "$SHA" --json databaseId,status --jq '[.[] | select(.status == "completed")][0].databaseId')
 [ -n "$RUN" ] && [ "$RUN" != null ] || { echo "no completed CI run for $SHA (yet)" >&2; exit 1; }
 WIN=$(mktemp -d)
+trap 'rm -rf "$WIN"' EXIT
 gh run download "$RUN" -R $REPO -n nomospice-windows-latest -D "$WIN" || { echo "run $RUN has no Windows installers" >&2; exit 1; }
 EXE=$(find "$WIN" -name "nomospice_${VERSION}_x64-setup.exe" | head -1)
 MSI=$(find "$WIN" -name "nomospice_${VERSION}_x64_*.msi" | head -1)

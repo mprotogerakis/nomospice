@@ -1,4 +1,5 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef } from "react";
+import { useSize } from "./lib/useSize";
 import uPlot from "uplot";
 import { create } from "zustand";
 import { Plus, X } from "lucide-react";
@@ -160,16 +161,10 @@ export const Waveform = memo(function Waveform() {
 
   const host = useRef<HTMLDivElement>(null);
   const paneEls = useRef<(HTMLDivElement | null)[]>([]);
-  const [size, setSize] = useState({ w: 0, h: 0 });
   // zoom + cursors live in the store (kept across re-runs, reset per document / analysis kind)
   const plots = useRef<uPlot[]>([]);
 
-  useLayoutEffect(() => {
-    const el = host.current!;
-    const ro = new ResizeObserver(() => setSize({ w: el.clientWidth, h: el.clientHeight }));
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
+  const size = useSize(host);
 
   const sizeRef = useRef(size);
   sizeRef.current = size;

@@ -166,7 +166,11 @@ struct Sim {
 /// (`prepare`). Simulation and root locus share it, so the locus runs the circuit the plot shows.
 fn sim_deck(items: &[Item], dir: Option<&str>, lib: &Lib, warnings: &mut Vec<String>) -> schematic::Prepared {
     let sim = schematic::netlist_for_sim(items, &mut lib.0.lock().unwrap_or_else(|e| e.into_inner()));
-    // after the library lock: prepare reads the .include/.lib files, which can be slow
+    prepare_deck(sim, dir, warnings)
+}
+
+/// `prepare` reads the .include/.lib files (can be slow): call it without the library lock.
+fn prepare_deck(sim: Netlist, dir: Option<&str>, warnings: &mut Vec<String>) -> schematic::Prepared {
     schematic::prepare(&sim.text, dir.map(std::path::Path::new), warnings).with_sensors(sim.sensors)
 }
 
@@ -175,29 +179,43 @@ fn sim_deck(items: &[Item], dir: Option<&str>, lib: &Lib, warnings: &mut Vec<Str
 static SWEEP: Mutex<()> = Mutex::new(());
 /// Bumped to stop a running sweep at its next step (a new simulation, or the locus panel's Halt).
 static SWEEP_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-/// A sweep is running: traces fail at once instead of waiting for all its steps.
-static SWEEPING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-struct Done;
-impl Drop for Done {
-    fn drop(&mut self) {
-        SWEEPING.store(false, std::sync::atomic::Ordering::SeqCst);
+/// Sweeps requested and not done (queued ones too): traces fail at once instead of waiting for them.
+static SWEEPING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+struct Sweeping;
+impl Sweeping {
+    fn start() -> Self {
+        SWEEPING.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Sweeping
     }
 }
+impl Drop for Sweeping {
+    fn drop(&mut self) {
+        SWEEPING.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+/// ngspice's current plot is a sweep step's, not the user's simulation (until the next simulate).
+static PLOT_FROM_LOCUS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// `dir`: folder of the .asc, for relative `.include`/`.lib` paths.
 #[tauri::command]
 async fn simulate(items: Vec<Item>, dir: Option<String>, lib: tauri::State<'_, Lib>) -> Result<Sim, String> {
     let op = ngspice::begin(); // a Halt pressed from here on (netlisting, include expansion) still counts
     // the UI gets the clean netlist (same nets/insts/probes); the one with current sensors runs
-    let mut netlist = schematic::netlist(&items, &mut lib.0.lock().unwrap_or_else(|e| e.into_inner()));
-    let prepared = sim_deck(&items, dir.as_deref(), &lib, &mut netlist.warnings);
+    // both netlists from one state of the library (the UI's nets, insts, probes match what runs)
+    let (mut netlist, sim) = {
+        let mut lib = lib.0.lock().unwrap_or_else(|e| e.into_inner());
+        (schematic::netlist(&items, &mut lib), schematic::netlist_for_sim(&items, &mut lib))
+    };
+    let prepared = prepare_deck(sim, dir.as_deref(), &mut netlist.warnings);
     let simulated = prepared.text().to_string();
     // the newer request wins: a running root locus stops at its next step, then this runs
     SWEEP_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let res = tauri::async_runtime::spawn_blocking(move || {
         let _sweep = SWEEP.lock().unwrap_or_else(|e| e.into_inner());
         let _op = ngspice::enter(op);
-        ngspice::run(&prepared)
+        let run = ngspice::run(&prepared);
+        PLOT_FROM_LOCUS.store(false, std::sync::atomic::Ordering::SeqCst); // the current plot is this run's again
+        run
     }).await.map_err(|e| e.to_string())?;
     Ok(match res {
         Ok(mut run) => Sim { netlist, simulated, log: std::mem::take(&mut run.log), run: Some(run) },
@@ -212,6 +230,7 @@ async fn simulate(items: Vec<Item>, dir: Option<String>, lib: tauri::State<'_, L
 async fn root_locus(items: Vec<Item>, dir: Option<String>, target: String, values: Vec<f64>, lib: tauri::State<'_, Lib>) -> Result<Vec<Option<Vec<(f64, f64)>>>, String> {
     let op = ngspice::begin();
     let gen = SWEEP_GEN.load(std::sync::atomic::Ordering::SeqCst); // at once: a cancel while netlisting counts
+    let sweeping = Sweeping::start(); // from the request on, also while queued
     let deck = sim_deck(&items, dir.as_deref(), &lib, &mut vec![]);
     let pz = deck.text().lines().map(|l| l.trim().to_lowercase()).find(|l| l.starts_with(".pz"));
     match pz {
@@ -220,13 +239,13 @@ async fn root_locus(items: Vec<Item>, dir: Option<String>, target: String, value
         _ => {}
     }
     // where the value sits in the deck: found once, then spliced per step
+    let deck = deck.only_pz();
     let spans = deck.spans(&target).ok_or_else(|| format!("`{target}` is neither a .param nor an R, C or L in the schematic"))?;
     let stop = move || ngspice::halted() || SWEEP_GEN.load(std::sync::atomic::Ordering::SeqCst) != gen;
     tauri::async_runtime::spawn_blocking(move || {
         let _sweep = SWEEP.lock().unwrap_or_else(|e| e.into_inner());
         let _op = ngspice::enter(op);
-        SWEEPING.store(true, std::sync::atomic::Ordering::SeqCst);
-        let _done = Done;
+        let _sweeping = sweeping;
         let (mut steps, mut first_error, mut stopped) = (vec![], None, false);
         for &v in &values {
             if stop() {
@@ -234,6 +253,7 @@ async fn root_locus(items: Vec<Item>, dir: Option<String>, target: String, value
                 break;
             }
             let step = deck.at(&spans, v);
+            PLOT_FROM_LOCUS.store(true, std::sync::atomic::Ordering::SeqCst);
             match ngspice::run(&step) {
                 // interrupted by Halt (bg_halt ends the run with partial data) or cancelled: not a step
                 _ if stop() => {
@@ -257,6 +277,15 @@ async fn root_locus(items: Vec<Item>, dir: Option<String>, target: String, value
     }).await.map_err(|e| e.to_string())?
 }
 
+/// What a root locus can vary in the schematic: top-level `.param` names (also from included files)
+/// and R, C, L parts, by the rules the sweep itself uses.
+#[tauri::command]
+async fn locus_targets(items: Vec<Item>, dir: Option<String>, lib: tauri::State<'_, Lib>) -> Result<Vec<String>, String> {
+    let sim = schematic::netlist_for_sim(&items, &mut lib.0.lock().unwrap_or_else(|e| e.into_inner()));
+    tauri::async_runtime::spawn_blocking(move || schematic::sweepable(prepare_deck(sim, dir.as_deref(), &mut vec![]).text()))
+        .await.map_err(|e| e.to_string())
+}
+
 /// Stops a running root locus at its next step (its panel's Halt; the toolbar Halt stops everything).
 #[tauri::command]
 fn cancel_locus() {
@@ -265,11 +294,14 @@ fn cancel_locus() {
 
 #[tauri::command]
 async fn trace(expr: String, scale: String) -> Result<ngspice::Trace, String> {
-    if SWEEPING.load(std::sync::atomic::Ordering::SeqCst) {
+    if SWEEPING.load(std::sync::atomic::Ordering::SeqCst) > 0 {
         return Err("a root locus is being computed: traces are available when it is done".into());
     }
     tauri::async_runtime::spawn_blocking(move || {
-        let _sweep = SWEEP.lock().unwrap_or_else(|e| e.into_inner()); // not from a locus step's plot
+        let _sweep = SWEEP.lock().unwrap_or_else(|e| e.into_inner());
+        if PLOT_FROM_LOCUS.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err("a root locus replaced the simulation results: run the simulation again".into());
+        }
         ngspice::trace(&expr, &scale)
     }).await.map_err(|e| e.to_string())?
 }
@@ -617,7 +649,7 @@ fn main() {
         // updates from the GitHub releases (latest.json, signed with the key in ~/.tauri; see scripts/publish-release.sh)
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .invoke_handler(tauri::generate_handler![symbols, examples, path_exists, open_asc, save_asc, export_svg, netlist, simulate, root_locus, cancel_locus, trace, halt, cli_args, quit, recovery_save, recovery_take, recovery_resolve, recovery_clear,
+        .invoke_handler(tauri::generate_handler![symbols, examples, path_exists, open_asc, save_asc, export_svg, netlist, simulate, root_locus, locus_targets, cancel_locus, trace, halt, cli_args, quit, recovery_save, recovery_take, recovery_resolve, recovery_clear,
             library_sources, library_set_sources, library_search, library_text, library_fetch_microcap,
             git_status, git_log, git_show, git_commit, git_init])
         .setup(|app| {

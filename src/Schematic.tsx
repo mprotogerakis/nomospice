@@ -11,6 +11,7 @@ import {
 import { canProbe, commit, currentNets, nextInst, probe, probeMode, simulate, useS, useStatus } from "./store";
 import { deleteSelection, duplicate, newItem, transform } from "./actions";
 import { openMenu, type MenuItem } from "./Menu";
+import { useSize } from "./lib/useSize";
 import { cn } from "@/lib/utils";
 import { inlineStyles, saveSvg, withLightTheme } from "./svgExport";
 
@@ -229,7 +230,6 @@ export const Schematic = memo(function Schematic() {
   }, [diff, items]);
   const svgRef = useRef<SVGSVGElement>(null);
   const [view, setView] = useState<View>({ x: 120, y: 120, k: 1.5 });
-  const [size, setSize] = useState({ w: 0, h: 0 });
   const [cursor, setCursor] = useState<Pt>([0, 0]);
   const [wireStart, setWireStart] = useState<Pt | null>(null);
   const [hFirst, setHFirst] = useState<boolean | null>(null);
@@ -249,12 +249,7 @@ export const Schematic = memo(function Schematic() {
   // net of the hovered item (for net highlight + status bar)
   const hoverNet = hover >= 0 && nets && items[hover]?.t !== "sym" ? nets.nets[hover]?.[0] ?? null : null;
 
-  useLayoutEffect(() => {
-    const el = svgRef.current!;
-    const ro = new ResizeObserver(() => setSize({ w: el.clientWidth, h: el.clientHeight }));
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
+  const size = useSize(svgRef);
 
   const fit = () => {
     autoFit.current = true;
