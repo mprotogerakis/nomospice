@@ -252,12 +252,7 @@ export function analysisOptions(texts: { text: string; directive?: boolean }[]) 
     const lines = text.split("\n");
     lines.forEach((l, i) => {
       if (!ANALYSIS.test(l.trim()) || (!directive && !plausible(l.trim()))) return;
-      const more: string[] = [];
-      for (const n of lines.slice(i + 1)) {
-        const t = n.trim();
-        if (t.startsWith("+")) more.push(t);
-        else if (t && !t.startsWith("*")) break;
-      }
+      const more = continuation(lines, i).map((j) => lines[j].trim());
       found.push({ kind: parseAnalysis(l.trim()).kind, line: [l.trim(), ...more].join("\n"), active: !!directive });
     });
   }
@@ -281,14 +276,21 @@ function plausible(line: string) {
 
 /** `text` without its analysis statements (and their `+` lines): a result tab runs its own instead. */
 export function stripAnalyses(text: string) {
-  let drop = false;
-  return text.split("\n").filter((l) => {
-    const t = l.trim();
-    if (t.startsWith("+")) return !drop;
-    if (!t || t.startsWith("*")) return true;
-    drop = ANALYSIS.test(t);
-    return !drop;
-  }).join("\n");
+  const lines = text.split("\n"), drop = new Set<number>();
+  lines.forEach((l, i) => ANALYSIS.test(l.trim()) && [i, ...continuation(lines, i)].forEach((j) => drop.add(j)));
+  return lines.filter((_, i) => !drop.has(i)).join("\n");
+}
+
+/** The lines after `li` that continue its statement: its `+` lines (blank and `*` lines between
+ *  them are skipped, as SPICE does). */
+export function continuation(lines: string[], li: number) {
+  const out: number[] = [];
+  for (let j = li + 1; j < lines.length; j++) {
+    const t = lines[j].trim();
+    if (t.startsWith("+")) out.push(j);
+    else if (t && !t.startsWith("*")) break;
+  }
+  return out;
 }
 
 /** The first analysis line of a directive text (the one the simulation dialog edits). */
@@ -404,10 +406,7 @@ export const analysisRoundTrips = (line: string) => {
  *  no `+` line continues it (the form would not see the rest). */
 export const analysisEditable = (text: string) => { const lines = text.split("\n"); return analysisEditableAt(lines, analysisIndex(lines)); };
 /** The same for the analysis on line `li` (a text may hold several). */
-export const analysisEditableAt = (lines: string[], li: number) => {
-  const next = lines.slice(li + 1).find((l) => l.trim() && !l.trim().startsWith("*")) ?? "";
-  return li >= 0 && analysisRoundTrips(lines[li]) && !next.trim().startsWith("+");
-};
+export const analysisEditableAt = (lines: string[], li: number) => li >= 0 && analysisRoundTrips(lines[li]) && !continuation(lines, li).length;
 
 /** Include paths with forward slashes: portable, and safe from the .asc `\n` newline escape. */
 export const portablePaths = (text: string) => text.split("\n").map((l) => (/^\s*\.(inc|lib)/i.test(l) ? l.replaceAll("\\", "/") : l)).join("\n");

@@ -2,7 +2,7 @@
 import { useState } from "react";
 import type { Item } from "./types";
 import { analysesOf, analysisItem, commit, currentTab, selectTab, useS } from "./store";
-import { ANALYSES, ANALYSIS, analysisEditableAt, analysisIndex, formatAnalysis, knownSweep, parseAnalysis, type Analysis, type Fields } from "./spice";
+import { ANALYSES, ANALYSIS, analysisEditableAt, continuation, analysisIndex, formatAnalysis, knownSweep, parseAnalysis, type Analysis, type Fields } from "./spice";
 import { CircuitLists, Tabs, closeDialog, Field, Modal, NumField, Section, Select, SpiceLine, TextField } from "./ui/dialog";
 import { Button } from "./ui/button";
 
@@ -35,7 +35,8 @@ export function SimDialog({ index, kind0, of }: { index?: number; kind0?: Analys
   const unchanged = idx >= 0 && kind === init.kind && line === pristine;
   // more than the form shows (unknown options, `+` lines): OK replaces the whole statement
   const partial = idx >= 0 && !analysisEditableAt(lines, li);
-  const cont = (j: number) => j > li && /^\s*\+/.test(lines[j]) && lines.slice(li + 1, j).every((l) => !l.trim() || /^\s*[*+]/.test(l));
+  const plus = new Set(li >= 0 ? continuation(lines, li) : []);
+  const cont = (j: number) => plus.has(j);
   const edited = unchanged ? lines.join("\n") : lines.flatMap((l, j) => (j === li ? [line] : cont(j) ? [] : [l])).join("\n");
 
   const submit = () => {

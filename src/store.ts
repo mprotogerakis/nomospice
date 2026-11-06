@@ -127,13 +127,16 @@ export function redo() {
 
 /** The folder whose symbols the library holds (the schematic's: its .asy are listed too). */
 let symDir: string | null | undefined;
-export async function loadSymbols(items: Item[] = [], dir = dirOf(get().path), force = false) {
+/** `fresh`: a document is being loaded (the current one's symbols are not needed any more). */
+export async function loadSymbols(items: Item[] = [], dir = dirOf(get().path), { force = false, fresh = false } = {}) {
   const moved = dir !== symDir || force; // another folder (or other libraries): ask again for all
   const want = (its: Item[]) => its.flatMap((it) => (it.t === "sym" ? [it.sym] : []));
   if (Object.keys(get().lib).length && !moved && want(items).every((n) => get().lib[symKey(n)])) return;
-  // the placed parts' symbols too: the answer replaces ours, and the backend may have dropped
-  // symbols it had cached (switched-off libraries), so ask for everything in use
-  const names = [...new Set([...want(items), ...want(get().items)])];
+  // the answer replaces ours, and the backend may have dropped symbols it had cached (switched-off
+  // libraries): ask for everything in use — the document, its undo history, a diff on show
+  const s = get();
+  const inUse = fresh ? [] : [s.items, ...s.past, ...s.future, s.diff?.items ?? []].flatMap(want);
+  const names = [...new Set([...want(items), ...inUse])];
   symDir = dir;
   const defs = await invoke<SymbolDef[]>("symbols", { names, dir });
   set({ lib: Object.fromEntries(defs.map((d) => [d.name, d])) }); // the backend's whole set
@@ -153,11 +156,11 @@ export async function refreshGit() {
 
 /** The library sources changed: generated subckt boxes may differ now. */
 export async function refreshLibrarySymbols() {
-  await loadSymbols(get().items, dirOf(get().path), true); // the backend's set replaces ours
+  await loadSymbols(get().items, dirOf(get().path), { force: true }); // the backend's set replaces ours
 }
 
 export async function loadDoc(items: Item[], path: string | null) {
-  await loadSymbols(items, dirOf(path));
+  await loadSymbols(items, dirOf(path), { fresh: true });
   docGen++;
   autoPlotted = new Set();
   set({ dialog: null, menu: null, tab: null, tabs: {}, shown: null, items, path, past: [], future: [], sel: [], dirty: false, sim: null, traces: [], stale: false, nets: null, netsItems: null, plot: NO_PLOT, panel: get().panel === "op" ? null : get().panel, diff: null, tool: { k: "select" }, fitToken: get().fitToken + 1 });
@@ -300,7 +303,8 @@ export async function simulate() {
     const op = isOp(sim);
     const newKind = !!sim.run && plotKind(sim) !== get().plot.kind;
     set({
-      sim, shown, stale: changed, ...(!changed && { nets: sim.netlist, netsItems: items }),
+      // the live netlist only from a run of the schematic as it is (a tab's run swaps its analysis)
+      sim, shown, stale: changed, ...(!changed && deck === items && { nets: sim.netlist, netsItems: items }),
       // another analysis: fresh zoom/cursors, and old-kind data never drawn on the new axes
       ...(newKind && { plot: { ...NO_PLOT, kind: plotKind(sim) }, traces: get().traces.map((t) => ({ ...t, data: undefined })) }),
       panel: !sim.run || sim.run.aborted ? "log" : op ? "op" : get().panel === "op" && !sim.run.op.length ? null : get().panel,

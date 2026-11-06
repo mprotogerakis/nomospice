@@ -130,10 +130,16 @@ pub fn sym_key(name: &str) -> String {
 /// generated for, and the symbols loaded from the schematic's folder.
 pub struct Library(pub HashMap<String, SymbolDef>, HashSet<String>, u64, Local);
 
-/// The schematic's folder, the keys of the symbols loaded from it, and its modification time when
-/// they were (a symbol saved or removed there changes it).
+/// The schematic's folder, the keys of the symbols loaded from it, and its .asy files' count and
+/// newest modification time when they were (a symbol added, removed or edited there changes it).
 #[derive(Default)]
-pub struct Local(Option<std::path::PathBuf>, HashSet<String>, Option<std::time::SystemTime>);
+pub struct Local(Option<std::path::PathBuf>, HashSet<String>, Option<(usize, std::time::SystemTime)>);
+
+/// (count, newest mtime) of the .asy files in `dir`.
+fn asy_stamp(dir: &std::path::Path) -> Option<(usize, std::time::SystemTime)> {
+    let asy = std::fs::read_dir(dir).ok()?.flatten().filter(|e| e.path().extension().is_some_and(|x| x.eq_ignore_ascii_case("asy")));
+    asy.filter_map(|e| e.metadata().and_then(|m| m.modified()).ok()).fold(Some((0, std::time::SystemTime::UNIX_EPOCH)), |acc, t| acc.map(|(n, m)| (n + 1, m.max(t))))
+}
 
 impl Library {
     pub fn builtin() -> Self {
@@ -146,8 +152,11 @@ impl Library {
     /// none) drops them again; `rescan` reloads the same folder (a symbol saved meanwhile).
     pub fn set_dir(&mut self, dir: Option<&std::path::Path>, rescan: bool) {
         let moved = self.3 .0.as_deref() != dir;
-        let stamp = dir.and_then(|d| std::fs::metadata(d).and_then(|m| m.modified()).ok());
-        if !moved && (!rescan || stamp == self.3 .2) {
+        if !moved && !rescan {
+            return; // netlisting: no disk access
+        }
+        let stamp = dir.and_then(asy_stamp);
+        if !moved && stamp == self.3 .2 {
             return;
         }
         self.3 .2 = stamp;

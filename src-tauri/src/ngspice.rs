@@ -366,7 +366,10 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
         return Err(log);
     }
     let sensors = &sensors[..];
-    let pars = netlist.matches("par('").count(); // ngspice names their helpers pa_00, pa_01 …
+    // ngspice makes a helper source per par() in its output lines, named pa_00, pa_01 …
+    let pars = netlist.lines().map(|l| l.trim_start().to_ascii_lowercase())
+        .filter(|l| [".meas", ".print", ".plot", ".four", ".save"].iter().any(|d| l.starts_with(d)))
+        .map(|l| l.matches("par(").count()).sum();
     let (mut vectors, mut scale) = plot_vectors(api, &plot, sensors, pars);
     // one frequency (`.ac lin 1 50 50`): phasors, shown as a table like .op instead of a 1-point plot
     let phasors = scale == "frequency" && read(api, "frequency").is_some_and(|f| f.re.len() == 1);

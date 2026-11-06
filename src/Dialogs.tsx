@@ -64,7 +64,7 @@ function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: 
           <Field label="Other attributes" hint={`e.g. Prefix X to call a subcircuit model instead of the ${def?.prefix || "symbol's"} device`}>
             <Rows rows={extra} set={setExtra} a="attribute" b="value" list="sym-attrs" add="Add attribute" />
           </Field>
-          <datalist id="sym-attrs">{["Prefix", "SpiceModel", "SpiceLine2"].map((n) => <option key={n} value={n} />)}</datalist>
+          <datalist id="sym-attrs">{["Prefix", "SpiceLine2"].map((n) => <option key={n} value={n} />)}</datalist>
         </>
       )}
       {it.t === "flag" && (
@@ -222,9 +222,10 @@ function Sources({ start }: { start?: "add" | "microcap" }) {
     if (typeof dir === "string") await save([...(await invoke<LibSource[]>("library_sources")), { name: dir.split(/[\\/]/).pop() || dir, path: dir, enabled: true }]);
   };
   const microcap = async () => {
-    // already downloaded, only switched off: switch it on again instead of fetching 60 MB
+    // already downloaded (still on disk), only switched off: switch it on again instead of fetching 60 MB
     const cur = await invoke<LibSource[]>("library_sources");
-    if (cur.some((s) => /micro-cap/i.test(s.name))) return save(cur.map((s) => (/micro-cap/i.test(s.name) ? { ...s, enabled: true } : s)));
+    const mine = cur.find((s) => /[\\/]libraries[\\/]Micro-Cap 12$/i.test(s.path));
+    if (mine && (await invoke<boolean>("path_exists", { path: mine.path }))) return save(cur.map((s) => (s === mine ? { ...s, enabled: true } : s)));
     setBusy("Downloading Micro-Cap 12 (60 MB) from the Internet Archive…");
     try {
       setList(await invoke<LibSource[]>("library_fetch_microcap"));

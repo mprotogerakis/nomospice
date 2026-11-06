@@ -172,20 +172,26 @@ export function dragPlan(items: Item[], lib: Lib, sel: Set<number>) {
   // pins of parts that stay: a wire must not take a connection away from them
   const fixed = new Set(items.flatMap((it, i) => (it.t === "sym" && !sel.has(i) ? pins(it, defOf(lib, it)).map((p) => key(...p)) : [])));
   const pinned = (w: Wire) => conn.some((p) => fixed.has(key(...p)) && inside(p, w));
-  // wires that move whole, and what hangs on them, until nothing more joins
-  const whole = new Set<number>(items.flatMap((it, i) => (sel.has(i) && it.t === "wire" ? [i] : [])));
-  for (let grew = true; grew; ) {
-    grew = false;
-    items.forEach((it, i) => {
-      if (it.t !== "wire") return;
-      // (one with a resting part's pin on it stretches instead: the pin keeps its wires)
-      if (!whole.has(i) && ends(it).every((p) => moving.has(key(...p))) && !pinned(it)) (whole.add(i), (grew = true));
-      if (!whole.has(i)) return;
-      items.forEach((o, j) => {
-        const ps: Pt[] = whole.has(j) || sel.has(j) ? [] : o.t === "wire" ? ends(o) : o.t === "flag" ? [[o.x, o.y]] : [];
-        ps.forEach((p) => inside(p, it) && !moving.has(key(...p)) && !fixed.has(key(...p)) && (move(p), (grew = true))); // T-legs follow
-      });
-    });
+  // wires that move whole, and what hangs on them: a worklist, each wire once. A wire whose ends
+  // both move joins (one with a resting part's pin on it stretches instead: the pin keeps its wires)
+  const whole = new Set<number>(), work: number[] = [];
+  const atEnd = new Map<string, number[]>(); // wires by end point
+  items.forEach((it, i) => it.t === "wire" && ends(it).forEach((p) => atEnd.set(key(...p), [...(atEnd.get(key(...p)) ?? []), i])));
+  const join = (i: number) => {
+    const it = items[i];
+    if (whole.has(i) || it.t !== "wire" || !(sel.has(i) || (ends(it).every((p) => moving.has(key(...p))) && !pinned(it)))) return;
+    whole.add(i), work.push(i);
+  };
+  items.forEach((_, i) => join(i));
+  // what can follow a whole wire: unselected wire ends and labels on it
+  const followers = items.flatMap((o, j): Pt[] => (sel.has(j) ? [] : o.t === "wire" ? ends(o) : o.t === "flag" ? [[o.x, o.y]] : []));
+  while (work.length) {
+    const w = items[work.pop()!] as Wire;
+    for (const p of followers) {
+      if (!inside(p, w) || moving.has(key(...p)) || fixed.has(key(...p))) continue;
+      move(p); // a T-leg follows
+      (atEnd.get(key(...p)) ?? []).forEach(join); // its wire may now move whole too
+    }
   }
   const all: Item[] = [], pieces: Item[] = [];
   items.forEach((it, i) => {
