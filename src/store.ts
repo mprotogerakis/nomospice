@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import type { GitStatus, Item, Netlist, Sim, SymbolDef, Trace, TraceData } from "./types";
 import { currentLabel, defOf, symKey, vexpr, type Lib } from "./geom";
-import { ANALYSIS, analysisOptions, stripAnalyses, type Analysis } from "./spice";
+import { ANY_ANALYSIS, analysisOptions, stripAnalyses, type Analysis } from "./spice";
 
 export type Tool =
   | { k: "select" }
@@ -256,7 +256,7 @@ export function simDeck(items: Item[], tab: Analysis | null) {
   const opts = analysesOf(items);
   // several active analyses (ngspice would run them all and show the last): the shown tab's alone;
   // the schematic's only active analysis runs as it is (the live netlist stays the schematic's)
-  const actives = items.reduce((n, it) => n + (it.t === "text" && it.directive ? it.text.split("\n").filter((l) => ANALYSIS.test(l.trim())).length : 0), 0);
+  const actives = items.reduce((n, it) => n + (it.t === "text" && it.directive ? it.text.split("\n").filter((l) => ANY_ANALYSIS.test(l.trim())).length : 0), 0);
   // (a chosen tab whose analysis is gone: the shown one, as currentTab says)
   const kind = tab && opts.some((o) => o.kind === tab) ? tab : actives > 1 ? currentTab({ tab, items }, opts) : null;
   const pick = kind ? opts.find((o) => o.kind === kind) : undefined;

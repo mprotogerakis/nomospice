@@ -282,12 +282,13 @@ export function analysisLineIndex(lines: string[], kind: Analysis | null | undef
   return own >= 0 ? own : lines.findIndex(ok);
 }
 
+/** Every ngspice analysis, also those the form does not offer (.sp, .disto, .pss, .hb). */
+export const ANY_ANALYSIS = /^\.(tran|ac|dc|op|noise|tf|pz|sens|sp|disto|pss|hb)\b/i;
+
 /** `text` without its analysis statements (and their `+` lines): a result tab runs its own instead. */
 export function stripAnalyses(text: string) {
   const lines = text.split("\n"), drop = new Set<number>();
-  // also ngspice's analyses the form does not offer (.sp, .disto, .pss, .hb): only the tab's runs
-  const any = /^\.(tran|ac|dc|op|noise|tf|pz|sens|sp|disto|pss|hb)\b/i;
-  lines.forEach((l, i) => any.test(l.trim()) && [i, ...continuation(lines, i)].forEach((j) => drop.add(j)));
+  lines.forEach((l, i) => ANY_ANALYSIS.test(l.trim()) && [i, ...continuation(lines, i)].forEach((j) => drop.add(j)));
   return lines.filter((_, i) => !drop.has(i)).join("\n");
 }
 

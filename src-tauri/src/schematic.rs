@@ -177,8 +177,7 @@ impl Library {
         for p in std::fs::read_dir(dir).into_iter().flatten().flatten().map(|e| e.path()) {
             let Some(stem) = p.file_stem().and_then(|s| s.to_str()) else { continue };
             let key = sym_key(stem);
-            let builtin = BUILTIN_SYMBOLS.iter().any(|(n, _)| *n == key);
-            if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("asy")) && !builtin {
+            if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("asy")) && !builtin_symbol(&key) {
                 if let Ok(bytes) = std::fs::read(&p) {
                     self.0.insert(key.clone(), parse_asy(&key, &decode(&bytes)));
                     self.1.remove(&key);
@@ -891,8 +890,8 @@ fn meas_statement(s: &str, sensors: &[Sensor], an: &str) -> Result<String, Strin
     if toks.get(1).is_some_and(|t| TYPES_MEAS.contains(&low(t).as_str())) {
         out.push(toks[1].clone());
         i = 2;
-    } else if !an.is_empty() {
-        out.push(an.to_string());
+    } else if ["tran", "ac", "dc", "sp"].contains(&an) {
+        out.push(an.to_string()); // (ngspice measures only these: an .op/.noise deck keeps it untyped)
     }
     if let Some(name) = toks.get(i) {
         out.push(name.clone());
@@ -913,15 +912,28 @@ fn meas_statement(s: &str, sensors: &[Sensor], an: &str) -> Result<String, Strin
                 // the level: LTspice's `TRIG V(in)=0.5*V(vdd)` ([VAL]=), else a VAL= among this
                 // TRIG/TARG's options (TD=, RISE= may come first)
                 let (mut level, mut val_at) = (None, None);
+                // a level written with blanks (`VAL=0.5 * V(vdd)`) runs on to the next keyword: its
+                // other tokens are taken in (and dropped from the output below)
+                let rest_of = |toks: &mut Vec<String>, from: usize, mut v: String| {
+                    let mut k = from;
+                    while k < toks.len() && !keyword(&toks[k]) {
+                        v.push_str(&std::mem::take(&mut toks[k]));
+                        k += 1;
+                    }
+                    (v, k)
+                };
                 if edge && x.is_empty() {
-                    if let Some((a, b)) = toks.get(i).and_then(|tk| tk.split_once('=')).filter(|(a, _)| !a.is_empty() && !OPTION.contains(&low(a).as_str())) {
-                        (x, level) = (a.to_string(), Some(b.to_string()));
-                        i += 1;
+                    if let Some((a, b)) = toks.get(i).and_then(|tk| tk.split_once('=')).filter(|(a, _)| !a.is_empty() && !OPTION.contains(&low(a).as_str())).map(|(a, b)| (a.to_string(), b.to_string())) {
+                        let (b, k) = rest_of(&mut toks, i + 1, b);
+                        (x, level, i) = (a, Some(b), k);
                     }
                 }
                 if edge && level.is_none() {
                     val_at = (i..toks.len()).take_while(|&j| toks[j].contains('=')).find(|&j| low(&toks[j]).starts_with("val="));
-                    level = val_at.map(|j| toks[j][4..].to_string());
+                    if let Some(j) = val_at {
+                        let v = toks[j][4..].to_string();
+                        level = Some(rest_of(&mut toks, j + 1, v).0);
+                    }
                 }
                 match level {
                     Some(v) if !number(&v) && typ == "ac" => {
@@ -964,6 +976,7 @@ fn meas_statement(s: &str, sensors: &[Sensor], an: &str) -> Result<String, Strin
                     None => out.push(format!("WHEN {w}")),
                 }
             }
+            _ if t.is_empty() => {} // taken into a level above
             _ => out.push(t),
         }
     }
@@ -1810,6 +1823,9 @@ mod tests {
         assert_eq!(m(".meas ac r MAX V(out)/V(in)"), ".meas ac r MAX V(out)/V(in)", "AC: as written rather than wrong");
         assert!(m(".meas ac f1 TRIG vm(out) VAL=0.5*vm(in) TARG vm(out) VAL=1").contains("left out"), "AC: an expression level is not silently cut");
         assert!(m(".meas ac bw WHEN vm(out)=0.707*vm(in)").contains("left out"), "the same for WHEN");
+        assert_eq!(m(".meas tran t TRIG V(in) VAL=0.5 * V(vdd) RISE=1 TARG V(out) VAL=1"), ".meas tran t TRIG par('V(in)-(0.5*V(vdd))') VAL=0 RISE=1 TARG V(out) VAL=1", "a level with blanks");
+        assert_eq!(m(".meas tran t TRIG V(in)=0.5 * V(vdd) RISE=1"), ".meas tran t TRIG par('V(in)-(0.5*V(vdd))') VAL=0 RISE=1");
+        assert_eq!(meas_statement(".meas x AVG V(a)", &[], "op").unwrap(), ".meas x AVG V(a)", "ngspice measures tran/ac/dc/sp only");
         assert_eq!(m(".meas ac p FIND ph(V(out)) AT=1k"), ".meas ac p FIND ph(V(out)) AT=1k", "degrees vs radians: not mapped");
         let mut w = vec![];
         let skipped = ltspice_meas(".ac dec 10 1 1k\n.meas ac f1 TRIG vm(out) VAL=0.5*vm(in) TARG vm(out) VAL=1\n", &[], &mut w);

@@ -325,7 +325,12 @@ export function Measurements({ xUnit }: { xUnit: string }) {
   const meas = useS((s) => s.sim?.run?.meas);
   const deck = useS((s) => s.sim?.simulated ?? "");
   // results on the x axis: TRIG/TARG (a span) and WHEN (a point) — not FIND/AVG … (a y value)
-  const atX = useMemo(() => new Set(deck.split("\n").map((l) => l.trim().split(/\s+/)).filter((t) => /^\.meas/i.test(t[0] ?? "") && /^when$/i.test(t[3] ?? "")).map((t) => t[2].toLowerCase())), [deck]);
+  const atX = useMemo(() => new Set(deck.replace(/\n\s*\+/g, " ").split("\n").flatMap((l) => {
+    const t = l.trim().split(/\s+/);
+    if (!/^\.meas/i.test(t[0] ?? "")) return [];
+    const k = /^(tran|ac|dc|sp|op|noise|tf)$/i.test(t[1] ?? "") ? 2 : 1; // the name, after an optional type
+    return t.slice(k + 1).some((w) => /^when$/i.test(w)) && !t.slice(k + 1).some((w) => /^find$/i.test(w)) ? [t[k].toLowerCase()] : [];
+  })), [deck]);
   if (!meas?.length) return null;
   return (
     <div className="border-b border-border px-2 py-1 font-mono text-2xs">
