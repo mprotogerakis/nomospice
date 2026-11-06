@@ -12,6 +12,7 @@ import {
 import type { Item } from "./types";
 import { Schematic } from "./Schematic";
 import { Waveform } from "./Waveform";
+import { PoleZero } from "./PoleZero";
 import { Dialogs } from "./Dialogs";
 import { Boundary } from "./Boundary";
 import { dirOf, docId, isOp, loadDoc, loadSymbols, placeSymbol, plotKind, redo, refreshGit, refreshNets, simulate, undo, useS, useStatus } from "./store";
@@ -174,7 +175,9 @@ export function App() {
   }, []);
   const [examples, setExamples] = useState<[string, Item[]][]>([]);
   const mainRef = useRef<HTMLDivElement>(null);
-  const showWave = !!s.sim?.run && !isOp(s.sim);
+  // pole-zero results have no scale (a table) but get their own view: the s-plane
+  const pz = !!s.sim?.run?.plot.startsWith("pz");
+  const showWave = !!s.sim?.run && (!isOp(s.sim) || pz);
 
   useEffect(() => {
     if (booted) return; // StrictMode mounts twice in dev: restore/open/run exactly once
@@ -278,6 +281,7 @@ export function App() {
     tool.k === "wire" ? "Wire: click to start / add corner · ends on pins and wires · right-click cancels · Esc done"
     : tool.k === "place" ? "Click to place · ⌃R rotate · ⌃E mirror · Esc / right-click done"
     : tool.k === "delete" ? "Click items to delete · Esc done"
+    : pz ? "Poles × and zeros ○ in the s-plane: hover for f₀ and damping · root locus in the panel on the right"
     : showWave && s.sim?.run?.plot.startsWith("noise") ? "Noise spectra: Add trace → onoise_spectrum / inoise_spectrum · totals in Results"
     : showWave && s.sim?.run?.plot.startsWith("sens") ? "Sensitivities: Add trace → a part name (e.g. r1) · right-click to edit"
     : showWave ? "Click a wire to plot V · click a part to plot I · right-click to edit"
@@ -344,7 +348,7 @@ export function App() {
       <div ref={mainRef} className="flex min-h-0 flex-1 flex-col">
         {showWave && (
           <>
-            <div style={{ height: `${split * 100}%` }} className="min-h-0 shrink-0"><Waveform key={`${mode}:${plotKind(s.sim)}`} /></div>
+            <div style={{ height: `${split * 100}%` }} className="min-h-0 shrink-0">{pz ? <PoleZero run={s.sim!.run!} /> : <Waveform key={`${mode}:${plotKind(s.sim)}`} />}</div>
             <div onPointerDown={startSplit} className="h-[5px] shrink-0 cursor-row-resize border-y border-border bg-surface-panel-head hover:bg-selection/40" />
           </>
         )}

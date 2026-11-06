@@ -19,6 +19,9 @@ files — with a modern UI, ngspice as the engine, a Rust core and a React front
   `1M` (milli, not mega) and `10F` (femto). Typing SPICE directly still works everywhere.
 - **Analyses**: `.tran`, `.ac` (Bode: magnitude + phase panes), `.dc` (nested sweeps as curve
   families), `.op`, `.noise` (spectrum + totals), `.tf`, `.pz`, `.sens`; Live mode re-runs on every edit.
+- **Poles and zeros**: `.pz` results as a map in the s-plane (× poles, ○ zeros, unstable half-plane
+  shaded, f₀ and damping ζ per pole) and a **root locus**: sweep a `.param` or an R/C/L value and see
+  the poles move, one `.pz` run per step.
 - **Waveforms** (uPlot): one pane per unit, synced zoom, cursors A/B with Δ and 1/Δx, expressions in
   ngspice syntax, copy as CSV. A single-frequency `.ac` (`.ac lin 1 50 50`) gives a phasor table
   (magnitude ∠ phase) instead of a plot.

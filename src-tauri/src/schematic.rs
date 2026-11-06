@@ -393,6 +393,51 @@ const BUILTIN_MODELS: &[(&str, &str)] = &[
     ("opamp", ".subckt opamp inn inp out params: Aol=100K GBW=10Meg\nG1 0 n inp inn 1m\nR1 n 0 {Aol*1k}\nC1 n 0 {1/(6.2832*1k*GBW)}\nE1 out 0 n 0 1\n.ends opamp"),
 ];
 
+/// `text` with `target` set to `value`: a `.param` (`name=…`, spaces around `=` allowed) or the
+/// value of an R, C or L instance (the token after its two nodes). None if neither is in the deck.
+pub fn vary(text: &str, target: &str, value: f64) -> Option<String> {
+    let t = target.trim().to_lowercase();
+    let v = format!("{value:e}");
+    let mut found = false;
+    let out: Vec<String> = text.lines().map(|line| {
+        let low = line.trim_start().to_lowercase();
+        if low.starts_with(".param") {
+            // find `name =` at a word start, then replace the value token after it
+            let b = line.as_bytes();
+            let mut i = 0;
+            while let Some(k) = low[i..].find(&t).map(|k| k + i) {
+                let start_ok = k == 0 || !(b[k - 1].is_ascii_alphanumeric() || b[k - 1] == b'_');
+                let mut j = k + t.len();
+                while j < b.len() && b[j] == b' ' { j += 1; }
+                if start_ok && j < b.len() && b[j] == b'=' {
+                    j += 1;
+                    while j < b.len() && b[j] == b' ' { j += 1; }
+                    let (mut e, mut depth) = (j, 0i32); // the value: up to whitespace outside {} () ''
+                    let mut quote = false;
+                    while e < b.len() && (depth > 0 || quote || !b[e].is_ascii_whitespace()) {
+                        match b[e] { b'\'' => quote = !quote, b'{' | b'(' if !quote => depth += 1, b'}' | b')' if !quote => depth -= 1, _ => {} }
+                        e += 1;
+                    }
+                    found = true;
+                    return format!("{}{v}{}", &line[..j], &line[e..]);
+                }
+                i = k + 1;
+            }
+            line.to_string()
+        } else {
+            let toks: Vec<&str> = line.split_whitespace().collect();
+            if !found && toks.len() >= 4 && toks[0].to_lowercase() == t && "rcl".contains(&t[..1]) {
+                found = true;
+                let mut toks: Vec<String> = toks.iter().map(|s| s.to_string()).collect();
+                toks[3] = v.clone();
+                return toks.join(" ");
+            }
+            line.to_string()
+        }
+    }).collect();
+    found.then(|| out.join("\n") + "\n")
+}
+
 /// SPICE number with suffix (f p n u µ m k meg g t), trailing units ignored.
 pub fn spice_num(s: &str) -> Option<f64> {
     let s = s.to_lowercase().replace(['µ', 'μ'], "u"); // micro sign and Greek mu
@@ -502,6 +547,11 @@ impl Prepared {
     pub fn with_sensors(mut self, sensors: Vec<Sensor>) -> Self {
         self.1 = sensors;
         self
+    }
+
+    /// This deck with `target` set to `value` (see [`vary`]), for parameter sweeps such as a root locus.
+    pub fn varied(&self, target: &str, value: f64) -> Option<Prepared> {
+        Some(Prepared(vary(&self.0, target, value)?, self.1.clone()))
     }
 
     pub fn sensors(&self) -> &[Sensor] {
@@ -1228,6 +1278,24 @@ mod tests {
         assert!((pole.1 + 1e4).abs() < 1.0 && pole.2.abs() < 1e-6, "{:?}", pz.op);
         let tf = crate::ngspice::run(&prepare(&netlist(&parse_asc(&with(".tf V(out) V1")), &mut Library::builtin()).text, None, &mut vec![])).unwrap();
         assert!(tf.op.iter().any(|o| o.0.to_lowercase().contains("transfer_function") && (o.1 - 1.0).abs() < 1e-6), "{:?}", tf.op);
+    }
+
+    #[test]
+    fn vary_sets_params_and_values() {
+        let deck = "* x\n.param R = 1k Cx={2*R}\nR1 a b {R}\nC1 b 0 100n\n.end\n";
+        let v = vary(deck, "R", 2000.0).unwrap();
+        assert!(v.contains(".param R = 2e3 Cx={2*R}"), "{v}");
+        assert!(vary(deck, "Cx", 1.0).unwrap().contains("Cx=1e0"));
+        assert!(vary(deck, "c1", 1e-6).unwrap().contains("C1 b 0 1e-6"));
+        assert_eq!(vary(deck, "R2", 1.0), None);
+        // RC low-pass: the pole moves with R (-1/RC)
+        let _s = SIM.lock();
+        let bode = EXAMPLES.iter().find(|e| e.0 == "rc_bode").unwrap().1.replace(".ac dec 50 10 1Meg", ".pz in 0 out 0 vol pz");
+        let nl = netlist_for_sim(&parse_asc(&bode), &mut Library::builtin());
+        let p = prepare(&nl.text, None, &mut vec![]).with_sensors(nl.sensors.clone());
+        let run = crate::ngspice::run(&p.varied("R1", 2000.0).unwrap()).unwrap();
+        let pole = run.op.iter().find(|o| o.0.starts_with("pole")).unwrap();
+        assert!((pole.1 + 5000.0).abs() < 1.0, "{:?}", run.op);
     }
 
     #[test]

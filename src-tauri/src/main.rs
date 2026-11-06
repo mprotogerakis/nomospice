@@ -180,6 +180,25 @@ async fn simulate(items: Vec<Item>, dir: Option<String>, lib: tauri::State<'_, L
     })
 }
 
+/// Root locus: the schematic's `.pz` analysis once per value of `target` (a `.param` name or an
+/// R/C/L instance). Per step: the (name, re, im) of every pole and zero. Halt stops it.
+#[tauri::command]
+async fn root_locus(items: Vec<Item>, dir: Option<String>, target: String, values: Vec<f64>, lib: tauri::State<'_, Lib>) -> Result<Vec<Vec<(String, f64, f64)>>, String> {
+    ngspice::arm();
+    let sim = schematic::netlist_for_sim(&items, &mut lib.0.lock().unwrap_or_else(|e| e.into_inner()));
+    let deck = schematic::prepare(&sim.text, dir.as_deref().map(std::path::Path::new), &mut vec![]).with_sensors(sim.sensors);
+    if !deck.text().lines().any(|l| l.trim_start().to_lowercase().starts_with(".pz")) {
+        return Err("the schematic has no .pz analysis (Simulation command → Poles/zeros)".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        values.iter().map(|&v| {
+            let step = deck.varied(&target, v).ok_or_else(|| format!("`{target}` is neither a .param nor an R, C or L in the schematic"))?;
+            let run = ngspice::run(&step).map_err(|log| log.join("\n"))?;
+            Ok(run.op.into_iter().filter(|o| o.0.starts_with("pole") || o.0.starts_with("zero")).map(|o| (o.0, o.1, o.2)).collect())
+        }).collect()
+    }).await.map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 async fn trace(expr: String, scale: String) -> Result<ngspice::Trace, String> {
     tauri::async_runtime::spawn_blocking(move || ngspice::trace(&expr, &scale)).await.map_err(|e| e.to_string())?
@@ -525,7 +544,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(Lib(Mutex::new(Library::builtin())))
-        .invoke_handler(tauri::generate_handler![symbols, examples, path_exists, open_asc, save_asc, export_svg, netlist, simulate, trace, halt, cli_args, quit, recovery_save, recovery_take, recovery_resolve, recovery_clear,
+        .invoke_handler(tauri::generate_handler![symbols, examples, path_exists, open_asc, save_asc, export_svg, netlist, simulate, root_locus, trace, halt, cli_args, quit, recovery_save, recovery_take, recovery_resolve, recovery_clear,
             library_sources, library_set_sources, library_search, library_text, library_fetch_microcap,
             git_status, git_log, git_show, git_commit, git_init])
         .setup(|app| {
