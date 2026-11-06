@@ -323,14 +323,19 @@ pub fn run(netlist: &Prepared) -> Result<Run, Vec<String>> {
     }
     let sensors = &sensors[..];
     let (mut vectors, mut scale) = plot_vectors(api, &plot, sensors);
+    // one frequency (`.ac lin 1 50 50`): phasors, shown as a table like .op instead of a 1-point plot
+    let phasors = scale == "frequency" && read(api, "frequency").is_some_and(|f| f.re.len() == 1);
+    if phasors {
+        scale.clear();
+    }
     // no scale (.op, .tf, .pz, .noise totals ...): single values, shown as a table
     let op = if scale.is_empty() {
         vectors.iter().filter_map(|v| {
             let t = read(api, v)?;
             // a sensor's current is reported under its device (`r1#branch` -> I(r1))
             let name = sensors.iter().find(|s| v.strip_suffix("#branch") == Some(s.source.as_str())).map_or(v.clone(), |s| format!("{}#branch", s.inst));
-            // types are reliable only for .op (ngspice marks .tf/.pz/.sens/noise values as "voltage")
-            let unit = match (plot.starts_with("op"), t.typ) { (true, 3) => "V", (true, 4) => "A", _ => "" }.to_string();
+            // types are reliable only for .op and .ac (ngspice marks .tf/.pz/.sens/noise values as "voltage")
+            let unit = match (plot.starts_with("op") || phasors, t.typ) { (true, 3) => "V", (true, 4) => "A", _ => "" }.to_string();
             Some((name, *t.re.first()?, t.im.and_then(|im| im.first().copied()).unwrap_or(0.0), unit))
         }).collect()
     } else {

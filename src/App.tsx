@@ -23,6 +23,12 @@ import { StatusBar, StatusSegment } from "./ui/status-bar";
 import { initializeTheme, updateThemePreference, type ThemeMode } from "./lib/theme";
 import { cn, keys } from "./lib/utils";
 
+/** Phasor as magnitude ∠ phase in degrees, the way the lecture writes it (230 V ∠ −120.0°). */
+const polar = (re: number, im: number, unit: string) => {
+  const deg = (Math.atan2(im, re) * 180) / Math.PI;
+  return `${si(Math.hypot(re, im), unit, 4)} ∠ ${(Math.abs(deg) < 0.05 ? 0 : deg).toFixed(1).replace("-", "−")}°`;
+};
+
 const glyph = (d: string) => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round"><path d={d} /></svg>
 );
@@ -377,7 +383,8 @@ function BottomPanel() {
   const { panel, sim, nets } = useS(useShallow((s) => ({ panel: s.panel, sim: s.sim, nets: s.nets })));
   const [simulated, setSimulated] = useState(false);
   const isOpPlot = !!sim?.run?.plot.startsWith("op");
-  const tabs: [typeof panel, string][] = [["log", "Log"], ["netlist", "Netlist"], ...(sim?.run?.op.length ? [["op", isOpPlot ? "Operating point" : "Results"] as [typeof panel, string]] : []), ["history", "History"]];
+  const phasors = !!sim?.run?.plot.startsWith("ac"); // a table from .ac means one frequency: phasors
+  const tabs: [typeof panel, string][] = [["log", "Log"], ["netlist", "Netlist"], ...(sim?.run?.op.length ? [["op", isOpPlot ? "Operating point" : phasors ? "Phasors" : "Results"] as [typeof panel, string]] : []), ["history", "History"]];
   return (
     <div className="flex h-[32%] min-h-[120px] shrink-0 flex-col border-t border-border bg-surface-panel">
       <div className="flex h-[26px] shrink-0 items-center border-b border-border bg-surface-panel-head px-1">
@@ -411,11 +418,11 @@ function BottomPanel() {
             <tbody>
               {sim?.run?.op.map(([n, v, im, unit]) => {
                 // ngspice's vector type gives the unit; @dev[...] and the like stay as written
-                const name = !isOpPlot ? n : unit === "A" && n.endsWith("#branch") ? currentLabel(n.replace("#branch", "")) : unit === "V" && !/[@(]/.test(n) ? `V(${n})` : n;
+                const name = !isOpPlot && !phasors ? n : unit === "A" && n.endsWith("#branch") ? currentLabel(n.replace("#branch", "")) : unit === "V" && !/[@(]/.test(n) ? `V(${n})` : n;
                 return (
                   <tr key={n}>
                     <td className="pr-6 text-text-secondary">{name}</td>
-                    <td className="text-right text-text-strong">{si(v, unit, 5)}{im ? ` ${im < 0 ? "−" : "+"} j${si(Math.abs(im), unit, 5)}` : ""}</td>
+                    <td className="text-right text-text-strong">{phasors ? (n === "frequency" ? si(v, "Hz") : polar(v, im, unit)) : `${si(v, unit, 5)}${im ? ` ${im < 0 ? "−" : "+"} j${si(Math.abs(im), unit, 5)}` : ""}`}</td>
                   </tr>
                 );
               })}

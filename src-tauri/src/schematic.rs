@@ -1162,6 +1162,20 @@ mod tests {
     }
 
     #[test]
+    fn single_frequency_ac_is_a_phasor_table() {
+        let _s = SIM.lock();
+        // RC low-pass at its corner frequency 1/(2*pi*1k*100n): |V(out)| = 1/sqrt(2), -45 degrees
+        let src = EXAMPLES.iter().find(|e| e.0 == "rc_bode").unwrap().1.replace(".ac dec 50 10 1Meg", ".ac lin 1 1591.549 1591.549");
+        let nl = netlist_for_sim(&parse_asc(&src), &mut Library::builtin());
+        let run = crate::ngspice::run(&prepare(&nl.text, None, &mut vec![]).with_sensors(nl.sensors.clone())).unwrap();
+        assert!(run.scale.is_empty(), "a table, not a 1-point plot: {run:?}");
+        let get = |n: &str| run.op.iter().find(|o| o.0 == n).cloned().unwrap_or_else(|| panic!("{n} missing: {:?}", run.op));
+        let out = get("out");
+        assert!((out.1.hypot(out.2) - std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-4 && (out.2.atan2(out.1).to_degrees() + 45.0).abs() < 0.01, "{out:?}");
+        assert_eq!((out.3.as_str(), get("r1#branch").3.as_str()), ("V", "A"));
+    }
+
+    #[test]
     fn sym_key_handles_multibyte_names() {
         assert_eq!(sym_key("Opamps\\µA741x"), "µa741x");
         assert_eq!(sym_key("abcdeµfgh"), "abcdeµfgh"); // byte 7 inside `µ`: no panic
