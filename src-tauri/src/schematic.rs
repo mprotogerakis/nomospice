@@ -491,7 +491,10 @@ pub fn vary_spans(text: &str, target: &str) -> Option<Vec<(usize, usize)>> {
 pub fn sweepable(text: &str) -> Vec<String> {
     let lines = deck_lines(text);
     let params = lines.iter().filter(|l| l.top && l.param).flat_map(|l| param_defs(l.line, &l.low).into_iter().map(|(n, _)| n.to_string()));
-    let parts = lines.iter().filter(|l| l.top && part_value(l.line).is_some()).filter_map(|l| l.line.split_whitespace().next().map(str::to_string));
+    // not the parasitics the netlister adds for Rser= … (`RC1_rser`): they are not on the schematic
+    let generated = |n: &str| ["_rser", "_lser", "_rpar", "_cpar"].iter().any(|s| n.to_ascii_lowercase().ends_with(s));
+    let parts = lines.iter().filter(|l| l.top && part_value(l.line).is_some()).filter_map(|l| l.line.split_whitespace().next())
+        .filter(|n| !generated(n)).map(str::to_string);
     let mut out: Vec<String> = vec![];
     for n in params.chain(parts) {
         if !out.iter().any(|o| o.eq_ignore_ascii_case(&n)) {
@@ -499,6 +502,15 @@ pub fn sweepable(text: &str) -> Vec<String> {
         }
     }
     out
+}
+
+/// The first `.pz` statement in `text`, lowercase, its `+` continuation lines joined (comment
+/// lines between them skipped).
+pub fn pz_statement(text: &str) -> Option<String> {
+    let mut lines = text.lines().map(str::trim_start).skip_while(|l| !l.get(..3).is_some_and(|p| p.eq_ignore_ascii_case(".pz")));
+    let first = lines.next()?;
+    let more = lines.take_while(|l| l.is_empty() || l.starts_with(['+', '*'])).filter_map(|l| l.strip_prefix('+'));
+    Some(std::iter::once(first).chain(more).collect::<Vec<_>>().join(" ").to_ascii_lowercase())
 }
 
 /// `text` with every span replaced by `value` (the rest byte for byte as it was).
@@ -1422,6 +1434,9 @@ mod tests {
             assert!(sweepable(l).is_empty(), "{l}");
         }
         assert!(vary("R1 a b 'x*2'\n", "R1", 1.0).unwrap().contains("R1 a b 1e0"));
+        assert_eq!(sweepable("C1 a c 1u\nRC1_rser a b 0.1\n"), ["C1"], "netlister parasitics");
+        assert_eq!(pz_statement("R1 a b 1k\n.PZ in 0 out 0 vol\n* c\n+ zer\nR2 b 0 1k\n+ x\n").as_deref(), Some(".pz in 0 out 0 vol  zer"));
+        assert_eq!(pz_statement(".tran 1m\n"), None);
         // a sweep step runs only .pz: other analyses go, with their continuation lines
         let only = prepare(".param a=1\n.meas tran x AVG V(out)\n* c\n+ FROM=1m TO=2m\n.pz in 0 out 0 vol pz\n+ \n", None, &mut vec![]).only_pz();
         assert!(only.text().contains("* + FROM=1m") && only.text().contains("\n.pz in 0") && !only.text().contains("* .pz"), "{}", only.text());

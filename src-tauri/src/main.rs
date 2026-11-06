@@ -191,10 +191,13 @@ async fn simulate(items: Vec<Item>, dir: Option<String>, lib: tauri::State<'_, L
     SWEEP_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     tauri::async_runtime::spawn_blocking(move || {
         let prepared = prepare_deck(sim, dir.as_deref(), &mut netlist.warnings);
-        let (simulated, sweepable) = (prepared.text().to_string(), schematic::sweepable(prepared.text()));
+        let simulated = prepared.text().to_string();
         let _sweep = SWEEP.lock().unwrap_or_else(|e| e.into_inner());
         let _op = ngspice::enter(op);
-        match ngspice::run(&prepared) {
+        let res = ngspice::run(&prepared);
+        // only the s-plane view (a .pz run) offers a root locus
+        let sweepable = if res.as_ref().is_ok_and(|r| r.plot.starts_with("pz")) { schematic::sweepable(&simulated) } else { vec![] };
+        match res {
             Ok(mut run) => Sim { netlist, simulated, sweepable, log: std::mem::take(&mut run.log), run: Some(run) },
             Err(log) => Sim { netlist, simulated, sweepable, run: None, log },
         }
@@ -212,8 +215,7 @@ async fn root_locus(items: Vec<Item>, dir: Option<String>, target: String, value
     let stop = move || ngspice::halted() || SWEEP_GEN.load(std::sync::atomic::Ordering::SeqCst) != gen;
     tauri::async_runtime::spawn_blocking(move || {
         let deck = prepare_deck(sim, dir.as_deref(), &mut vec![]);
-        let pz = deck.text().lines().map(|l| l.trim().to_lowercase()).find(|l| l.starts_with(".pz"));
-        match pz {
+        match schematic::pz_statement(deck.text()) {
             None => return Err("the schematic has no .pz analysis (Simulation command → Poles/zeros)".into()),
             Some(l) if l.split_whitespace().nth(6) == Some("zer") => return Err("the .pz analysis computes zeros only: a root locus needs the poles (Poles/zeros → Compute)".into()),
             _ => {}

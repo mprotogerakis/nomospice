@@ -158,8 +158,10 @@ function Sidebar({ poles, zeros, locus, setLocus, error, setError }: {
   // what the sweep can vary (the backend lists it with each simulation, from the deck that ran)
   const targets = useS((s) => s.sim?.sweepable ?? NONE);
   const [f, setF] = useState({ target: targets[0] ?? "", from: "", to: "", steps: "40", scale: "log" });
-  // a later run may bring the first names: fill one in if still empty
-  useEffect(() => { if (targets[0]) setF((x) => (x.target ? x : { ...x, target: targets[0] })); }, [targets]);
+  // a new run: a name no longer in the circuit (renamed, deleted) gives way to the first one
+  useEffect(() => {
+    if (targets[0]) setF((x) => (targets.some((t) => t.toLowerCase() === x.target.trim().toLowerCase()) ? x : { ...x, target: targets[0] }));
+  }, [targets]);
 
   const compute = async () => {
     const [a, b, n] = [spiceNum(f.from), spiceNum(f.to), Math.round(spiceNum(f.steps) ?? 0)];

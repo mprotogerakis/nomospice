@@ -2,13 +2,15 @@
 import assert from "node:assert/strict";
 import {
   tokens, formatAnalysis, formatIc, formatInclude, formatMeas, formatModel, formatParams, formatSource, numInfo, parseAnalysis,
-  parseIc, parseInclude, parseMeas, parseModel, parseParams, parseSource, sample, spiceNum, directiveKind, analysisRoundTrips, portablePaths, sourceRoundTrips, holdsAnalysis,
+  parseIc, parseInclude, parseMeas, parseModel, parseParams, parseSource, sample, si, spiceNum, directiveKind, analysisRoundTrips, portablePaths, sourceRoundTrips, holdsAnalysis,
 } from "../src/spice.ts";
 
 // numbers and the classic pitfalls
 assert.equal(spiceNum("4.7k"), 4700);
 assert.equal(spiceNum("1Meg"), 1e6);
 assert.equal(spiceNum("10uF"), 10e-6);
+assert.equal(si(999.6, "Hz", 3), "1kHz"); // rounding up crosses into the next prefix
+assert.equal(si(-999.99e3), "-1M");
 assert.equal(spiceNum("10kΩ"), 1e4); // the netlist drops the Ω
 assert.match(numInfo("1MΩ")?.warn ?? "", /milli/);
 assert.equal(spiceNum("1MHz"), 1e-3); // SPICE reads M as milli

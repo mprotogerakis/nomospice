@@ -6,8 +6,10 @@ export function si(v: number, unit = "", digits = 4): string {
   if (!isFinite(v)) return String(v);
   if (v === 0) return `0${unit}`;
   const p = ["f", "p", "n", "µ", "m", "", "k", "M", "G", "T"];
-  const e = Math.max(-5, Math.min(4, Math.floor(Math.log10(Math.abs(v)) / 3)));
-  return `${+(v / 10 ** (3 * e)).toPrecision(digits)}${p[e + 5]}${unit}`;
+  let e = Math.max(-5, Math.min(4, Math.floor(Math.log10(Math.abs(v)) / 3)));
+  let m = +(v / 10 ** (3 * e)).toPrecision(digits);
+  if (Math.abs(m) >= 1000 && e < 4) m = +(v / 10 ** (3 * ++e)).toPrecision(digits); // 999.96 → 1k, not 1000
+  return `${m}${p[e + 5]}${unit}`;
 }
 
 /** Whitespace tokens; `{a * (b + c)}`, `'a * b'`, `NAME(args)` and `C={1/(2*pi)}` stay whole. */

@@ -58,7 +58,7 @@ export function TextField({ label, value, set, placeholder, list, unit, info, hi
 }) {
   const input = <input className={FIELD} value={value} placeholder={placeholder} list={list} data-autofocus={autofocus || undefined} spellCheck={false} onChange={(e) => set(e.target.value)} />;
   // compact (narrow panels): no side slots, the reading goes below
-  if (compact) return <Field label={label} compact hint={[info, hint].filter(Boolean).join(" · ") || undefined} warn={warn}>{input}</Field>;
+  if (compact) return <Field label={label} compact hint={info && hint ? <>{info} · {hint}</> : info || hint} warn={warn}>{input}</Field>;
   return (
     <Field label={label} hint={hint} warn={warn}>
       <span className="flex items-center gap-2">
