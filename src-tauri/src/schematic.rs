@@ -196,7 +196,8 @@ impl Library {
             let file = format!("{key}.asy");
             let folders = crate::library::sources().into_iter().filter(|s| s.enabled).map(|s| s.path);
             let def = ltspice_sym_dirs().into_iter().chain(folders).find_map(|dir| {
-                let subdirs = std::fs::read_dir(&dir).into_iter().flatten().flatten().map(|e| e.path());
+                // folders only (the entry type comes with the listing: no stat per model file)
+                let subdirs = std::fs::read_dir(&dir).into_iter().flatten().flatten().filter(|e| e.file_type().is_ok_and(|t| t.is_dir())).map(|e| e.path());
                 let path = std::iter::once(dir.join(name.replace('\\', "/") + ".asy"))
                     .chain(std::iter::once(dir.clone()).chain(subdirs).map(|d| d.join(&file)))
                     .find(|p| p.is_file())?;
@@ -769,7 +770,12 @@ fn ltspice_meas(text: &str, sensors: &[Sensor]) -> String {
             j += 1;
         }
         let stmt = &lines[i..j];
-        let joined = stmt.iter().filter(|l| !l.skip).map(|l| l.line.trim().trim_start_matches('+').trim()).collect::<Vec<_>>().join(" ");
+        // each line without its inline comment (`;` LTspice, ` $` ngspice) before they are joined
+        let uncommented = |l: &str| -> String {
+            let l = l.split(';').next().unwrap_or("");
+            l.find(" $").map_or(l, |k| &l[..k]).to_string()
+        };
+        let joined = stmt.iter().filter(|l| !l.skip).map(|l| uncommented(l.line).trim().trim_start_matches('+').trim().to_string()).collect::<Vec<_>>().join(" ");
         let new = meas_statement(&joined, sensors, an);
         if spice_tokens(&new) == spice_tokens(&joined) {
             out.extend(stmt.iter().map(|l| l.line.to_string())); // as written
@@ -802,7 +808,8 @@ fn meas_statement(s: &str, sensors: &[Sensor], an: &str) -> String {
     let simple = |x: &str| {
         let (x, l) = (x.trim(), low(x.trim()));
         let call = l.find('(').is_some_and(|o| VECTOR.contains(&&l[..o]) && l.ends_with(')') && o + 1 < l.len() && !l[o + 1..l.len() - 1].contains(['(', ')']));
-        call || (!x.is_empty() && x.chars().all(|c| c.is_ascii_alphanumeric() || "_#.:".contains(c)))
+        let par = l.starts_with("par(") && l.ends_with(')'); // already ngspice's form
+        call || par || (!x.is_empty() && x.chars().all(|c| c.is_ascii_alphanumeric() || "_#.:".contains(c)))
     };
     let number = |v: &str| {
         let v = v.trim();
@@ -839,7 +846,7 @@ fn meas_statement(s: &str, sensors: &[Sensor], an: &str) -> String {
                 let x = toks[start..i].join(" ");
                 let val = toks.get(i).filter(|_| l == "trig" || l == "targ").and_then(|v| v.get(4..).filter(|_| low(v).starts_with("val=")));
                 match val {
-                    Some(v) if !x.is_empty() && !number(v) => {
+                    Some(v) if !x.is_empty() && !number(v) && !low(&x).starts_with("par(") => {
                         out.push(par(&format!("{x}-({v})")));
                         out.push("VAL=0".into());
                         i += 1;
@@ -855,7 +862,8 @@ fn meas_statement(s: &str, sensors: &[Sensor], an: &str) -> String {
                 }
                 let w = toks[start..i].join("");
                 match w.split_once('=') {
-                    Some((a, b)) if !(simple(a) && number(b)) => out.push(format!("WHEN {}=0", par(&format!("{a}-({b})")))),
+                    // ngspice reads `vector=number` and `vector=vector` itself
+                    Some((a, b)) if !(simple(a) && (number(b) || simple(b))) => out.push(format!("WHEN {}=0", par(&format!("{a}-({b})")))),
                     _ => out.push(format!("WHEN {w}")),
                 }
             }
@@ -1691,6 +1699,11 @@ mod tests {
         assert_eq!(m(".meas tran a AVG V(out) FROM = 1m TO =2m"), ".meas tran a AVG V(out) FROM=1m TO=2m", "blanks around =");
         assert_eq!(m(".meas tran w WHEN V(out) = 0.5 RISE = 1"), ".meas tran w WHEN V(out)=0.5 RISE=1");
         assert_eq!(m(".meas tran p AVG -I(V1)*V(in) ; dynamic power"), ".meas tran p AVG par('-I(V1)*V(in)')", "a ; comment is not part of it");
+        for same in [".meas tran x AVG par('v(a)*v(b)')", ".meas ac x WHEN vdb(out)=vdb(in)"] {
+            assert_eq!(m(same), same, "ngspice's own forms stay");
+        }
+        let cont = ltspice_meas(".tran 1m\n.meas tran p AVG -I(V1)*V(in) ; power\n+ FROM=1m TO=2m\n.meas tran q AVG V(a)*2 $ note\n", &[]);
+        assert!(cont.contains(".meas tran p AVG par('-I(V1)*V(in)') FROM=1m TO=2m") && cont.contains(".meas tran q AVG par('V(a)*2')\n"), "comments cut per line: {cont}");
         // the manual's delay and power measurements, end to end
         let deck = "* m\nV1 in 0 PULSE(0 2 0 1n 1n 4n 10n)\nV2 vdd 0 2\nR1 out in 100\nC1 out 0 10p\n.tran 4e-11 40n 0.1n\n.MEAS TRAN TpLH\n* note\n+TRIG V(in) VAL=0.5*V(vdd) TD=22n RISE=1\n+TARG V(out) VAL=0.5*V(vdd) TD=22n RISE=1\n.meas tran pdyn AVG -I(V1)*V(in)\n.meas tran vmax MAX V(out)\n+ FROM=0 TO=10n\n.end\n";
         let text = ltspice_meas(&prepare(deck, None, &mut vec![]).0, &[]);

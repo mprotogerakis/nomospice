@@ -241,7 +241,10 @@ export function analysisItem(items: Item[], kind: Analysis | null) {
  *  items keep their indices (the netlist's arrays are aligned with them), the analyses are taken
  *  out, the tab's line goes last. Simulation and root locus use it. */
 export function simDeck(items: Item[], tab: Analysis | null) {
-  const pick = tab ? analysesOf(items).find((o) => o.kind === tab) : undefined;
+  const opts = analysesOf(items);
+  // several active analyses (ngspice would run them all and show the last): the shown tab's alone
+  const kind = tab ?? (opts.filter((o) => o.active).length > 1 ? currentTab({ tab, items }) : null);
+  const pick = kind ? opts.find((o) => o.kind === kind) : undefined;
   if (!pick) return items;
   return [...items.map((it) => (it.t === "text" && it.directive ? { ...it, text: stripAnalyses(it.text) } : it)), { t: "text", x: 0, y: 0, text: pick.line, directive: true } as Item];
 }
@@ -273,7 +276,8 @@ function swapTo(s: State, kind: Analysis | null): Partial<State> {
 // An edit deleted the shown results' analysis or made it another kind: the tab now shown gets
 // its own results (none yet: Run), never the other analysis' under its name.
 useS.subscribe((s, prev) => {
-  if (s.items === prev.items || !s.shown || s.running) return;
+  // after an edit, or when a run ends (an edit during it was skipped: its results are filed meanwhile)
+  if ((s.items === prev.items && !(prev.running && !s.running)) || !s.shown || s.running) return;
   const cur = currentTab(s);
   if (cur === s.shown) return;
   const keep = !!s.tab && analysesOf(s.items).some((o) => o.kind === s.tab);

@@ -138,5 +138,9 @@ assert.equal(numInfo("1Meg", "Hz")!.text, "= 1MegHz"); // not "1M", the milli tr
   const leg = dragPlan(items as never, {}, new Set([1]))(0, 20).find((w) => w.t === "wire" && w.x1 === 50 && w.x2 === 50) as { y1: number; y2: number };
   assert.ok(leg.y1 === 20 && leg.y2 === 50, `the T-leg follows the moved wire: ${JSON.stringify(leg)}`);
   assert.equal(dragPlan(items as never, {}, new Set([0]))(0, 0).length, 4, "the stretched wire is cut at the junction");
+  // a wire between two moving parts moves whole (no V), its T-leg stretches
+  const two = [{ t: "flag" as const, x: 0, y: 0, name: "a" }, { t: "flag" as const, x: 100, y: 0, name: "b" }, W(0, 0, 100, 0), W(50, 0, 50, 50)];
+  const out = dragPlan(two as never, {}, new Set([0, 1]))(0, 20) as ReturnType<typeof W>[];
+  assert.ok(out.length === 4 && out[2].y1 === 20 && out[2].y2 === 20 && out[3].y1 === 20 && out[3].y2 === 50, JSON.stringify(out));
 }
 console.log("spice-check: ok");

@@ -237,7 +237,6 @@ export function sample(s: Source, n = 240): [number, number][] | null {
 
 export type Analysis = "tran" | "ac" | "dc" | "noise" | "op" | "tf" | "pz" | "sens";
 export const ANALYSIS = /^\.(tran|ac|dc|op|noise|tf|pz|sens)\b/i;
-/** The first analysis line of a directive text (the one the simulation dialog edits). */
 /** Display names, in the order of the simulation form's tabs and the result tabs. */
 export const ANALYSES: [Analysis, string][] = [
   ["tran", "Transient"], ["ac", "AC"], ["dc", "DC sweep"], ["noise", "Noise"], ["op", "DC op pnt"],
@@ -277,9 +276,9 @@ export function stripAnalyses(text: string) {
   }).join("\n");
 }
 
+/** The first analysis line of a directive text (the one the simulation dialog edits). */
 export const analysisIndex = (lines: string[]) => lines.findIndex((l) => ANALYSIS.test(l.trim()));
 export const analysisLine = (text: string) => { const l = text.split("\n"); return l[analysisIndex(l)] as string | undefined; };
-/** Whether a schematic item is a directive holding an analysis (the one the simulation dialog edits). */
 export type Fields = Record<string, string>;
 
 /** `v(a)`, `v(a,b)`, `i(V1)` -> output fields (okind v|i, node, ref, isrc). */

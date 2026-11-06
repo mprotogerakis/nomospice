@@ -152,10 +152,11 @@ export function connectivity(items: Item[], lib: Lib) {
 
 /** Rubber-band drag: selected items move, wire ends / flags touching them follow, and no
  *  connection is lost (LTspice keeps them too):
- *  - a wire that stretches (an end, or a point inside it, moves) is first cut at the connection
+ *  - a wire whose both ends move (it joins two moving parts) moves whole, like a selected one;
+ *  - an unselected wire ending inside a wholly moving wire (a T-leg) follows it;
+ *  - a wire that stretches (one end, or a point inside it, moves) is first cut at the connection
  *    points inside it (T-junctions, pins, labels): only the piece at the moving point stretches,
- *    so a junction further along does not slide off the slanted wire;
- *  - an unselected wire ending inside a moving wire (a T-leg) follows it.
+ *    so a junction further along does not slide off the slanted wire.
  *  The cut pieces are appended (the items' indices, and so the selection, stay valid). */
 export function dragPlan(items: Item[], lib: Lib, sel: Set<number>) {
   type Wire = Extract<Item, { t: "wire" }>;
@@ -168,14 +169,23 @@ export function dragPlan(items: Item[], lib: Lib, sel: Set<number>) {
     if (sel.has(i)) ps.forEach(move);
   });
   const ends = (w: Wire): Pt[] => [[w.x1, w.y1], [w.x2, w.y2]];
-  items.forEach((it, i) => {
-    if (!sel.has(i) || it.t !== "wire") return;
-    items.forEach((o, j) => !sel.has(j) && o.t === "wire" && ends(o).forEach((p) => inside(p, it) && move(p))); // T-legs follow
-    items.forEach((o, j) => !sel.has(j) && o.t === "flag" && inside([o.x, o.y], it) && move([o.x, o.y]));
-  });
+  // wires that move whole, and what hangs on them, until nothing more joins
+  const whole = new Set<number>(items.flatMap((it, i) => (sel.has(i) && it.t === "wire" ? [i] : [])));
+  for (let grew = true; grew; ) {
+    grew = false;
+    items.forEach((it, i) => {
+      if (it.t !== "wire") return;
+      if (!whole.has(i) && ends(it).every((p) => moving.has(key(...p)))) (whole.add(i), (grew = true));
+      if (!whole.has(i)) return;
+      items.forEach((o, j) => {
+        const ps: Pt[] = whole.has(j) || sel.has(j) ? [] : o.t === "wire" ? ends(o) : o.t === "flag" ? [[o.x, o.y]] : [];
+        ps.forEach((p) => inside(p, it) && !moving.has(key(...p)) && (move(p), (grew = true))); // T-legs follow
+      });
+    });
+  }
   const all: Item[] = [], pieces: Item[] = [];
   items.forEach((it, i) => {
-    if (it.t !== "wire" || sel.has(i) || !(ends(it).some((p) => moving.has(key(...p))) || movingPts.some((p) => inside(p, it)))) return void all.push(it);
+    if (it.t !== "wire" || whole.has(i) || !(ends(it).some((p) => moving.has(key(...p))) || movingPts.some((p) => inside(p, it)))) return void all.push(it);
     const d = (p: Pt) => Math.abs(p[0] - it.x1) + Math.abs(p[1] - it.y1);
     const cuts = [...new Map(conn.filter((p) => inside(p, it)).map((p) => [key(...p), p])).values()].sort((p, q) => d(p) - d(q));
     const pts: Pt[] = [[it.x1, it.y1], ...cuts, [it.x2, it.y2]];
@@ -185,7 +195,7 @@ export function dragPlan(items: Item[], lib: Lib, sel: Set<number>) {
   return (dx: number, dy: number): Item[] =>
     all.map((it, i) => {
       if (it.t === "raw") return it;
-      if (sel.has(i) && i < items.length) {
+      if ((sel.has(i) || whole.has(i)) && i < items.length) {
         return it.t === "wire" ? { ...it, x1: it.x1 + dx, y1: it.y1 + dy, x2: it.x2 + dx, y2: it.y2 + dy } : { ...it, x: it.x + dx, y: it.y + dy };
       }
       if (it.t === "wire") {

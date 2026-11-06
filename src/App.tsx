@@ -67,10 +67,10 @@ const leave = async () => {
   return true;
 };
 
-/** Installed once, outside React: quitting must keep working even if the UI tree crashed. */
 /** The model library folders (app menu, ⌘/Ctrl+,): the component dialog's library view. */
 const openLibraries = () => useS.setState({ dialog: { k: "parts", libraries: true } });
 
+/** Installed once, outside React: quitting must keep working even if the UI tree crashed. */
 export function installGuards() {
   // a mouse click must not leave focus on a button (Windows/Linux webviews focus it): Space/Enter
   // would then "click" it again instead of reaching the app hotkeys (e.g. Run turned Halt).
@@ -83,8 +83,10 @@ export function installGuards() {
     if (!(await leave())) e.preventDefault();
   });
   listen("quit-requested", async () => (await leave()) && invoke("quit"));
-  listen("open-libraries", openLibraries);
-  listen("close-requested", closeFile);
+  // menu shortcuts bypass the keydown guards: with a dialog open, ⌘W closes the dialog (as Esc),
+  // ⌘, waits (it would replace the dialog and lose its edits)
+  listen("open-libraries", () => !useS.getState().dialog && openLibraries());
+  listen("close-requested", () => (useS.getState().dialog ? useS.setState({ dialog: null }) : closeFile()));
   // mirror unsaved work for exits we cannot intercept (Dock > Quit, logout, crashes)
   useS.subscribe((s, prev) => {
     if (s.items === prev.items && s.dirty === prev.dirty && s.path === prev.path) return;

@@ -222,6 +222,9 @@ function Sources({ start }: { start?: "add" | "microcap" }) {
     if (typeof dir === "string") await save([...(await invoke<LibSource[]>("library_sources")), { name: dir.split(/[\\/]/).pop() || dir, path: dir, enabled: true }]);
   };
   const microcap = async () => {
+    // already downloaded, only switched off: switch it on again instead of fetching 60 MB
+    const cur = await invoke<LibSource[]>("library_sources");
+    if (cur.some((s) => /micro-cap/i.test(s.name))) return save(cur.map((s) => (/micro-cap/i.test(s.name) ? { ...s, enabled: true } : s)));
     setBusy("Downloading Micro-Cap 12 (60 MB) from the Internet Archive…");
     try {
       setList(await invoke<LibSource[]>("library_fetch_microcap"));
