@@ -7,6 +7,6 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 // nomospice: shortcut labels are written with macOS glyphs; Windows/Linux show Ctrl/Shift/…
-const MAC = typeof navigator !== "undefined" && /Mac/i.test(navigator.platform || navigator.userAgent);
+export const MAC = typeof navigator !== "undefined" && /Mac/i.test(navigator.platform || navigator.userAgent);
 export const keys = (s: string) =>
   MAC ? s : s.replace(/⇧⌘/g, "Ctrl+Shift+").replace(/[⌘⌃]/g, "Ctrl+").replace(/⇧/g, "Shift+").replace(/↵/g, "Enter").replace(/⌫/g, "Del");

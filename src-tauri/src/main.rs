@@ -271,7 +271,8 @@ async fn folder_symbols(from: String, to: String, names: Vec<String>, copy: bool
         for n in names {
             let file = format!("{}.asy", n.rsplit(['\\', '/']).next().unwrap_or(&n));
             let (src, dst) = (std::path::Path::new(&from).join(&file), std::path::Path::new(&to).join(&file));
-            if src.is_file() && !dst.exists() && !out.contains(&file) {
+            // (a built-in symbol is never taken from the folder: nothing to carry)
+            if src.is_file() && !dst.exists() && !out.contains(&file) && !schematic::builtin_symbol(&n) {
                 if copy {
                     std::fs::copy(&src, &dst).map_err(|e| format!("{file}: {e}"))?;
                 }

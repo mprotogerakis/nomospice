@@ -323,13 +323,16 @@ export const Waveform = memo(function Waveform() {
 /** `.meas` results of the run (ngspice reports them in the log; LTspice in its error log). */
 export function Measurements({ xUnit }: { xUnit: string }) {
   const meas = useS((s) => s.sim?.run?.meas);
+  const deck = useS((s) => s.sim?.simulated ?? "");
+  // results on the x axis: TRIG/TARG (a span) and WHEN (a point) — not FIND/AVG … (a y value)
+  const atX = useMemo(() => new Set(deck.split("\n").map((l) => l.trim().split(/\s+/)).filter((t) => /^\.meas/i.test(t[0] ?? "") && /^when$/i.test(t[3] ?? "")).map((t) => t[2].toLowerCase())), [deck]);
   if (!meas?.length) return null;
   return (
     <div className="border-b border-border px-2 py-1 font-mono text-2xs">
       <div className="text-text-tertiary">Measurements (.meas)</div>
       {meas.map(([name, v, info], k) => (
         <div key={`${name}${k}`} className="truncate" title={v == null ? "ngspice could not evaluate it: see the log (⌘L)" : info}>
-          <span className="text-text">{name}</span> = {v == null ? <span className="text-status-danger">failed</span> : si(v, /targ=|trig=/.test(info) ? xUnit : "", 5)}
+          <span className="text-text">{name}</span> = {v == null ? <span className="text-status-danger">failed</span> : si(v, /targ=|trig=/.test(info) || atX.has(name.toLowerCase()) ? xUnit : "", 5)}
         </div>
       ))}
     </div>

@@ -25,7 +25,7 @@ import { ContextMenu, openMenu } from "./Menu";
 import { Toolbar, ToolbarButton, ToolbarSeparator, ToolbarSpacer } from "./ui/toolbar";
 import { StatusBar, StatusSegment } from "./ui/status-bar";
 import { initializeTheme, updateThemePreference, type ThemeMode } from "./lib/theme";
-import { cn, keys } from "./lib/utils";
+import { cn, keys, MAC } from "./lib/utils";
 
 /** Phasor as magnitude ∠ phase in degrees, the way the lecture writes it (230 V ∠ −120.0°). */
 const polar = (re: number, im: number, unit: string) => {
@@ -165,7 +165,7 @@ async function newFile() {
 }
 /** ⌘W / Ctrl+W: the document goes, the app stays (an empty, untitled schematic). */
 const closeFile = newFile;
-const isMac = /Mac/.test(navigator.userAgent);
+
 async function openExample(items: Item[]) {
   if (await discardOk()) await loadDoc(items, null);
 }
@@ -275,7 +275,7 @@ export function App() {
         if (k === "n") return run(newFile);
         if (k === "k") return run(() => useS.setState({ dialog: { k: "parts" } }));
         if (k === ",") return run(openLibraries); // macOS: the app menu's item has it
-        if (k === "w" && !isMac) return run(closeFile); // macOS: File → Close (the menu item takes ⌘W)
+        if (k === "w" && !MAC) return run(closeFile); // macOS: File → Close (the menu item takes ⌘W)
         if (k === "l") return run(() => useS.setState({ panel: useS.getState().panel ? null : "log" }));
         if (k === "enter") return run(simulate);
         return;

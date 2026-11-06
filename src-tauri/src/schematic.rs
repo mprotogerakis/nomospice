@@ -139,9 +139,10 @@ pub struct Local(Option<std::path::PathBuf>, HashSet<String>, Option<(usize, u12
 /// (count, a sum over modification times and sizes) of the .asy files in `dir`.
 fn asy_stamp(dir: &std::path::Path) -> Option<(usize, u128)> {
     let asy = std::fs::read_dir(dir).ok()?.flatten().filter(|e| e.path().extension().is_some_and(|x| x.eq_ignore_ascii_case("asy")));
-    let each = asy.filter_map(|e| e.metadata().ok()).map(|m| {
+    let each = asy.filter_map(|e| Some((e.file_name(), e.metadata().ok()?))).map(|(name, m)| {
         let t = m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos());
-        t.wrapping_add((m.len() as u128).wrapping_mul(1_000_003))
+        let n = name.as_encoded_bytes().iter().fold(0u128, |h, &b| h.wrapping_mul(131).wrapping_add(b as u128)); // a rename counts too
+        t.wrapping_add((m.len() as u128).wrapping_mul(1_000_003)).wrapping_add(n)
     });
     Some(each.fold((0, 0u128), |(n, s), x| (n + 1, s.wrapping_add(x))))
 }
@@ -445,6 +446,12 @@ fn inside(p: (i32, i32), a: (i32, i32), b: (i32, i32)) -> bool {
     let cross = (bx - ax) * (py - ay) - (by - ay) * (px - ax);
     let dot = (px - ax) * (bx - ax) + (py - ay) * (by - ay);
     cross == 0 && dot > 0 && dot < (bx - ax).pow(2) + (by - ay).pow(2)
+}
+
+/// Whether `name` is one of nomospice's own symbols (they win over an .asy of the same name).
+pub fn builtin_symbol(name: &str) -> bool {
+    let key = sym_key(name);
+    BUILTIN_SYMBOLS.iter().any(|(n, _)| *n == key)
 }
 
 /// The default models the component library lists ([`BUILTIN_MODELS`] with a name of their own
@@ -831,14 +838,19 @@ fn uncommented(l: &str) -> &str {
 
 /// One `.meas` statement (see [`ltspice_meas`]); Err: what ngspice would silently get wrong.
 fn meas_statement(s: &str, sensors: &[Sensor], an: &str) -> Result<String, String> {
-    // `FROM = 1m` is `FROM=1m` (the tokens below split at blanks)
+    // `FROM = 1m` is `FROM=1m` (the tokens below split at blanks): blanks next to `=` go
     let s = uncommented(s);
-    let mut flat = String::with_capacity(s.len());
-    for (i, c) in s.char_indices() {
-        let near_eq = s[..i].trim_end().ends_with('=') || s[i..].trim_start().starts_with('=');
-        if !(c.is_whitespace() && near_eq) {
-            flat.push(c);
+    let (mut flat, mut blanks) = (String::with_capacity(s.len()), String::new());
+    for c in s.chars() {
+        if c.is_whitespace() {
+            blanks.push(c);
+            continue;
         }
+        if c != '=' && !flat.ends_with('=') {
+            flat.push_str(&blanks);
+        }
+        blanks.clear();
+        flat.push(c);
     }
     let s = sensor_currents(flat.trim_end(), sensors);
     let mut toks: Vec<String> = spice_tokens(&s).into_iter().map(str::to_string).collect();
@@ -1379,13 +1391,15 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool) -> Netlist {
         }
         _ => None,
     }).collect();
-    let mut seen = HashSet::new();
+    let (mut seen, mut missing) = (HashSet::new(), HashSet::new());
     let mut jumped: HashMap<String, String> = HashMap::new(); // nets already tied by jumpers
     let mut any_ac = false; // some V/I source has an AC amplitude (else .ac results are all 0)
     for (i, it) in items.iter().enumerate() {
         let Item::Sym { sym, attrs, .. } = it else { continue };
         let Some(def) = lib.get(sym).cloned() else {
-            nl.warnings.push(format!("symbol `{sym}` not found: the part is left out (its .asy is not next to the schematic, in LTspice or a library folder)"));
+            if missing.insert(sym_key(sym)) {
+                nl.warnings.push(format!("symbol `{sym}` not found: its parts are left out (its .asy is not next to the schematic, in LTspice or a library folder)"));
+            }
             continue;
         };
 
