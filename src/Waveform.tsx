@@ -8,6 +8,7 @@ import { openMenu } from "./Menu";
 import { si } from "./geom";
 import { keys } from "./lib/utils";
 import type { Trace } from "./types";
+import { saveSvg, withLightTheme, xmlEscape } from "./svgExport";
 
 type Series = { t: Trace; y: (number | null)[] };
 type Pane = { unit: string; series: Series[] };
@@ -44,6 +45,68 @@ function csv(xs: number[], xUnit: string, panes: Pane[]) {
   const cols = panes.flatMap((p) => p.series.map((s, k, all) => ({ name: `${s.t.label}${all.filter((o) => o.t === s.t).length > 1 ? ` #${all.filter((o, j) => o.t === s.t && j <= k).length}` : ""} [${p.unit}]`, y: s.y })));
   const head = [`x [${xUnit}]`, ...cols.map((c) => `"${c.name.replace(/"/g, '""')}"`)].join(",");
   return [head, ...xs.map((x, i) => [x, ...cols.map((c) => c.y[i] ?? "")].join(","))].join("\n") + "\n";
+}
+
+/** The panes as one SVG in the light theme: same axes, ticks, zoom and cursors as on screen, plus a
+ *  legend (on screen the trace table does that job). uPlot draws on a canvas, so this redraws from
+ *  its scales and tick lists. ponytail: every sample becomes a path point (fine up to ~10^5 points). */
+function plotSvg(us: uPlot[], panes: Pane[], cur: { a: number | null; b: number | null }): string {
+  return withLightTheme(() => {
+    const dpr = devicePixelRatio, ink = css("--text-secondary"), grid = css("--border"), sel = css("--selection");
+    const out: string[] = [];
+    const txt = (x: number, y: number, s: string, anchor = "middle", base = "auto", fill = ink) =>
+      out.push(`<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" text-anchor="${anchor}" dominant-baseline="${base}" fill="${fill}">${xmlEscape(s)}</text>`);
+    const line = (x1: number, y1: number, x2: number, y2: number, stroke: string, extra = "") =>
+      out.push(`<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="${stroke}" ${extra}/>`);
+    // legend: every trace once (a complex trace has a dB and a phase series)
+    let lx = us[0].bbox.left / dpr;
+    for (const t of new Map(panes.flatMap((p) => p.series.map((s) => [s.t.expr, s.t] as const))).values()) {
+      line(lx, 12, lx + 18, 12, color(t.slot), `stroke-width="2"`);
+      txt(lx + 24, 12, t.label, "start", "middle");
+      lx += 48 + 7 * t.label.length;
+    }
+    let y = 28;
+    us.forEach((u, k) => {
+      const L = u.bbox.left / dpr, T = y + u.bbox.top / dpr, PW = u.bbox.width / dpr, PH = u.bbox.height / dpr;
+      const ax = u.axes as unknown as { _splits?: (number | null)[]; _values?: (string | number)[] }[];
+      const px = (v: number) => L + u.valToPos(v, "x"), py = (v: number) => T + u.valToPos(v, "y");
+      out.push(`<clipPath id="pane${k}"><rect x="${L}" y="${T}" width="${PW}" height="${PH}"/></clipPath>`);
+      (ax[1]._splits ?? []).forEach((v, i) => {
+        if (v == null) return;
+        line(L, py(v), L + PW, py(v), grid);
+        txt(L - 6, py(v), String(ax[1]._values?.[i] ?? ""), "end", "middle");
+      });
+      (ax[0]._splits ?? []).forEach((v, i) => {
+        if (v == null) return;
+        line(px(v), T, px(v), T + PH, grid);
+        const label = ax[0]._values?.[i];
+        if (k === us.length - 1 && label) txt(px(v), T + PH + 16, String(label));
+      });
+      out.push(`<rect x="${L}" y="${T}" width="${PW}" height="${PH}" fill="none" stroke="${grid}"/>`);
+      const xs = u.data[0], { min = -Infinity, max = Infinity } = u.scales.x;
+      panes[k].series.forEach((s, j) => {
+        const ys = u.data[j + 1];
+        let d = "", pen = false;
+        for (let i = 0; i < xs.length; i++) {
+          const v = ys[i];
+          // outside the zoom: skip, but keep one point beyond each edge so the clipped line reaches it
+          if ((xs[i + 1] ?? Infinity) < min || (xs[i - 1] ?? -Infinity) > max) continue;
+          if (v == null || !Number.isFinite(v)) { pen = false; continue; }
+          d += `${pen ? "L" : "M"}${px(xs[i]).toFixed(1)} ${py(v).toFixed(1)}`;
+          pen = true;
+        }
+        out.push(`<path d="${d}" fill="none" stroke="${color(s.t.slot)}" stroke-width="1.5" stroke-linejoin="round" clip-path="url(#pane${k})"/>`);
+      });
+      for (const [name, xv] of [["A", cur.a], ["B", cur.b]] as const) {
+        if (xv == null || xv < min || xv > max) continue;
+        line(px(xv), T, px(xv), T + PH, sel, `stroke-dasharray="4 3"`);
+        if (k === 0) txt(px(xv) + 4, T + 11, name, "start", "auto", sel);
+      }
+      y += u.height;
+    });
+    const W = us[0].width, H = Math.ceil(y + 4);
+    return `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" font-family="IBM Plex Mono, Menlo, Consolas, monospace" font-size="11">${out.join("")}</svg>\n`;
+  });
 }
 
 /** Linear interpolation of ys at x; NaN outside the data (a cursor from a longer previous run). */
@@ -246,6 +309,7 @@ export const Waveform = memo(function Waveform() {
           { label: "Add trace…", disabled: !run, run: () => useS.setState({ dialog: { k: "trace" } }) },
           "-",
           { label: "Copy data as CSV", disabled: !panes.length, run: () => navigator.clipboard.writeText(csv(xs, xUnit, panes)) },
+          { label: "Export plot as SVG…", disabled: !panes.length, run: () => void saveSvg(plotSvg(plots.current, panes, useS.getState().plot), "-plot") },
           { label: "Remove all traces", danger: true, disabled: !traces.length, run: () => useS.setState({ traces: [] }) },
         ]);
       }}>

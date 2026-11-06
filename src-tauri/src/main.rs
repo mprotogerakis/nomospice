@@ -134,6 +134,18 @@ async fn save_asc(path: String, items: Vec<Item>) -> Result<(), String> {
 }
 
 /// Live netlist for the UI; includes are resolved too, only to surface their warnings.
+/// SVG export (schematic, plots): only .svg files, written like a schematic save.
+#[tauri::command]
+async fn export_svg(path: String, svg: String) -> Result<(), String> {
+    if !path.to_lowercase().ends_with(".svg") {
+        return Err(format!("{path}: not an .svg file"));
+    }
+    tauri::async_runtime::spawn_blocking(move || write_atomic(std::path::Path::new(&path), svg.as_bytes()))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 async fn netlist(items: Vec<Item>, dir: Option<String>, lib: tauri::State<'_, Lib>) -> Result<Netlist, String> {
     let mut nl = schematic::netlist(&items, &mut *lib.0.lock().unwrap_or_else(|e| e.into_inner()));
@@ -513,7 +525,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(Lib(Mutex::new(Library::builtin())))
-        .invoke_handler(tauri::generate_handler![symbols, examples, path_exists, open_asc, save_asc, netlist, simulate, trace, halt, cli_args, quit, recovery_save, recovery_take, recovery_resolve, recovery_clear,
+        .invoke_handler(tauri::generate_handler![symbols, examples, path_exists, open_asc, save_asc, export_svg, netlist, simulate, trace, halt, cli_args, quit, recovery_save, recovery_take, recovery_resolve, recovery_clear,
             library_sources, library_set_sources, library_search, library_text, library_fetch_microcap,
             git_status, git_log, git_show, git_commit, git_init])
         .setup(|app| {

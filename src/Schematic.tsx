@@ -1,4 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
+import { createRoot } from "react-dom/client";
 import { useShallow } from "zustand/react/shallow";
 import { Maximize, Minus, Plus } from "lucide-react";
 import type { Item, Shape, SymbolDef } from "./types";
@@ -10,6 +12,7 @@ import { canProbe, commit, currentNets, nextInst, probe, probeMode, simulate, us
 import { deleteSelection, duplicate, newItem, transform } from "./actions";
 import { openMenu, type MenuItem } from "./Menu";
 import { cn } from "@/lib/utils";
+import { inlineStyles, saveSvg, withLightTheme } from "./svgExport";
 
 type View = { x: number; y: number; k: number };
 type Drag =
@@ -121,7 +124,7 @@ const ItemView = memo(function ItemView({ it, lib, leftward }: { it: Shape; lib:
     case "text":
       return (
         <text x={it.x} y={it.y} fill="currentColor" stroke="none" className={cn("text-[13px]", it.directive ? "font-mono font-medium" : "italic")}>
-          {textLines(it.text).map((l, i) => <tspan key={i} x={it.x} dy={i ? 17 : 0}>{l}</tspan>)}
+          {textLines(it.text).map((l, i) => <tspan key={i} x={it.x} y={it.y + 17 * i}>{l}</tspan>)/* absolute y: some SVG renderers ignore tspan dy */}
         </text>
       );
     case "sym": {
@@ -139,6 +142,70 @@ const ItemView = memo(function ItemView({ it, lib, leftward }: { it: Shape; lib:
 });
 
 const COLOR: Record<Shape["t"], string> = { wire: "var(--sch-wire)", flag: "var(--sch-label)", sym: "var(--sch-symbol)", text: "var(--sch-comment)" };
+/** The schematic as it would print: no grid, selection, hover or open-pin marks. */
+function ExportSvg({ items, lib }: { items: Item[]; lib: Record<string, SymbolDef> }) {
+  const left = leftLabels(items);
+  const conn = connectivity(items, lib);
+  const defs = [...new Set(items.flatMap((it) => (it.t === "sym" ? [defOf(lib, it)] : [])).filter((d): d is SymbolDef => !!d))];
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <defs>{defs.map((d) => <SymbolGraphics key={d.name} def={d} />)}</defs>
+      <g data-content="" fill="none" strokeLinecap="round">
+        {items.map((it, i) => isShape(it) && (
+          <g key={i} color={colorOf(it)} stroke="currentColor" strokeWidth={it.t === "wire" ? 2 : 1.6}>
+            <ItemView it={it} lib={lib} leftward={it.t === "flag" && left.has(`${it.x},${it.y}`)} />
+          </g>
+        ))}
+        {conn.dots.map(([x, y]) => <circle key={`d${x},${y}`} cx={x} cy={y} r={4} fill="var(--sch-wire)" />)}
+      </g>
+    </svg>
+  );
+}
+
+/** Standalone SVG of the whole schematic in the light theme, cropped to its content. */
+export function schematicSvg(items: Item[], lib: Record<string, SymbolDef>): string {
+  const host = document.createElement("div");
+  host.style.cssText = "position:fixed;left:-100000px;top:0";
+  document.body.append(host);
+  const root = createRoot(host);
+  try {
+    flushSync(() => root.render(<ExportSvg items={items} lib={lib} />));
+    const svg = host.querySelector("svg")!;
+    // <use> → copies of the symbol graphics: not every program follows href into <defs>
+    for (const use of [...svg.querySelectorAll("use")]) {
+      const ref = svg.querySelector(use.getAttribute("href")!);
+      if (!ref) continue;
+      const g = ref.cloneNode(true) as SVGGElement;
+      g.removeAttribute("id");
+      g.setAttribute("transform", use.getAttribute("transform") ?? "");
+      use.replaceWith(g);
+    }
+    svg.querySelector("defs")?.remove();
+    return withLightTheme(() => {
+      inlineStyles(svg);
+      // one <text> per line: macOS's own SVG renderer (Preview, Keynote) ignores tspan positions
+      for (const t of [...svg.querySelectorAll("text")].filter((t) => t.querySelectorAll("tspan").length > 1)) {
+        for (const span of t.querySelectorAll("tspan")) {
+          const line = t.cloneNode(false) as SVGTextElement;
+          line.setAttribute("y", span.getAttribute("y")!);
+          line.textContent = span.textContent;
+          t.before(line);
+        }
+        t.remove();
+      }
+      const b = svg.querySelector<SVGGElement>("g[data-content]")!.getBBox(), m = 16;
+      svg.setAttribute("viewBox", `${b.x - m} ${b.y - m} ${b.width + 2 * m} ${b.height + 2 * m}`);
+      svg.setAttribute("width", String(Math.ceil(b.width + 2 * m)));
+      svg.setAttribute("height", String(Math.ceil(b.height + 2 * m)));
+      svg.querySelector("g[data-content]")!.removeAttribute("data-content");
+      return `<?xml version="1.0" encoding="UTF-8"?>\n${new XMLSerializer().serializeToString(svg)}\n`;
+    });
+  } finally {
+    root.unmount();
+    host.remove();
+  }
+}
+
 const colorOf = (it: Shape) => (it.t === "text" && it.directive ? "var(--sch-directive)" : COLOR[it.t]);
 
 export const Schematic = memo(function Schematic() {
@@ -389,6 +456,8 @@ export const Schematic = memo(function Schematic() {
       "-",
       { label: "Select all", hint: "⌘A", run: () => set({ sel: items.flatMap((x, j) => (x.t === "raw" ? [] : [j])) }) },
       { label: "Fit view", hint: "Space", run: fit },
+      "-",
+      { label: "Export schematic as SVG…", disabled: !items.some(isShape), run: () => void saveSvg(schematicSvg(items, lib), "") },
     ];
     if (count > 1) return [...arrange, "-", del];
     switch (it.t) {

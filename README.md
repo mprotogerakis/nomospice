@@ -16,7 +16,10 @@ files — with a modern UI, ngspice as the engine, a Rust core and a React front
 - **Analyses**: `.tran`, `.ac` (Bode: magnitude + phase panes), `.dc` (nested sweeps as curve
   families), `.op`, `.noise` (spectrum + totals), `.tf`, `.pz`, `.sens`; Live mode re-runs on every edit.
 - **Waveforms** (uPlot): one pane per unit, synced zoom, cursors A/B with Δ and 1/Δx, expressions in
-  ngspice syntax, copy as CSV.
+  ngspice syntax, copy as CSV. A single-frequency `.ac` (`.ac lin 1 50 50`) gives a phasor table
+  (magnitude ∠ phase) instead of a plot.
+- **SVG export** for slides and papers (right-click the canvas or the plot): the schematic or the plots as
+  shown, in a light print style, readable by Inkscape, browsers, PowerPoint and Keynote.
 - **Model libraries**: indexes LTspice's `lib/cmp` + `lib/sub`, the freeware **Micro-Cap 12** library
   (one click downloads the original package from the Internet Archive; ~45,000 models and
   subcircuits) and your own folders. Search, preview, place — subcircuits get a generated box symbol;
