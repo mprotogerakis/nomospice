@@ -82,7 +82,7 @@ export const PoleZero = memo(function PoleZero({ run }: { run: Run }) {
   const onWheel = (e: React.WheelEvent) => {
     const r = host.current!.getBoundingClientRect(), at = val(e.clientX - r.left, e.clientY - r.top);
     const f = Math.exp(-e.deltaY * 0.002), k = v.k * f;
-    if (f > 1 && k > base * 1e6) return; // at most a million times the fitted view (also around the origin)
+    if ((f > 1 && k > base * 1e6) || (f < 1 && k < base * 1e-3)) return; // a million times in, a thousand out
     setView({ k, cx: at.re - (at.re - v.cx) / f, cy: at.im - (at.im - v.cy) / f });
   };
 
@@ -142,13 +142,13 @@ export const PoleZero = memo(function PoleZero({ run }: { run: Run }) {
         )}
         {!poles.length && !zeros.length && <div className="absolute inset-0 flex items-center justify-center text-xs text-text-tertiary">No poles or zeros found: check the .pz input and output nodes (see Log).</div>}
       </div>
-      <Sidebar poles={poles} zeros={zeros} locus={locus} setLocus={setLocus} error={error} setError={setError} />
+      <Sidebar poles={poles} zeros={zeros} hasLocus={!!locus} setLocus={setLocus} error={error} setError={setError} />
     </div>
   );
 });
 
-function Sidebar({ poles, zeros, locus, setLocus, error, setError }: {
-  poles: P[]; zeros: P[]; locus: unknown; setLocus: (l: { values: number[]; steps: P[][]; target: string } | null) => void; error: string; setError: (e: string) => void;
+function Sidebar({ poles, zeros, hasLocus, setLocus, error, setError }: {
+  poles: P[]; zeros: P[]; hasLocus: boolean; setLocus: (l: { values: number[]; steps: P[][]; target: string } | null) => void; error: string; setError: (e: string) => void;
 }) {
   // its own busy state: the global `running` would make simulate() drop a Run meanwhile
   const [running, setRunning] = useState(false);
@@ -163,6 +163,13 @@ function Sidebar({ poles, zeros, locus, setLocus, error, setError }: {
     if (targets[0]) setF((x) => (targets.some((t) => t.toLowerCase() === x.target.trim().toLowerCase()) ? x : { ...x, target: targets[0] }));
   }, [targets]);
 
+  const reqRef = useRef(0); // Clear drops the result of a sweep still running
+  const clear = () => {
+    reqRef.current++;
+    if (running) void invoke("cancel_locus");
+    setLocus(null);
+    setError("");
+  };
   const compute = async () => {
     const [a, b, n] = [spiceNum(f.from), spiceNum(f.to), Math.round(spiceNum(f.steps) ?? 0)];
     if (!f.target.trim() || a === null || b === null || n < 2) return setError("Enter a parameter, a range and at least 2 steps.");
@@ -175,17 +182,18 @@ function Sidebar({ poles, zeros, locus, setLocus, error, setError }: {
     const values = Array.from({ length: n }, (_, i) => (f.scale === "log" ? a * (b / a) ** (i / (n - 1)) : a + ((b - a) * i) / (n - 1)));
     setError("");
     setRunning(true);
+    const req = ++reqRef.current;
     try {
       const { items, path } = useS.getState();
       // a step is null where .pz failed (drawn as a gap); fewer steps than values: halted
       const steps = await invoke<([number, number][] | null)[]>("root_locus", { items, dir: dirOf(path), target: f.target.trim(), values });
-      if (docId() !== gen) return; // another document was opened meanwhile
+      if (docId() !== gen || req !== reqRef.current) return; // another document opened meanwhile, or Clear
       if (useS.getState().sim !== sim0) return setError("The circuit was simulated again meanwhile: draw the locus again."); // live mode, Run
       const failed = steps.filter((x) => !x?.length).length; // failed, or ran without poles
       setError([failed && `${failed} of ${steps.length} steps found no poles (gaps in the paths).`, steps.length < values.length && `Halted after ${steps.length} of ${values.length} steps.`].filter(Boolean).join(" "));
       setLocus({ values: values.slice(0, steps.length), target: f.target.trim(), steps: steps.map((s) => (s ?? []).map(([re, im]) => ({ re, im }))) });
     } catch (e) {
-      setError(String(e));
+      if (req === reqRef.current) setError(String(e));
     } finally {
       setRunning(false);
     }
@@ -224,7 +232,7 @@ function Sidebar({ poles, zeros, locus, setLocus, error, setError }: {
       <div className="flex gap-2">
         <Button type="button" variant="primary" disabled={running} onClick={compute}>{running ? "Computing…" : "Draw root locus"}</Button>
         {running && <Button type="button" onClick={() => void invoke("cancel_locus")}>Halt</Button>}
-        {!!locus && <Button type="button" onClick={() => setLocus(null)}>Clear</Button>}
+        {(hasLocus || running) && <Button type="button" onClick={clear}>Clear</Button>}
       </div>
       {error && <p className="whitespace-pre-wrap text-2xs text-status-danger">{error}</p>}
       <p className="mt-auto text-2xs leading-4 text-text-tertiary">Wheel: zoom · double-click: fit · hover: s, f₀ = |s|/2π, ζ = −σ/|s| · shaded: right half-plane (unstable)</p>

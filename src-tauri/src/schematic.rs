@@ -462,7 +462,7 @@ fn part_value(line: &str) -> Option<(usize, usize)> {
     }
     let (a, e) = *token_spans(line).get(3)?;
     let v = &line[a..e];
-    let plain = v.starts_with(|c: char| c.is_ascii_digit() || c == '.') && !v.contains('=');
+    let plain = v.trim_start_matches(['+', '-']).starts_with(|c: char| c.is_ascii_digit() || c == '.') && !v.contains('=');
     (plain || (v.starts_with('{') && v.ends_with('}')) || (v.len() > 1 && v.starts_with('\'') && v.ends_with('\''))).then_some((a, e))
 }
 
@@ -487,14 +487,14 @@ pub fn vary_spans(text: &str, target: &str) -> Option<Vec<(usize, usize)>> {
         .and_then(|l| part_value(l.line).map(|(a, e)| vec![(l.start + a, l.start + e)]))
 }
 
-/// What a sweep can vary in `text`: top-level `.param` names and R, C, L instances (vary_spans' rules).
-pub fn sweepable(text: &str) -> Vec<String> {
+/// What a sweep can vary in `text` (vary_spans' rules), for the locus panel's list: top-level
+/// `.param` names and the R, C, L instances among `placed` (the schematic's parts, not the
+/// netlister's parasitics such as `RC1_rser`).
+pub fn sweepable(text: &str, placed: &[String]) -> Vec<String> {
     let lines = deck_lines(text);
     let params = lines.iter().filter(|l| l.top && l.param).flat_map(|l| param_defs(l.line, &l.low).into_iter().map(|(n, _)| n.to_string()));
-    // not the parasitics the netlister adds for Rser= … (`RC1_rser`): they are not on the schematic
-    let generated = |n: &str| ["_rser", "_lser", "_rpar", "_cpar"].iter().any(|s| n.to_ascii_lowercase().ends_with(s));
     let parts = lines.iter().filter(|l| l.top && part_value(l.line).is_some()).filter_map(|l| l.line.split_whitespace().next())
-        .filter(|n| !generated(n)).map(str::to_string);
+        .filter(|n| placed.iter().any(|p| p.eq_ignore_ascii_case(n))).map(str::to_string);
     let mut out: Vec<String> = vec![];
     for n in params.chain(parts) {
         if !out.iter().any(|o| o.eq_ignore_ascii_case(&n)) {
@@ -507,7 +507,7 @@ pub fn sweepable(text: &str) -> Vec<String> {
 /// The first `.pz` statement in `text`, lowercase, its `+` continuation lines joined (comment
 /// lines between them skipped).
 pub fn pz_statement(text: &str) -> Option<String> {
-    let mut lines = text.lines().map(str::trim_start).skip_while(|l| !l.get(..3).is_some_and(|p| p.eq_ignore_ascii_case(".pz")));
+    let mut lines = text.lines().map(str::trim_start).skip_while(|l| !l.split_whitespace().next().is_some_and(|t| t.eq_ignore_ascii_case(".pz")));
     let first = lines.next()?;
     let more = lines.take_while(|l| l.is_empty() || l.starts_with(['+', '*'])).filter_map(|l| l.strip_prefix('+'));
     Some(std::iter::once(first).chain(more).collect::<Vec<_>>().join(" ").to_ascii_lowercase())
@@ -645,7 +645,7 @@ impl Prepared {
     /// This deck with its other analyses commented out (a sweep step needs only `.pz`; a `.tran`
     /// or `.meas` would run every step for nothing).
     pub fn only_pz(&self) -> Prepared {
-        const OTHER: [&str; 12] = [".tran", ".ac", ".dc", ".op", ".noise", ".tf", ".sens", ".four", ".meas", ".measure", ".disto", ".pss"];
+        const OTHER: [&str; 14] = [".tran", ".ac", ".dc", ".op", ".noise", ".tf", ".sens", ".four", ".meas", ".measure", ".disto", ".pss", ".sp", ".hb"];
         let mut off = false; // in such a statement: its `+` continuation lines go too
         let text = self.0.lines().map(|l| {
             let first = l.split_whitespace().next().unwrap_or("").to_ascii_lowercase();
@@ -1420,7 +1420,8 @@ mod tests {
         assert!(vary(".ends\nR1 a b 1k\n", "R1", 2.0).unwrap().contains("R1 a b 2e0"), "stray .ends");
         assert_eq!(vary(".param Rb=10k Rb=20k\n", "Rb", 3.0).unwrap(), ".param Rb=3e0 Rb=3e0\n", "every definition on a line");
         // what the root-locus panel offers: the same rules
-        assert_eq!(sweepable(".param a=1 b = {a*2} ; c=3\n.subckt x 1 2\nR9 1 2 1k\n.ends\nR1 n1 n2 1k\nC1 n2 0 1n\nV1 n1 0 1\n"), ["a", "b", "R1", "C1"]);
+        let placed = |n: &[&str]| n.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(sweepable(".param a=1 b = {a*2} ; c=3\n.subckt x 1 2\nR9 1 2 1k\n.ends\nR1 n1 n2 1k\nC1 n2 0 1n\nV1 n1 0 1\n", &placed(&["R9", "R1", "C1", "V1"])), ["a", "b", "R1", "C1"]);
         // comments are not definitions: the part R1 is varied
         let c = vary(".param a=1 ; R1=5\n* R1=old value\nR1 x y 1k\n", "R1", 2e3).unwrap();
         assert!(c.contains("R1 x y 2e3") && c.contains("; R1=5") && c.contains("* R1=old value"), "{c}");
@@ -1431,12 +1432,13 @@ mod tests {
         // a number cannot stand in for a model name or an `R=` form: not a target
         for l in ["R1 a b R=V(c)*1k\n", "R1 a b rmod L=10u\n", "C1 a b Q=1u*V(a)\n"] {
             assert_eq!(vary(l, &l[..2], 1.0), None, "{l}");
-            assert!(sweepable(l).is_empty(), "{l}");
+            assert!(sweepable(l, &placed(&["R1", "C1"])).is_empty(), "{l}");
         }
         assert!(vary("R1 a b 'x*2'\n", "R1", 1.0).unwrap().contains("R1 a b 1e0"));
-        assert_eq!(sweepable("C1 a c 1u\nRC1_rser a b 0.1\n"), ["C1"], "netlister parasitics");
+        assert_eq!(sweepable("C1 a c 1u\nRC1_rser a b 0.1\n", &placed(&["c1"])), ["C1"], "netlister parasitics");
+        assert!(vary("R1 a b -1k\n", "R1", 2.0).unwrap().contains("R1 a b 2e0"), "signed value");
         assert_eq!(pz_statement("R1 a b 1k\n.PZ in 0 out 0 vol\n* c\n+ zer\nR2 b 0 1k\n+ x\n").as_deref(), Some(".pz in 0 out 0 vol  zer"));
-        assert_eq!(pz_statement(".tran 1m\n"), None);
+        assert_eq!(pz_statement(".tran 1m\n.pzx 1\n"), None);
         // a sweep step runs only .pz: other analyses go, with their continuation lines
         let only = prepare(".param a=1\n.meas tran x AVG V(out)\n* c\n+ FROM=1m TO=2m\n.pz in 0 out 0 vol pz\n+ \n", None, &mut vec![]).only_pz();
         assert!(only.text().contains("* + FROM=1m") && only.text().contains("\n.pz in 0") && !only.text().contains("* .pz"), "{}", only.text());

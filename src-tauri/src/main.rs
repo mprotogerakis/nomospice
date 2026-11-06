@@ -160,7 +160,7 @@ struct Sim {
     simulated: String,
     run: Option<ngspice::Run>,
     log: Vec<String>,
-    /// What a root locus can vary in this deck (`schematic::sweepable`)
+    /// What a root locus can vary: the schematic's .params and R/C/L parts (`schematic::sweepable`)
     sweepable: Vec<String>,
 }
 
@@ -189,15 +189,13 @@ async fn simulate(items: Vec<Item>, dir: Option<String>, lib: tauri::State<'_, L
     };
     // the newer request wins: a running root locus stops at its next step, then this runs
     SWEEP_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let sweepable = schematic::sweepable(&netlist.text, &netlist.insts); // the user's deck, not the libraries
     tauri::async_runtime::spawn_blocking(move || {
         let prepared = prepare_deck(sim, dir.as_deref(), &mut netlist.warnings);
         let simulated = prepared.text().to_string();
         let _sweep = SWEEP.lock().unwrap_or_else(|e| e.into_inner());
         let _op = ngspice::enter(op);
-        let res = ngspice::run(&prepared);
-        // only the s-plane view (a .pz run) offers a root locus
-        let sweepable = if res.as_ref().is_ok_and(|r| r.plot.starts_with("pz")) { schematic::sweepable(&simulated) } else { vec![] };
-        match res {
+        match ngspice::run(&prepared) {
             Ok(mut run) => Sim { netlist, simulated, sweepable, log: std::mem::take(&mut run.log), run: Some(run) },
             Err(log) => Sim { netlist, simulated, sweepable, run: None, log },
         }
