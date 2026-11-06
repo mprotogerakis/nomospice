@@ -20,13 +20,17 @@ export async function checkForUpdate(manual = false) {
   }
 }
 
+let asking = false; // a second click while the confirmation is open must not start a second install
+
 /** Downloads, verifies (the updater's public key) and installs the update, then restarts. */
 export async function installUpdate() {
   const { update, busy } = useUpdate.getState();
-  if (!update || busy) return;
+  if (!update || busy || asking) return;
+  asking = true;
   const notes = update.body?.trim() ? `\n\n${update.body.trim().slice(0, 600)}` : "";
   const unsaved = useS.getState().dirty ? "\n\nThe schematic has unsaved changes: they are lost unless you save first." : "";
-  if (!(await ask(`Install nomospice ${update.version} and restart?${notes}${unsaved}`, { title: "Update", kind: unsaved ? "warning" : "info" }))) return;
+  const yes = await ask(`Install nomospice ${update.version} and restart?${notes}${unsaved}`, { title: "Update", kind: unsaved ? "warning" : "info" }).finally(() => (asking = false));
+  if (!yes) return;
   let total = 0, got = 0;
   try {
     useUpdate.setState({ busy: "Downloading…" });

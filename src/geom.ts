@@ -1,7 +1,4 @@
 import type { Item, Shape, SymbolDef } from "./types";
-import { si } from "./spice";
-
-export { si }; // SI formatting lives with the other number helpers
 
 export const GRID = 16;
 export type Pt = [number, number];

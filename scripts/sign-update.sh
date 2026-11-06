@@ -5,6 +5,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 KEY=${UPDATER_KEY:-$HOME/.tauri/nomospice-updater.key}
-PW=$(security find-generic-password -s nomospice-updater -w)
-node_modules/.bin/tauri signer sign -f "$KEY" -p "$PW" "$1" >/dev/null
+# the password goes through the environment, not the command line (visible to other processes)
+TAURI_SIGNING_PRIVATE_KEY_PASSWORD=$(security find-generic-password -s nomospice-updater -w) \
+  node_modules/.bin/tauri signer sign -f "$KEY" "$1" >/dev/null
 test -s "$1.sig"

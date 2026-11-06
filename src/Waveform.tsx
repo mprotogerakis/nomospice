@@ -5,7 +5,7 @@ import { Plus, X } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { removeTrace, setPlot, useS } from "./store";
 import { openMenu } from "./Menu";
-import { si } from "./geom";
+import { si } from "./spice";
 import { keys } from "./lib/utils";
 import type { Trace } from "./types";
 import { saveSvg, withLightTheme, xmlEscape } from "./svgExport";

@@ -7,7 +7,7 @@ import {
   directiveKind, formatIc, formatInclude, formatMeas, formatModel, formatParams, MODEL_PARAMS, MODEL_TYPES, parseIc, parseInclude,
   analysisLine, analysisRoundTrips, parseMeas, parseModel, parseParams, portablePaths, type DirectiveKind, type Meas,
 } from "./spice";
-import { CircuitLists, Tabs, Field, FIELD, Modal, numHelp, NumField, Section, Select, SpiceLine, TextField } from "./ui/dialog";
+import { CircuitLists, Tabs, Field, FIELD, Modal, numHelp, NumField, Rows, Section, Select, SpiceLine, TextField } from "./ui/dialog";
 import { Button } from "./ui/button";
 import { FIELD_BASE, FIELD_FOCUS } from "./ui/focus";
 import { cn, keys } from "@/lib/utils";
@@ -34,25 +34,6 @@ function ParamRow({ name, desc, unit, value, set }: { name: string; desc: string
       <span className="truncate font-mono text-2xs text-text-tertiary">{help.info}</span>
       {help.warn && <span className="col-span-3 col-start-3 text-2xs text-status-warning">⚠ {help.warn}</span>}
     </label>
-  );
-}
-
-/** Rows of two text cells with add/remove (parameters, initial conditions). */
-function Rows({ rows, set, a, b, list, unit }: { rows: string[][]; set: (r: string[][]) => void; a: string; b: string; list?: string; unit?: string }) {
-  const put = (r: number, c: number, v: string) => set(rows.map((row, i) => (i === r ? (c ? [row[0], v] : [v, row[1]]) : row)));
-  return (
-    <div className="flex flex-col gap-1">
-      {rows.map(([x, y], r) => (
-        <div key={r} className="flex items-center gap-1">
-          <input className={FIELD} value={x} placeholder={a} list={list} data-autofocus={r === 0 || undefined} aria-label={`${a} ${r + 1}`} onChange={(e) => put(r, 0, e.target.value)} />
-          <span className="text-text-tertiary">=</span>
-          <input className={FIELD} value={y} placeholder={b} aria-label={`${b} ${r + 1}`} onChange={(e) => put(r, 1, e.target.value)} />
-          {unit && <span className="w-3 text-2xs text-text-tertiary">{unit}</span>}
-          <button type="button" aria-label="Remove row" className="px-1 text-text-tertiary hover:text-status-danger" onClick={() => set(rows.filter((_, i) => i !== r))}>×</button>
-        </div>
-      ))}
-      <Button type="button" size="sm" className="self-start" onClick={() => set([...rows, ["", ""]])}>Add</Button>
-    </div>
   );
 }
 
@@ -118,8 +99,9 @@ export function DirectiveDialog({ item, title, raw, onDone }: { item: Text; titl
   };
   // a form replaces a directive of its own kind; any other text stays and gets the line added
   const keeps = tab !== "text" && directiveKind(text) !== tab && text.trim() !== "";
-  const result = tab === "text" || (!touched && keeps) ? text : keeps ? `${text.trimEnd()}\n${line}` : line;
-  const invalid = !touched && keeps ? "" : tab === "param" && !params.some(([n]) => n.trim()) ? "Add a parameter name."
+  // untouched: the text exactly as it was (no re-formatting, no spurious change)
+  const result = tab === "text" || !touched ? text : keeps ? `${text.trimEnd()}\n${line}` : line;
+  const invalid = !touched ? "" : tab === "param" && !params.some(([n]) => n.trim()) ? "Add a parameter name."
     : tab === "ic" && !ic.some(([n]) => n.trim()) ? "Add a node."
     : tab === "include" && !inc.path.trim() ? "Choose a file." : "";
   const done = () => {
@@ -146,7 +128,8 @@ export function DirectiveDialog({ item, title, raw, onDone }: { item: Text; titl
   return (
     <Modal title={title} onSubmit={done} wide>
       <CircuitLists />
-      <Tabs tabs={TABS} value={tab} set={toTab} />
+      {/* forms write SPICE lines: only for a directive (a comment is prose; tick the box to get them) */}
+      {directive && <Tabs tabs={TABS} value={tab} set={toTab} />}
       {tab === "text" && (
         <>
           <textarea data-autofocus rows={6} className={cn(FIELD_BASE, FIELD_FOCUS, "w-full p-2 font-mono")} value={text} spellCheck={false}
@@ -156,7 +139,7 @@ export function DirectiveDialog({ item, title, raw, onDone }: { item: Text; titl
             <input type="checkbox" checked={directive} onChange={(e) => setDirective(e.target.checked)} />
             SPICE directive (otherwise a comment, ignored by the simulation)
           </label>
-          <p className="text-2xs text-text-tertiary">Any SPICE directive, one per line · {keys("⌘↵")} to confirm · the other tabs build the common ones for you</p>
+          <p className="text-2xs text-text-tertiary">{directive ? "Any SPICE directive, one per line · the other tabs build the common ones for you" : "Shown on the schematic, ignored by the simulation"} · {keys("⌘↵")} to confirm</p>
           {!simForm && <p className="text-2xs text-text-tertiary">This analysis uses options the simulation form does not know, so it is edited here as text.</p>}
         </>
       )}
@@ -224,7 +207,7 @@ export function DirectiveDialog({ item, title, raw, onDone }: { item: Text; titl
       )}
       {tab === "ic" && (
         <Field label="Node voltages" hint="the transient starts from these (with uic: without an operating point)">
-          <Rows rows={ic} set={(ic) => put({ ic })} a="node" b="voltage" list="nets" unit="V" />
+          <Rows rows={ic} set={(ic) => put({ ic })} a="node" b="voltage" list="nets" units={["", "V"]} />
         </Field>
       )}
       {tab === "temp" && <NumField label="Temperature" value={temp} set={(temp) => put({ temp })} unit="°C" placeholder="27" autofocus hint="circuit temperature for all models" />}

@@ -2,9 +2,8 @@
 // a waveform preview, and the SPICE attributes it writes (Value, Value2, SpiceLine like LTspice).
 import { useMemo, useState } from "react";
 import { FUNCS, formatSource, lastFilled, parseSource, sample, si, sourceRoundTrips, tokens, type Func, type Source } from "./spice";
-import { Field, FIELD, NumField, Section, SpiceLine, TextField } from "./ui/dialog";
+import { Field, NumField, Rows, Section, SpiceLine, Tabs, TextField } from "./ui/dialog";
 import { Button } from "./ui/button";
-import { cn } from "@/lib/utils";
 
 type Attrs = Record<string, string>;
 const KINDS: [Func | "", string][] = [["", "DC"], ["SINE", "Sine"], ["PULSE", "Pulse"], ["EXP", "Exponential"], ["SFFM", "FM"], ["PWL", "Piecewise linear"]];
@@ -52,14 +51,7 @@ export function SourceEditor({ attrs, setAttrs, current }: { attrs: Attrs; setAt
   }
   return (
     <>
-      <div role="tablist" className="flex flex-wrap gap-1">
-        {KINDS.map(([k, label]) => (
-          <button key={label} type="button" role="tab" aria-selected={src.func === k} onClick={() => pick(k)}
-            className={cn("h-6 rounded-control border px-2.5 text-xs", src.func === k ? "border-selection bg-selection-soft text-text-strong" : "border-border-control text-text-secondary hover:bg-surface-hover")}>
-            {label}
-          </button>
-        ))}
-      </div>
+      <Tabs tabs={KINDS} value={src.func} set={pick} />
       <div className="grid grid-cols-[1fr_300px] gap-4">
         <div className="flex flex-col gap-2">
           {src.func === "PWL" ? <PwlTable args={src.args} set={(args) => update({ ...src, args })} y={y} />
@@ -92,24 +84,12 @@ export function SourceEditor({ attrs, setAttrs, current }: { attrs: Attrs; setAt
   );
 }
 
-/** PWL corner points: time, value rows. */
+/** PWL corner points: time, value rows (the args list flattened). */
 function PwlTable({ args, set, y }: { args: string[]; set: (a: string[]) => void; y: string }) {
   const rows = Array.from({ length: Math.max(1, Math.ceil(args.length / 2)) }, (_, i) => [args[2 * i] ?? "", args[2 * i + 1] ?? ""]);
-  const put = (r: number, c: number, v: string) => { const a = [...args]; while (a.length < 2 * rows.length) a.push(""); a[2 * r + c] = v; set(a); };
   return (
     <Field label="Points" hint="time, value: linear in between, the last value holds">
-      <div className="flex flex-col gap-1">
-        {rows.map(([t, v], r) => (
-          <div key={r} className="flex items-center gap-1">
-            <input className={FIELD} value={t} placeholder="time" aria-label={`time ${r + 1}`} data-autofocus={r === 0 || undefined} onChange={(e) => put(r, 0, e.target.value)} />
-            <span className="text-2xs text-text-tertiary">s</span>
-            <input className={FIELD} value={v} placeholder="value" aria-label={`value ${r + 1}`} onChange={(e) => put(r, 1, e.target.value)} />
-            <span className="w-3 text-2xs text-text-tertiary">{y}</span>
-            <button type="button" aria-label="Remove point" className="px-1 text-text-tertiary hover:text-status-danger" onClick={() => set(args.filter((_, i) => i !== 2 * r && i !== 2 * r + 1))}>×</button>
-          </div>
-        ))}
-        <Button type="button" size="sm" className="self-start" onClick={() => set([...args, "", ""])}>Add point</Button>
-      </div>
+      <Rows rows={rows} set={(r) => set(r.flat())} a="time" b="value" sep="" units={["s", y]} add="Add point" />
     </Field>
   );
 }

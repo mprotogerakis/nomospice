@@ -200,7 +200,9 @@ async fn root_locus(items: Vec<Item>, dir: Option<String>, target: String, value
             let step = deck.varied(&target, v).ok_or_else(|| format!("`{target}` is neither a .param nor an R, C or L in the schematic"))?;
             match ngspice::run(&step) {
                 // interrupted by Halt (bg_halt ends the run with partial data): not a step
-                Ok(run) if run.aborted || ngspice::halted() => break,
+                _ if ngspice::halted() => break,
+                // aborted by ngspice itself (no convergence near a crossing): a gap, the sweep goes on
+                Ok(run) if run.aborted => steps.push(None),
                 Ok(run) => steps.push(Some(run.op.into_iter().filter(|o| o.0.starts_with("pole") || o.0.starts_with("zero")).map(|o| (o.0, o.1, o.2)).collect())),
                 Err(_) if ngspice::halted() => break, // the step Halt interrupted is not a failed .pz
                 Err(log) => {

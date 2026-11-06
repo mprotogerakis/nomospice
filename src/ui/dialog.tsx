@@ -124,6 +124,29 @@ export function Tabs<K extends string>({ tabs, value, set }: { tabs: [K, string]
   );
 }
 
+/** Rows of two text cells with add/remove: parameters (name = value), initial conditions, PWL points.
+ *  `units` are shown after each cell; `sep` between them. */
+export function Rows({ rows, set, a, b, list, sep = "=", units = ["", ""], add = "Add" }: {
+  rows: string[][]; set: (r: string[][]) => void; a: string; b: string; list?: string; sep?: string; units?: [string, string]; add?: string;
+}) {
+  const put = (r: number, c: number, v: string) => set(rows.map((row, i) => (i === r ? (c ? [row[0], v] : [v, row[1]]) : row)));
+  return (
+    <div className="flex flex-col gap-1">
+      {rows.map(([x, y], r) => (
+        <div key={r} className="flex items-center gap-1">
+          <input className={FIELD} value={x} placeholder={a} list={list} data-autofocus={r === 0 || undefined} aria-label={`${a} ${r + 1}`} onChange={(e) => put(r, 0, e.target.value)} />
+          {units[0] && <span className="text-2xs text-text-tertiary">{units[0]}</span>}
+          {sep && <span className="text-text-tertiary">{sep}</span>}
+          <input className={FIELD} value={y} placeholder={b} aria-label={`${b} ${r + 1}`} onChange={(e) => put(r, 1, e.target.value)} />
+          {units[1] && <span className="w-3 text-2xs text-text-tertiary">{units[1]}</span>}
+          <button type="button" aria-label="Remove row" className="px-1 text-text-tertiary hover:text-status-danger" onClick={() => set(rows.filter((_, i) => i !== r))}>×</button>
+        </div>
+      ))}
+      <Button type="button" size="sm" className="self-start" onClick={() => set([...rows, ["", ""]])}>{add}</Button>
+    </div>
+  );
+}
+
 /** Section heading inside a form. */
 export const Section = ({ children }: { children: React.ReactNode }) => (
   <div className="mt-1 border-b border-border pb-0.5 text-2xs font-medium uppercase tracking-wide text-text-tertiary">{children}</div>
