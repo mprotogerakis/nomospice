@@ -460,6 +460,7 @@ function AboutDialog() {
         {table(thirdParty.included)}
         <h3 className="font-medium text-text-strong">Used, but not included</h3>
         {table(thirdParty.external)}
+        <p className="leading-5 text-text-tertiary">{thirdParty.notice}</p>
         {texts == null ? (
           <Button type="button" className="self-start" onClick={() => Promise.all([import("../LICENSE?raw"), import("../THIRD-PARTY-LICENSES.txt?raw")]).then(([own, third]) => setTexts(`${third.default}\n\n${"=".repeat(80)}\nnomospice - GNU Affero General Public License v3.0\n${"=".repeat(80)}\n\n${own.default}`))}>
             Show full license texts

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { listen } from "@tauri-apps/api/event";
 import { ask, message, open, save } from "@tauri-apps/plugin-dialog";
 import {
@@ -13,7 +14,7 @@ import { Schematic } from "./Schematic";
 import { Waveform } from "./Waveform";
 import { Dialogs } from "./Dialogs";
 import { Boundary } from "./Boundary";
-import { docId, isOp, loadDoc, loadSymbols, placeSymbol, plotKind, redo, refreshGit, refreshNets, simulate, undo, useS, useStatus } from "./store";
+import { dirOf, docId, isOp, loadDoc, loadSymbols, placeSymbol, plotKind, redo, refreshGit, refreshNets, simulate, undo, useS, useStatus } from "./store";
 import { History } from "./History";
 import { currentLabel, mirror, rotate, si } from "./geom";
 import { deleteSelection, duplicate, newItem, placeFlag, transform } from "./actions";
@@ -86,10 +87,14 @@ export function installGuards() {
 
 const fail = (what: string) => (e: unknown) => message(`${what}: ${e}`, { title: "nomospice", kind: "error" });
 
-async function openFile() {
+/** Open a schematic: `path`, or one picked in the file dialog. */
+async function openFile(path?: string) {
   if (!(await discardOk())) return;
-  const path = await open({ filters: FILTERS, multiple: false });
-  if (typeof path !== "string") return;
+  if (path === undefined) {
+    const picked = await open({ filters: FILTERS, multiple: false });
+    if (typeof picked !== "string") return;
+    path = picked;
+  }
   try {
     await loadDoc(await invoke<Item[]>("open_asc", { path }), path);
   } catch (e) {
@@ -97,6 +102,22 @@ async function openFile() {
   }
 }
 let saveQueue: Promise<unknown> = Promise.resolve();
+
+const MODEL_FILE = /\.(lib|sub|mod|inc|cir|sp|spi|bjt|dio|jft|mos)$/i;
+/** What dropping these files does (null: nothing). */
+const dropAction = (paths: string[]) =>
+  paths.some((p) => /\.asc$/i.test(p)) ? "Open schematic" : paths.some((p) => MODEL_FILE.test(p)) ? "Add as .include directive" : null;
+/** Dropped files: a schematic opens, model files become `.include` directives (relative to the
+ *  schematic's folder when inside it, as LTspice writes them). */
+async function dropFiles(paths: string[]) {
+  if (useS.getState().dialog) return;
+  const asc = paths.find((p) => /\.asc$/i.test(p));
+  if (asc) return openFile(asc);
+  const dir = dirOf(useS.getState().path);
+  const rel = (p: string) => (dir && (p.startsWith(`${dir}/`) || p.startsWith(`${dir}\\`)) ? p.slice(dir.length + 1) : p);
+  const models = paths.filter((p) => MODEL_FILE.test(p));
+  if (models.length) newItem({ t: "text", x: 0, y: 0, directive: true, text: models.map((p) => `.include "${rel(p)}"`).join("\n") });
+}
 
 async function saveFile(as = false) {
   let path = useS.getState().path;
@@ -140,6 +161,17 @@ export function App() {
   })));
   const [mode, setMode] = useState<ThemeMode>(() => initializeTheme().mode);
   const [split, setSplit] = useState(0.45);
+  const [drop, setDrop] = useState<string | null>(null); // what releasing the dragged files would do
+
+  useEffect(() => {
+    // files dragged in from the Finder / Explorer (Tauri's native drag & drop)
+    const un = getCurrentWebview().onDragDropEvent(({ payload: p }) => {
+      if (p.type === "enter") setDrop(dropAction(p.paths));
+      else if (p.type === "leave") setDrop(null);
+      else if (p.type === "drop") (setDrop(null), void dropFiles(p.paths));
+    });
+    return () => void un.then((f) => f());
+  }, []);
   const [examples, setExamples] = useState<[string, Item[]][]>([]);
   const mainRef = useRef<HTMLDivElement>(null);
   const showWave = !!s.sim?.run && !isOp(s.sim);
@@ -268,10 +300,10 @@ export function App() {
 
   return (
     <div className="flex h-full flex-col">
-      <Toolbar className="h-[38px] gap-1 px-2">
-        <span className="mr-2 font-mono text-xs font-medium tracking-tight text-text-strong">nomo<span className="text-selection">spice</span></span>
+      <Toolbar className="gap-1 px-2">
+        <span className="mr-3 font-mono text-sm font-medium tracking-tight text-text-strong">nomo<span className="text-selection">spice</span></span>
         <ToolbarButton label="New" hotkey="⌘N" icon={<FilePlus />} onClick={newFile} />
-        <ToolbarButton label="Open" hotkey="⌘O" icon={<FolderOpen />} onClick={openFile} />
+        <ToolbarButton label="Open" hotkey="⌘O" icon={<FolderOpen />} onClick={() => openFile()} />
         <ToolbarButton label="Save" hotkey="⌘S" icon={<Save />} onClick={() => saveFile()} />
         <ToolbarSeparator />
         <ToolbarButton label="Undo" hotkey="⌘Z" icon={<Undo2 />} disabled={!s.canUndo} onClick={undo} />
@@ -331,7 +363,7 @@ export function App() {
                       {name}.asc
                     </button>
                   ))}
-                  <button onClick={openFile} className="rounded-control border border-dashed border-border-control px-2 py-1.5 text-left text-xs text-text-secondary hover:bg-surface-hover">Open .asc…</button>
+                  <button onClick={() => openFile()} className="rounded-control border border-dashed border-border-control px-2 py-1.5 text-left text-xs text-text-secondary hover:bg-surface-hover">Open .asc…</button>
                 </div>
               </div>
             </div>
@@ -363,6 +395,11 @@ export function App() {
       <Boundary onReset={() => useS.setState({ dialog: null })}>
         <Dialogs />
       </Boundary>
+      {drop && (
+        <div className="pointer-events-none fixed inset-0 z-40 flex items-center justify-center bg-scrim">
+          <div className="rounded-float border-2 border-dashed border-selection bg-surface-panel px-6 py-4 text-sm font-medium text-text-strong shadow-float">{drop}</div>
+        </div>
+      )}
       <ContextMenu />
     </div>
   );

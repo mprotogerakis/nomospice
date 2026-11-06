@@ -273,6 +273,8 @@ pub fn symbol_for(e: &Entry) -> String {
         "VDMOS" => "nmos", // LTspice VDMOS: pchan cards are rare; the user can swap
         "NJF" => "njf",
         "PJF" => "pjf",
+        "SW" => "sw",
+        "CSW" => "csw",
         _ if e.kind == "SUBCKT" => return format!("subckt:{}", e.name),
         _ => "",
     }.to_string()

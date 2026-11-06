@@ -40,16 +40,19 @@ function arcPath([x1, y1, x2, y2, sx, sy, ex, ey]: number[]) {
 
 /** One <g> per library symbol in <defs>; instances are <use>. Attributes must sit on the
  *  referenced element itself: <use> clones inherit from the <use>, not from <defs>. */
+/** LTspice line styles after the coordinates: 1 dash, 2 dot, 3 dash-dot, 4 dash-dot-dot (screen px). */
+const DASH: Record<number, string> = { 1: "5 4", 2: "1 3", 3: "5 3 1 3", 4: "5 3 1 3 1 3" };
+
 function SymbolGraphics({ def }: { def: SymbolDef }) {
-  const s = { vectorEffect: "non-scaling-stroke" } as const;
   return (
     <g id={`sym-${def.name}`} fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round">
-      {def.shapes.map(([k, p], i) =>
-        k === "line" ? <line key={i} {...s} x1={p[0]} y1={p[1]} x2={p[2]} y2={p[3]} />
+      {def.shapes.map(([k, p], i) => {
+        const s = { vectorEffect: "non-scaling-stroke", strokeDasharray: DASH[p[k === "arc" ? 8 : 4]] } as const;
+        return k === "line" ? <line key={i} {...s} x1={p[0]} y1={p[1]} x2={p[2]} y2={p[3]} />
         : k === "rect" ? <rect key={i} {...s} x={Math.min(p[0], p[2])} y={Math.min(p[1], p[3])} width={Math.abs(p[2] - p[0])} height={Math.abs(p[3] - p[1])} />
         : k === "circle" ? <ellipse key={i} {...s} cx={(p[0] + p[2]) / 2} cy={(p[1] + p[3]) / 2} rx={Math.abs(p[2] - p[0]) / 2} ry={Math.abs(p[3] - p[1]) / 2} />
-        : <path key={i} {...s} d={arcPath(p)} />,
-      )}
+        : <path key={i} {...s} d={arcPath(p)} />;
+      })}
     </g>
   );
 }

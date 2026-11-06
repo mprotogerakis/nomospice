@@ -1,15 +1,15 @@
 Version 4
 SymbolType CELL
-LINE Normal 16 0 16 20
-LINE Normal 16 44 16 64
-LINE Normal 0 20 32 20
-LINE Normal 32 20 16 44
-LINE Normal 16 44 0 20
-LINE Normal 0 44 32 44
-LINE Normal 0 44 0 38
-LINE Normal 0 38 -6 38
-LINE Normal 32 44 32 50
-LINE Normal 32 50 38 50
+LINE Normal 16 0 16 24
+LINE Normal 16 42 16 64
+LINE Normal 4 24 28 24
+LINE Normal 28 24 16 42
+LINE Normal 16 42 4 24
+LINE Normal 4 42 28 42
+LINE Normal 4 42 4 37
+LINE Normal 4 37 0 37
+LINE Normal 28 42 28 47
+LINE Normal 28 47 32 47
 WINDOW 0 24 0 Left 2
 WINDOW 3 24 64 Left 2
 SYMATTR Prefix D

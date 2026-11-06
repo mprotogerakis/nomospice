@@ -1,17 +1,17 @@
-// Copied from OpenPCB (AGPL-3.0-or-later), https://github.com/OpenPCB-app/OpenPCB
+// Adapted from OpenPCB (AGPL-3.0-or-later), https://github.com/OpenPCB-app/OpenPCB: larger tools (32 px, 20 px icons)
 import * as React from "react";
 import { cn, keys } from "@/lib/utils";
 import { FOCUS_RING } from "./focus";
 
 export type ToolbarProps = React.HTMLAttributes<HTMLDivElement>;
 
-/** 30px docked editor toolbar (design D2 §4). */
+/** 46px docked editor toolbar; wraps into a second row in narrow windows. */
 export const Toolbar = React.forwardRef<HTMLDivElement, ToolbarProps>(
   ({ className, ...props }, ref) => (
     <div
       ref={ref}
       className={cn(
-        "flex h-[30px] shrink-0 items-center gap-0.5 border-b border-border bg-surface-panel px-1.5 text-text-secondary",
+        "flex min-h-[46px] shrink-0 flex-wrap items-center gap-0.5 border-b py-[7px] border-border bg-surface-panel px-1.5 text-text-secondary",
         className,
       )}
       {...props}
@@ -41,7 +41,7 @@ export interface ToolbarButtonProps
   children?: React.ReactNode;
 }
 
-/** 24×24 icon tool (or auto-width text tool when `children` is given). */
+/** 32×32 icon tool (or auto-width text tool when `children` is given). */
 export const ToolbarButton = React.forwardRef<
   HTMLButtonElement,
   ToolbarButtonProps
@@ -60,10 +60,10 @@ export const ToolbarButton = React.forwardRef<
           "inline-flex shrink-0 items-center justify-center rounded-control transition-colors",
           FOCUS_RING,
           "disabled:cursor-not-allowed disabled:opacity-35",
-          "[&_svg]:h-[14px] [&_svg]:w-[14px] [&_svg]:shrink-0 [&_svg]:[stroke-width:1.5]",
+          "[&_svg]:h-[20px] [&_svg]:w-[20px] [&_svg]:shrink-0 [&_svg]:[stroke-width:1.6]",
           children !== undefined && children !== null
-            ? "h-6 gap-1.5 px-2 text-xs"
-            : "h-6 w-6",
+            ? "h-8 gap-1.5 px-2.5 text-sm"
+            : "h-8 w-8",
           active
             ? "bg-surface-control text-text-strong"
             : "hover:bg-surface-hover hover:text-text-strong",
@@ -87,7 +87,7 @@ export function ToolbarSeparator({ className }: { className?: string }) {
   return (
     <span
       aria-hidden="true"
-      className={cn("mx-1 h-4 w-px shrink-0 bg-divider", className)}
+      className={cn("mx-1.5 h-6 w-px shrink-0 bg-divider", className)}
     />
   );
 }

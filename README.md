@@ -85,3 +85,5 @@ Tools: `simulate` (traces downsampled), `netlist`, `read_schematic`, `write_sche
 AGPL-3.0-or-later (it includes code from OpenPCB). Third-party software and its licenses: [NOTICE.md](NOTICE.md)
 (overview) and [THIRD-PARTY-LICENSES.txt](THIRD-PARTY-LICENSES.txt) (every component with its full license
 text); in the app under About (ⓘ in the toolbar).
+
+LTspice is a trademark of Analog Devices, Inc.; Micro-Cap of Spectrum Software. nomospice is an independent project, not affiliated with or endorsed by them, and ships none of their files: it reads and writes the LTspice file formats for compatibility. Its built-in symbols are original drawings with LTspice-compatible pin positions; its default device models are its own estimates from public datasheets.

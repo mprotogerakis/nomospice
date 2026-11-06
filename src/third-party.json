@@ -1,4 +1,5 @@
 {
+  "notice": "LTspice is a trademark of Analog Devices, Inc.; Micro-Cap of Spectrum Software. nomospice is an independent project, not affiliated with or endorsed by them, and ships none of their files: it reads and writes the LTspice file formats for compatibility. Its built-in symbols are original drawings with LTspice-compatible pin positions; its default device models are its own estimates from public datasheets.",
   "included": [
     { "name": "ngspice", "url": "https://ngspice.sourceforge.io", "use": "Simulation engine (bundled with the Windows and macOS apps)", "license": "Modified BSD; parts LGPL-2.0+, GPL-2.0+, MPL-2.0, public domain" },
     { "name": "Tauri", "url": "https://tauri.app", "use": "App framework (Rust)", "license": "MIT OR Apache-2.0" },
@@ -22,7 +23,7 @@
     { "name": "Git", "url": "https://git-scm.com", "use": "Version history: runs the installed git", "license": "GPL-2.0" },
     { "name": "curl, tar / unzip", "url": "", "use": "Micro-Cap download: system tools", "license": "curl license, BSD-2-Clause / Info-ZIP" },
     { "name": "WebView2 (Windows), WebKit (macOS, Linux)", "url": "", "use": "The system's web view", "license": "Microsoft license; LGPL-2.1 and BSD" },
-    { "name": "LTspice (Analog Devices)", "url": "https://www.analog.com/ltspice", "use": "Symbols and models of a local installation are read", "license": "Proprietary; not distributed with nomospice" },
+    { "name": "LTspice (Analog Devices)", "url": "https://www.analog.com/ltspice", "use": "Optional: symbols and models of a local installation are read", "license": "Proprietary (Analog Devices); not distributed with nomospice" },
     { "name": "Micro-Cap 12 (Spectrum Software)", "url": "https://archive.org/details/mc12cd_202110", "use": "Model library, downloaded on request from the Internet Archive", "license": "Freeware, redistributable only complete and unmodified; not distributed with nomospice" }
   ]
 }

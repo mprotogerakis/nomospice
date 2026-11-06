@@ -70,7 +70,7 @@ macro_rules! builtin {
 }
 const BUILTIN_SYMBOLS: &[(&str, &str)] = builtin!(
     "res", "cap", "polcap", "ind", "voltage", "current", "diode", "schottky", "zener", "led", "npn", "pnp",
-    "nmos", "pmos", "njf", "pjf", "opamp", "e", "g", "jumper"
+    "nmos", "pmos", "njf", "pjf", "opamp", "e", "g", "jumper", "sw", "csw"
 );
 
 pub fn parse_asy(name: &str, src: &str) -> SymbolDef {
@@ -84,7 +84,8 @@ pub fn parse_asy(name: &str, src: &str) -> SymbolDef {
             Some(k @ ("LINE" | "RECTANGLE" | "CIRCLE" | "ARC")) => {
                 let n = if k == "ARC" { 8 } else { 4 };
                 let kind = match k { "LINE" => "line", "RECTANGLE" => "rect", "CIRCLE" => "circle", _ => "arc" };
-                d.shapes.push((kind.into(), (2..2 + n).map(num).collect()));
+                // coordinates, then LTspice's line style (0 solid, 1 dash, 2 dot, 3 dash-dot, 4 dash-dot-dot)
+                d.shapes.push((kind.into(), (2..2 + n + 1).map(num).collect()));
             }
             Some("WINDOW") => {
                 d.windows.insert(num(1) as u8, (num(2), num(3)));
@@ -381,9 +382,14 @@ const BUILTIN_MODELS: &[(&str, &str)] = &[
     ("pmos", ".model PMOS PMOS"),
     ("njf", ".model NJF NJF"),
     ("pjf", ".model PJF PJF"),
-    ("1n4148", ".model 1N4148 D(Is=2.52n Rs=.568 N=1.752 Cjo=4p M=.4 tt=20n BV=100 IBV=100u)"),
-    ("2n3904", ".model 2N3904 NPN(IS=1E-14 VAF=100 BF=300 IKF=0.4 XTB=1.5 BR=4 CJC=4E-12 CJE=8E-12 RB=20 RC=0.1 RE=0.1 TR=250E-9 TF=350E-12 ITF=1 VTF=2 XTF=3)"),
-    ("2n3906", ".model 2N3906 PNP(IS=1E-14 VAF=100 BF=200 IKF=0.4 XTB=1.5 BR=4 CJC=4.5E-12 CJE=10E-12 RB=20 RC=0.1 RE=0.1 TR=250E-9 TF=350E-12 ITF=1 VTF=2 XTF=3)"),
+    // switches: closed above 0.5 V / 1 mA (SPICE's own default threshold 0 leaves 0 V ambiguous)
+    ("sw", ".model SW SW(Ron=1 Roff=1Meg Vt=0.5)"),
+    ("csw", ".model CSW CSW(Ron=1 Roff=1Meg It=1m)"),
+    // generic defaults, own estimates from public datasheet values (V_F at 1/10 mA, h_FE, f_T,
+    // C_j, t_rr): no vendor or LTspice library card. Installed libraries take precedence.
+    ("1n4148", ".model 1N4148 D(IS=2n N=1.8 RS=0.5 CJO=2p VJ=0.7 M=0.33 TT=3n BV=100 IBV=1u)"),
+    ("2n3904", ".model 2N3904 NPN(IS=12f BF=180 VAF=80 IKF=0.15 BR=2 RB=10 RC=0.5 RE=0.3 CJE=6p VJE=0.75 MJE=0.35 CJC=3p VJC=0.75 MJC=0.33 TF=0.45n TR=150n XTB=1.5)"),
+    ("2n3906", ".model 2N3906 PNP(IS=12f BF=150 VAF=60 IKF=0.12 BR=2 RB=10 RC=0.6 RE=0.3 CJE=8p VJE=0.75 MJE=0.35 CJC=4p VJC=0.75 MJC=0.33 TF=0.6n TR=200n XTB=1.5)"),
     ("opamp", ".subckt opamp inn inp out params: Aol=100K GBW=10Meg\nG1 0 n inp inn 1m\nR1 n 0 {Aol*1k}\nC1 n 0 {1/(6.2832*1k*GBW)}\nE1 out 0 n 0 1\n.ends opamp"),
 ];
 
@@ -935,13 +941,22 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool) -> Netlist {
         }
         let value = one_line(&attrs.get("Value").cloned().unwrap_or(def.value.clone())).replace("SINE(", "SIN(");
         let mut nodes = nl.nets[i].clone();
-        let model = value.split(|c: char| c.is_whitespace() || c == '(').next().unwrap_or("").to_lowercase();
+        // W (current-controlled switch): `Vcontrol model [on|off]`, the model comes last
+        let model = if prefix == 'W' {
+            let t: Vec<&str> = value.split_whitespace().filter(|t| !t.eq_ignore_ascii_case("on") && !t.eq_ignore_ascii_case("off")).collect();
+            if t.len() < 2 {
+                nl.warnings.push(format!("{inst}: a current-controlled switch needs its controlling source in Value, e.g. `V1 {}`", t.first().unwrap_or(&"CSW")));
+            }
+            t.last().unwrap_or(&"").to_lowercase()
+        } else {
+            value.split(|c: char| c.is_whitespace() || c == '(').next().unwrap_or("").to_lowercase()
+        };
         // bulk node only for 4-terminal MOS models; a VDMOS (directive or library) has 3 terminals
         let lib_vdmos = || crate::library::index().as_ref().and_then(|ix| ix.get(&model).map(|e| e.kind == "VDMOS")).unwrap_or(false);
         if prefix == 'M' && nodes.len() == 3 && !vdmos.contains(&model) && !lib_vdmos() {
             nodes.push(nodes[2].clone()); // bulk tied to source
         }
-        if "DQMXJ".contains(prefix) && !defined(&model) && !used_models.contains(&model) {
+        if "DQMXJSW".contains(prefix) && !defined(&model) && !used_models.contains(&model) {
             used_models.push(model);
         }
         let extra: Vec<String> = ["Value2", "SpiceLine", "SpiceLine2"].iter()
@@ -1173,6 +1188,29 @@ mod tests {
         let out = get("out");
         assert!((out.1.hypot(out.2) - std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-4 && (out.2.atan2(out.1).to_degrees() + 45.0).abs() < 0.01, "{out:?}");
         assert_eq!((out.3.as_str(), get("r1#branch").3.as_str()), ("V", "A"));
+    }
+
+    #[test]
+    fn switches_simulate_and_netlist() {
+        let _s = SIM.lock();
+        // S1 between vdd and out, controlled by a step at 1 ms; the built-in model (Vt=0.5, Ron=1)
+        let src = "Version 4\nSHEET 1 880 680\nFLAG 0 16 vdd\nFLAG 0 96 out\nFLAG -48 80 ctl\nFLAG -48 32 0\n\
+            FLAG 200 16 vdd\nFLAG 200 96 0\nFLAG 300 16 ctl\nFLAG 300 96 0\nFLAG 416 16 out\nFLAG 416 96 0\n\
+            SYMBOL sw 0 0 R0\nSYMATTR InstName S1\nSYMBOL voltage 200 0 R0\nSYMATTR InstName V1\nSYMATTR Value 1\n\
+            SYMBOL voltage 300 0 R0\nSYMATTR InstName V2\nSYMATTR Value PULSE(0 1 1m 1n 1n 5m 10m)\n\
+            SYMBOL res 400 0 R0\nSYMATTR InstName R1\nSYMATTR Value 1k\nTEXT 0 200 Left 2 !.tran 2m\n";
+        let nl = netlist_for_sim(&parse_asc(src), &mut Library::builtin());
+        assert!(nl.text.contains("S1 vdd out ctl 0 SW") && nl.text.contains(".model SW SW("), "{}", nl.text);
+        let run = crate::ngspice::run(&prepare(&nl.text, None, &mut vec![])).unwrap();
+        let out = crate::ngspice::trace("v(out)", &run.scale).unwrap();
+        let at = |t: f64| out.re[out.x.iter().position(|&x| x >= t).unwrap()];
+        assert!(at(0.5e-3).abs() < 1e-3 && (at(1.5e-3) - 1.0).abs() < 2e-3, "off {} on {}", at(0.5e-3), at(1.5e-3));
+        // W: Value is `Vcontrol model`; the model is the last token
+        let w = src.replace("SYMBOL sw 0 0 R0\nSYMATTR InstName S1", "SYMBOL csw 0 16 R0\nSYMATTR InstName W1\nSYMATTR Value V1 CSW");
+        let nl = netlist(&parse_asc(&w), &mut Library::builtin());
+        assert!(nl.text.contains("W1 vdd out V1 CSW") && nl.text.contains(".model CSW CSW("), "{}", nl.text);
+        let bare = netlist(&parse_asc(&w.replace("SYMATTR Value V1 CSW", "")), &mut Library::builtin());
+        assert!(bare.warnings.iter().any(|m| m.contains("controlling source")), "{:?}", bare.warnings);
     }
 
     #[test]
