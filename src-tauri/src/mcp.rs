@@ -90,6 +90,7 @@ fn call(base: &Path, name: &str, args: &Value) -> Result<Value, String> {
     match name {
         "simulate" => {
             let (items, path) = schematic_of(base, args)?;
+            lib.set_dir(path.as_deref().and_then(Path::parent), false); // its folder's symbols, as in the app
             let shown = schematic::netlist(&items, &mut lib);
             let sim = schematic::netlist_for_sim(&items, &mut lib);
             let mut warnings = shown.warnings.clone();
@@ -121,12 +122,14 @@ fn call(base: &Path, name: &str, args: &Value) -> Result<Value, String> {
             }))
         }
         "netlist" => {
-            let (items, _) = schematic_of(base, args)?;
+            let (items, path) = schematic_of(base, args)?;
+            lib.set_dir(path.as_deref().and_then(Path::parent), false); // its folder's symbols, as in the app
             let nl = schematic::netlist(&items, &mut lib);
             Ok(json!({ "netlist": nl.text, "warnings": nl.warnings, "nets": nl.nets, "instances": nl.insts, "current_probes": nl.probes }))
         }
         "read_schematic" => {
-            let (items, _) = schematic_of(base, args)?;
+            let (items, path) = schematic_of(base, args)?;
+            lib.set_dir(path.as_deref().and_then(Path::parent), false); // its folder's symbols, as in the app
             let nl = schematic::netlist(&items, &mut lib);
             let mut parts = vec![];
             let mut labels = vec![];

@@ -126,16 +126,46 @@ pub fn sym_key(name: &str) -> String {
     name.rsplit(['\\', '/']).next().unwrap_or(name).to_lowercase()
 }
 
-/// Symbol definitions by key, cached misses, and the library generation the `subckt:` entries
-/// were generated for.
-pub struct Library(pub HashMap<String, SymbolDef>, HashSet<String>, u64);
+/// Symbol definitions by key, cached misses, the library generation the `subckt:` entries were
+/// generated for, and the symbols loaded from the schematic's folder.
+pub struct Library(pub HashMap<String, SymbolDef>, HashSet<String>, u64, Local);
+
+/// The schematic's folder and the keys of the symbols loaded from it.
+#[derive(Default)]
+pub struct Local(Option<std::path::PathBuf>, HashSet<String>);
 
 impl Library {
     pub fn builtin() -> Self {
-        Library(BUILTIN_SYMBOLS.iter().map(|(n, s)| (n.to_string(), parse_asy(n, s))).collect(), HashSet::new(), crate::library::generation())
+        Library(BUILTIN_SYMBOLS.iter().map(|(n, s)| (n.to_string(), parse_asy(n, s))).collect(), HashSet::new(), crate::library::generation(), Local::default())
     }
 
-    /// Resolve a symbol; unknown names fall back to a local LTspice install (graphics + pins only).
+    /// The schematic's folder: its symbols (LTspice looks there first) are all loaded, so the
+    /// component list shows them; a built-in symbol of the same name stays. Another folder (or
+    /// none) drops them again; `rescan` reloads the same folder (a symbol saved meanwhile).
+    pub fn set_dir(&mut self, dir: Option<&std::path::Path>, rescan: bool) {
+        if !rescan && self.3 .0.as_deref() == dir {
+            return;
+        }
+        for k in self.3 .1.drain() {
+            self.0.remove(&k);
+        }
+        self.1.clear(); // a name missing before may be in the new folder
+        self.3 .0 = dir.map(std::path::Path::to_path_buf);
+        let Some(dir) = dir else { return };
+        for p in std::fs::read_dir(dir).into_iter().flatten().flatten().map(|e| e.path()) {
+            let Some(stem) = p.file_stem().and_then(|s| s.to_str()) else { continue };
+            let key = sym_key(stem);
+            if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("asy")) && !self.0.contains_key(&key) {
+                if let Ok(bytes) = std::fs::read(&p) {
+                    self.0.insert(key.clone(), parse_asy(&key, &decode(&bytes)));
+                    self.3 .1.insert(key);
+                }
+            }
+        }
+    }
+
+    /// Resolve a symbol; unknown names fall back to a local LTspice install and the library folders
+    /// (graphics + pins only).
     /// Misses are cached so netlisting never rescans the disk for the same name.
     pub fn get(&mut self, name: &str) -> Option<&SymbolDef> {
         let key = sym_key(name);
@@ -158,7 +188,8 @@ impl Library {
         }
         if !self.0.contains_key(&key) {
             let file = format!("{key}.asy");
-            let def = ltspice_sym_dirs().into_iter().find_map(|dir| {
+            let folders = crate::library::sources().into_iter().filter(|s| s.enabled).map(|s| s.path);
+            let def = ltspice_sym_dirs().into_iter().chain(folders).find_map(|dir| {
                 let subdirs = std::fs::read_dir(&dir).into_iter().flatten().flatten().map(|e| e.path());
                 let path = std::iter::once(dir.join(name.replace('\\', "/") + ".asy"))
                     .chain(std::iter::once(dir.clone()).chain(subdirs).map(|d| d.join(&file)))
@@ -659,6 +690,7 @@ impl Prepared {
     }
 
     /// The current sensors in this deck, so results can hide them (see `Sensor`).
+    #[cfg(test)]
     pub fn with_sensors(mut self, sensors: Vec<Sensor>) -> Self {
         self.1 = sensors;
         self
@@ -699,8 +731,148 @@ impl Netlist {
     /// current sensors known. The GUI's simulation and root locus and MCP all run this. It reads the
     /// .include/.lib files (can be slow): call it on a blocking thread, without the library lock.
     pub fn prepared(&self, dir: Option<&std::path::Path>, warnings: &mut Vec<String>) -> Prepared {
-        prepare(&self.text, dir, warnings).with_sensors(self.sensors.clone())
+        let p = prepare(&self.text, dir, warnings);
+        Prepared(ltspice_meas(&p.0, &self.sensors), self.sensors.clone())
     }
+}
+
+/// LTspice `.meas` syntax that ngspice reads differently or not at all, rewritten (a statement with
+/// its `+` lines becomes one line). ngspice takes a vector or `par('…')` where LTspice takes any
+/// expression, and only a number after VAL= (`VAL=0.5*V(vdd)` silently became 0.5):
+/// - an expression measured (AVG … INTEG, FIND, DERIV, TRIG, TARG) becomes `par('…')`;
+/// - `TRIG|TARG <x> VAL=<expr>` becomes `par('<x>-(<expr>)') VAL=0`: the same crossing;
+/// - `WHEN <a>=<b>`, unless `b` is a number, becomes `WHEN par('<a>-(<b>)')=0`;
+/// - `I(R1)` of a part with a current sensor becomes the sensor's current;
+/// - no analysis type (LTspice measures the simulation's) gets the deck's.
+fn ltspice_meas(text: &str, sensors: &[Sensor]) -> String {
+    let lines = deck_lines(text);
+    const TYPES: [&str; 6] = ["tran", "ac", "dc", "op", "noise", "tf"];
+    let an = lines.iter().find_map(|l| l.head.strip_prefix('.').filter(|h| !l.skip && TYPES.contains(h))).unwrap_or("");
+    let meas = |l: &DeckLine| l.head == ".meas" || l.head == ".measure";
+    let mut out: Vec<String> = vec![];
+    let mut i = 0;
+    while i < lines.len() {
+        let l = &lines[i];
+        if l.skip || !meas(l) || l.low.trim_start().starts_with('+') {
+            out.push(l.line.to_string());
+            i += 1;
+            continue;
+        }
+        let mut j = i + 1;
+        while j < lines.len() && meas(&lines[j]) && (lines[j].skip || lines[j].low.trim_start().starts_with('+')) {
+            j += 1;
+        }
+        let stmt = &lines[i..j];
+        let joined = stmt.iter().filter(|l| !l.skip).map(|l| l.line.trim().trim_start_matches('+').trim()).collect::<Vec<_>>().join(" ");
+        let new = meas_statement(&joined, sensors, an);
+        if spice_tokens(&new) == spice_tokens(&joined) {
+            out.extend(stmt.iter().map(|l| l.line.to_string())); // as written
+        } else {
+            out.push(new);
+            out.extend(stmt.iter().filter(|l| l.skip).map(|l| l.line.to_string())); // comments stay
+        }
+        i = j;
+    }
+    out.join("\n") + "\n"
+}
+
+/// One `.meas` statement (see [`ltspice_meas`]).
+fn meas_statement(s: &str, sensors: &[Sensor], an: &str) -> String {
+    let s = sensor_currents(s, sensors);
+    let toks = spice_tokens(&s);
+    let low = |t: &str| t.to_ascii_lowercase();
+    // a vector, V(..)/I(..) or a number: ngspice reads it as it is
+    let simple = |x: &str| {
+        let x = x.trim();
+        let call = x.len() > 3 && matches!(&low(&x[..2])[..], "v(" | "i(") && x.ends_with(')') && !x[2..x.len() - 1].contains(['(', ')']);
+        call || x.chars().all(|c| c.is_ascii_alphanumeric() || "_#.:".contains(c)) && !x.is_empty()
+    };
+    let number = |v: &str| {
+        let v = v.trim();
+        (v.starts_with('{') && v.ends_with('}')) // numparam evaluates it
+            || (v.chars().all(|c| c.is_ascii_alphanumeric() || ".+-".contains(c)) && v.starts_with(|c: char| c.is_ascii_digit() || ".+-".contains(c)) && spice_num(v).is_some())
+    };
+    let par = |x: &str| format!("par('{}')", x.trim().trim_matches('\''));
+    let keyword = |t: &str| t.contains('=') || ["trig", "targ", "when", "at", "last"].contains(&low(t).as_str());
+    let when_end = |t: &str| ["td=", "rise=", "fall=", "cross=", "from=", "to=", "last", "trig", "targ"].iter().any(|k| low(t).starts_with(k));
+    let mut out: Vec<String> = toks.iter().take(1).map(|t| t.to_string()).collect();
+    let mut i = 1;
+    match toks.get(1) {
+        Some(t) if TYPES_MEAS.contains(&low(t).as_str()) => {
+            out.push(t.to_string());
+            i = 2;
+        }
+        _ if !an.is_empty() => out.push(an.to_string()),
+        _ => {}
+    }
+    if let Some(name) = toks.get(i) {
+        out.push(name.to_string());
+        i += 1;
+    }
+    while i < toks.len() {
+        let (t, l) = (toks[i], low(toks[i]));
+        i += 1;
+        match l.as_str() {
+            "avg" | "rms" | "min" | "max" | "pp" | "integ" | "integral" | "find" | "deriv" | "derivative" | "trig" | "targ" => {
+                out.push(t.to_string());
+                let start = i;
+                while i < toks.len() && !keyword(toks[i]) {
+                    i += 1;
+                }
+                let x = toks[start..i].join(" ");
+                let val = toks.get(i).filter(|_| l == "trig" || l == "targ").and_then(|v| v.get(4..).filter(|_| low(v).starts_with("val=")));
+                match val {
+                    Some(v) if !x.is_empty() && !number(v) => {
+                        out.push(par(&format!("{x}-({v})")));
+                        out.push("VAL=0".into());
+                        i += 1;
+                    }
+                    _ if x.is_empty() => {}
+                    _ => out.push(if simple(&x) { x } else { par(&x) }),
+                }
+            }
+            "when" => {
+                let start = i;
+                while i < toks.len() && !when_end(toks[i]) {
+                    i += 1;
+                }
+                let w = toks[start..i].join("");
+                match w.split_once('=') {
+                    Some((a, b)) if !(simple(a) && number(b)) => out.push(format!("WHEN {}=0", par(&format!("{a}-({b})")))),
+                    _ => out.push(format!("WHEN {w}")),
+                }
+            }
+            _ => out.push(t.to_string()),
+        }
+    }
+    out.join(" ")
+}
+
+const TYPES_MEAS: [&str; 7] = ["tran", "ac", "dc", "op", "noise", "tf", "sp"];
+
+/// `I(R1)` → `i(vsense_r1)` for the parts that have a current sensor (LTspice measures part
+/// currents directly; ngspice only branch currents).
+fn sensor_currents(s: &str, sensors: &[Sensor]) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(k) = rest.to_ascii_lowercase().find("i(") {
+        let word = k > 0 && rest[..k].ends_with(|c: char| c.is_ascii_alphanumeric() || c == '_');
+        let close = rest[k + 2..].find(')').map(|e| k + 2 + e);
+        let sensor = close.filter(|_| !word).and_then(|e| sensors.iter().find(|x| x.inst.eq_ignore_ascii_case(rest[k + 2..e].trim())));
+        match (sensor, close) {
+            (Some(x), Some(e)) => {
+                out.push_str(&rest[..k]);
+                out.push_str(&format!("i({})", x.source));
+                rest = &rest[e + 1..];
+            }
+            _ => {
+                out.push_str(&rest[..k + 2]);
+                rest = &rest[k + 2..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Make a netlist safe and self-contained for ngspice. This is the single security filter:
@@ -1086,10 +1258,13 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool) -> Netlist {
         let inst = net_name(inst);
         if inst.to_uppercase().starts_with(prefix) { inst } else { format!("{prefix}{inst}") }
     };
-    let prefix_of = |def: &SymbolDef| def.prefix.chars().next().unwrap_or('X').to_ascii_uppercase();
+    // the part's own Prefix (LTspice's attribute editor: X to call a subcircuit) over the symbol's
+    let prefix_of = |def: &SymbolDef, attrs: &BTreeMap<String, String>| {
+        attrs.get("Prefix").filter(|p| !p.trim().is_empty()).unwrap_or(&def.prefix).trim().chars().next().unwrap_or('X').to_ascii_uppercase()
+    };
     let mut taken: HashSet<String> = items.iter().filter_map(|it| match it {
         Item::Sym { sym, attrs, .. } => {
-            let p = prefix_of(lib.get(sym)?);
+            let p = prefix_of(lib.get(sym)?, attrs);
             attrs.get("InstName").filter(|n| !n.is_empty()).map(|n| spice_inst(n, p).to_uppercase())
         }
         _ => None,
@@ -1101,7 +1276,7 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool) -> Netlist {
         let Item::Sym { sym, attrs, .. } = it else { continue };
         let Some(def) = lib.get(sym).cloned() else { continue };
 
-        let prefix = prefix_of(&def);
+        let prefix = prefix_of(&def, attrs);
         let inst = match attrs.get("InstName").filter(|n| !n.is_empty()) {
             Some(n) => spice_inst(n, prefix),
             None => (1..).map(|n| format!("{prefix}{n}")).find(|n| taken.insert(n.to_uppercase())).unwrap(),
@@ -1477,6 +1652,53 @@ mod tests {
         let run = crate::ngspice::run(&p.at(&vary_spans(p.text(), "R1", true).unwrap(), 2000.0)).unwrap();
         let pole = run.op.iter().find(|o| o.0.starts_with("pole")).unwrap();
         assert!((pole.1 + 5000.0).abs() < 1.0, "{:?}", run.op);
+    }
+
+    #[test]
+    fn ltspice_meas_for_ngspice() {
+        let r1 = [Sensor { source: "vsense_r1".into(), node: "x".into(), inst: "r1".into() }];
+        let m = |s: &str| meas_statement(s, &r1, "tran");
+        assert_eq!(m(".MEAS TRAN P AVG -I(V1)*V(VDD)"), ".MEAS TRAN P AVG par('-I(V1)*V(VDD)')");
+        assert_eq!(m(".meas tran t TRIG V(in) VAL=0.5*V(vdd) TD=2n RISE=1 TARG V(out) VAL=1 RISE=1"),
+            ".meas tran t TRIG par('V(in)-(0.5*V(vdd))') VAL=0 TD=2n RISE=1 TARG V(out) VAL=1 RISE=1");
+        assert_eq!(m(".meas x FIND I(R1) AT=1m"), ".meas tran x FIND i(vsense_r1) AT=1m", "LTspice's default analysis, part current");
+        assert_eq!(m(".meas tran w WHEN V(out)=0.5*V(vdd) RISE=1"), ".meas tran w WHEN par('V(out)-(0.5*V(vdd))')=0 RISE=1");
+        for same in [".meas tran w WHEN V(out)=1 RISE=1", ".meas tran a AVG V(out) FROM=1m TO=2m", ".meas tran t TRIG AT=1n TARG V(out) VAL={0.5*2} RISE=1"] {
+            assert_eq!(m(same), same);
+        }
+        assert_eq!(sensor_currents("I(R1)+I(R10)+II(R1)", &r1), "i(vsense_r1)+I(R10)+II(R1)");
+        // the manual's delay and power measurements, end to end
+        let deck = "* m\nV1 in 0 PULSE(0 2 0 1n 1n 4n 10n)\nV2 vdd 0 2\nR1 out in 100\nC1 out 0 10p\n.tran 4e-11 40n 0.1n\n.MEAS TRAN TpLH\n* note\n+TRIG V(in) VAL=0.5*V(vdd) TD=22n RISE=1\n+TARG V(out) VAL=0.5*V(vdd) TD=22n RISE=1\n.meas tran pdyn AVG -I(V1)*V(in)\n.meas tran vmax MAX V(out)\n+ FROM=0 TO=10n\n.end\n";
+        let text = ltspice_meas(&prepare(deck, None, &mut vec![]).0, &[]);
+        assert!(text.contains(".MEAS TRAN TpLH TRIG par('V(in)-(0.5*V(vdd))') VAL=0 TD=22n RISE=1 TARG par('V(out)-(0.5*V(vdd))') VAL=0") && text.contains("* note"), "{text}");
+        assert!(text.contains(".meas tran vmax MAX V(out)\n+ FROM=0 TO=10n"), "unchanged: as written\n{text}");
+        let _s = SIM.lock();
+        let run = crate::ngspice::run(&Prepared(text, vec![])).unwrap();
+        let get = |n: &str| run.meas.iter().find(|m| m.0 == n).and_then(|m| m.1).unwrap_or_else(|| panic!("{n}: {:?}\n{}", run.meas, run.log.join("\n")));
+        assert!((get("tplh") / 7.28e-10 - 1.0).abs() < 0.02, "{:?}", run.meas); // V(in) at 1 V: 30.5 ns
+        assert!((get("pdyn") / 2.9e-3 - 1.0).abs() < 0.03, "{:?}", run.meas);
+        assert!(get("vmax") > 1.9);
+        assert!(!run.vectors.iter().any(|v| v.contains("pa_")), "par() helpers hidden: {:?}", run.vectors);
+        let one = crate::ngspice::trace("1", &run.scale, run.id).unwrap();
+        assert!(one.re.len() == one.x.len() && one.x.len() > 10 && one.re.iter().all(|&v| v == 1.0), "a constant spans the x axis");
+    }
+
+    #[test]
+    fn folder_symbols_and_prefix_override() {
+        let dir = std::env::temp_dir().join(format!("nomospice-sym-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("nmos_018.asy"), BUILTIN_SYMBOLS.iter().find(|(n, _)| *n == "nmos").unwrap().1).unwrap();
+        let mut lib = Library::builtin();
+        lib.set_dir(Some(&dir), false);
+        assert!(lib.0.contains_key("nmos_018"), "the folder's symbols are listed");
+        // the manual's step: Prefix X calls the subcircuit NM from the model library
+        let attrs: BTreeMap<String, String> = [("InstName", "M1"), ("Value", "NM"), ("Value2", "l=0.18u w=1u"), ("Prefix", "X")].map(|(k, v)| (k.to_string(), v.to_string())).into();
+        let nl = netlist(&[Item::Sym { sym: "nmos_018".into(), x: 0, y: 0, rot: "R0".into(), attrs, extra: vec![] }], &mut lib);
+        let line = nl.text.lines().find(|l| l.starts_with("XM1 ")).unwrap_or_else(|| panic!("{}", nl.text));
+        assert!(line.ends_with(" NM l=0.18u w=1u"), "{line}");
+        lib.set_dir(None, false);
+        assert!(!lib.0.contains_key("nmos_018"), "another schematic: gone");
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]

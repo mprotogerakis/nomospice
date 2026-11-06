@@ -6,7 +6,7 @@ import type { Item, LibEntry, LibSource } from "./types";
 import { addTrace, analysisItem, commit, currentTab, loadSymbols, placePart, placeSymbol, refreshLibrarySymbols, useS } from "./store";
 import { defOf, vexpr } from "./geom";
 import { Button } from "./ui/button";
-import { closeDialog as close, Field, FIELD, Modal, numHelp, TextField } from "./ui/dialog";
+import { closeDialog as close, Field, FIELD, Modal, numHelp, Rows, TextField } from "./ui/dialog";
 import { SourceEditor } from "./SourceEditor";
 import { SimDialog } from "./SimDialog";
 import { DirectiveDialog } from "./DirectiveDialog";
@@ -16,6 +16,9 @@ import thirdParty from "./third-party.json";
 import { checkForUpdate } from "./updater";
 
 
+/** The attributes the part form shows as fields (the rest: "Other attributes"). */
+const SHOWN = ["InstName", "Value", "Value2", "SpiceLine"];
+
 /** Edits a part or a net label; `onDone` receives the result (commit in place, or start placing it).
  *  Comments and directives use DirectiveDialog. */
 function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: (it: Item) => void }) {
@@ -24,9 +27,16 @@ function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: 
   const attr = (k: string) => (it.t === "sym" ? it.attrs[k] ?? "" : "");
   const setAttr = (k: string, v: string) => it.t === "sym" && setIt({ ...it, attrs: { ...it.attrs, [k]: v } });
   const def = it.t === "sym" ? defOf(lib, it) : undefined;
+  // the other attributes (LTspice's attribute editor: Prefix X to call a subcircuit, SpiceModel …)
+  const [extra, setExtra] = useState<string[][]>(() => (item.t === "sym" ? Object.entries(item.attrs).filter(([k]) => !SHOWN.includes(k)) : []));
   const done = () => {
-    // empty attributes go, except an emptied SpiceLine over a symbol default (missing = the default)
-    if (it.t === "sym") onDone({ ...it, attrs: Object.fromEntries(Object.entries(it.attrs).filter(([k, v]) => v.trim() || (k === "SpiceLine" && def?.spice_line))) });
+    // empty attributes go, except an emptied SpiceLine over a symbol default (missing = the default);
+    // sorted as the .asc reader gives them, so an unchanged part compares equal
+    if (it.t === "sym") {
+      const own = Object.entries(it.attrs).filter(([k, v]) => SHOWN.includes(k) && (v.trim() || (k === "SpiceLine" && def?.spice_line)));
+      const more = extra.map(([k, v]) => [k.trim(), v] as [string, string]).filter(([k, v]) => k && !SHOWN.includes(k) && v.trim());
+      onDone({ ...it, attrs: Object.fromEntries([...own, ...more].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) });
+    }
     else if (it.t === "flag" && !it.name.trim()) close();
     else onDone(it);
   };
@@ -51,6 +61,10 @@ function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: 
               <TextField label="SpiceLine" value={it.attrs.SpiceLine ?? def?.spice_line ?? ""} set={(v) => setAttr("SpiceLine", v)} hint={def?.spice_line ? `symbol default: ${def.spice_line}` : undefined} />
             </>
           )}
+          <Field label="Other attributes" hint={`e.g. Prefix X to call a subcircuit model instead of the ${def?.prefix || "symbol's"} device`}>
+            <Rows rows={extra} set={setExtra} a="attribute" b="value" list="sym-attrs" add="Add attribute" />
+          </Field>
+          <datalist id="sym-attrs">{["Prefix", "SpiceModel", "SpiceLine2"].map((n) => <option key={n} value={n} />)}</datalist>
         </>
       )}
       {it.t === "flag" && (

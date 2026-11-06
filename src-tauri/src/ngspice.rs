@@ -267,7 +267,33 @@ pub struct Run {
     pub op: Vec<(String, f64, f64, String)>,
     /// ngspice gave up part-way (e.g. "Timestep too small"): the data is partial.
     pub aborted: bool,
+    /// `.meas` results: name, value (None: failed), the rest of ngspice's line (trig/targ, from/to)
+    pub meas: Vec<(String, Option<f64>, String)>,
     pub log: Vec<String>,
+}
+
+/// The `.meas` results in ngspice's report (`name = value targ= … trig= …`, `… failed!`).
+fn measurements(log: &[String]) -> Vec<(String, Option<f64>, String)> {
+    let mut out = vec![];
+    let mut on = false;
+    for t in log.iter().map(|l| l.trim()) {
+        if t.starts_with("Measurements for") {
+            on = true;
+        } else if !on {
+        } else if let Some(stmt) = t.strip_suffix("failed!") {
+            if let Some(name) = stmt.split_whitespace().nth(2) {
+                out.push((name.to_string(), None, "failed".into()));
+            }
+        } else if let Some((name, rest)) = t.split_once('=') {
+            let (name, rest) = (name.trim(), rest.trim());
+            if name.is_empty() || name.contains(char::is_whitespace) {
+                continue;
+            }
+            let (v, info) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+            out.push((name.to_string(), v.trim_end_matches(',').parse().ok(), info.trim().to_string()));
+        }
+    }
+    out
 }
 
 #[derive(Serialize, Debug)]
@@ -368,7 +394,7 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
         let l = l.to_lowercase();
         l.contains("aborted") || l.contains("timestep too small") || l.contains("simulation interrupted")
     });
-    Ok(Run { id, plot, scale, vectors, op, aborted, log })
+    Ok(Run { id, plot, scale, vectors, op, aborted, meas: measurements(&log), log })
 }
 
 fn plot_vectors(api: &Api, plot: &str, sensors: &[crate::schematic::Sensor]) -> (Vec<String>, String) {
@@ -386,6 +412,10 @@ fn plot_vectors(api: &Api, plot: &str, sensors: &[crate::schematic::Sensor]) -> 
     vectors.retain(|v| !sensors.iter().any(|s| {
         &s.node == v || SENS.iter().any(|x| *v == format!("{}{x}", s.source)) || *v == format!("{}#branch", s.inst)
     }));
+    // the helper sources ngspice makes for `.meas … par('…')` (pa_00, bpa_00#branch)
+    let par_helper = |v: &str| v.strip_prefix('b').unwrap_or(v).strip_suffix("#branch").unwrap_or(v.strip_prefix('b').unwrap_or(v))
+        .strip_prefix("pa_").is_some_and(|n| !n.is_empty() && n.bytes().all(|c| c.is_ascii_digit()));
+    vectors.retain(|v| !par_helper(v));
     vectors.sort();
     let scale = ["time", "frequency", "v-sweep", "i-sweep", "temp-sweep", "res-sweep"]
         .into_iter()
@@ -418,6 +448,14 @@ pub fn trace(expr: &str, scale: &str, run: u64) -> Result<Trace, String> {
     })?;
     if !scale.is_empty() {
         t.x = read(api, scale).map(|s| s.re).unwrap_or_default();
+    }
+    // a constant (`1`, a reference level) is one value: a line across the x range
+    if t.re.len() == 1 && t.x.len() > 1 {
+        let n = t.x.len();
+        t.re = vec![t.re[0]; n];
+        if let Some(im) = &mut t.im {
+            *im = vec![im[0]; n];
+        }
     }
     Ok(t)
 }

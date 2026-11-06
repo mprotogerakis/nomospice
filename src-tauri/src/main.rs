@@ -15,8 +15,9 @@ struct Lib(Mutex<Library>);
 
 // Async commands run off the main thread (symbol lookup may hit the disk).
 #[tauri::command]
-async fn symbols(names: Vec<String>, lib: tauri::State<'_, Lib>) -> Result<Vec<SymbolDef>, String> {
+async fn symbols(names: Vec<String>, dir: Option<String>, lib: tauri::State<'_, Lib>) -> Result<Vec<SymbolDef>, String> {
     let mut lib = lib.0.lock().unwrap_or_else(|e| e.into_inner());
+    lib.set_dir(dir.as_deref().map(std::path::Path::new), true); // a symbol saved there meanwhile counts
     names.iter().for_each(|n| _ = lib.get(n));
     Ok(lib.0.values().cloned().collect())
 }
@@ -148,7 +149,11 @@ async fn export_svg(path: String, svg: String) -> Result<(), String> {
 
 #[tauri::command]
 async fn netlist(items: Vec<Item>, dir: Option<String>, lib: tauri::State<'_, Lib>) -> Result<Netlist, String> {
-    let mut nl = schematic::netlist(&items, &mut *lib.0.lock().unwrap_or_else(|e| e.into_inner()));
+    let mut nl = {
+        let mut lib = lib.0.lock().unwrap_or_else(|e| e.into_inner());
+        lib.set_dir(dir.as_deref().map(std::path::Path::new), false);
+        schematic::netlist(&items, &mut lib)
+    };
     schematic::prepare_warnings(&nl.text, dir.as_deref().map(std::path::Path::new), &mut nl.warnings);
     Ok(nl)
 }
@@ -178,6 +183,7 @@ async fn simulate(items: Vec<Item>, dir: Option<String>, lib: tauri::State<'_, L
     // both netlists from one state of the library (the UI's nets, insts, probes match what runs)
     let (mut netlist, sim) = {
         let mut lib = lib.0.lock().unwrap_or_else(|e| e.into_inner());
+        lib.set_dir(dir.as_deref().map(std::path::Path::new), false);
         (schematic::netlist(&items, &mut lib), schematic::netlist_for_sim(&items, &mut lib))
     };
     // the newer request wins: a running root locus stops at its next step, then this runs
@@ -204,7 +210,11 @@ async fn simulate(items: Vec<Item>, dir: Option<String>, lib: tauri::State<'_, L
 async fn root_locus(items: Vec<Item>, dir: Option<String>, target: String, values: Vec<f64>, lib: tauri::State<'_, Lib>) -> Result<Vec<Option<Vec<(f64, f64)>>>, String> {
     let op = ngspice::begin();
     let gen = SWEEP_GEN.load(std::sync::atomic::Ordering::SeqCst); // at once: a cancel while netlisting counts
-    let sim = schematic::netlist_for_sim(&items, &mut lib.0.lock().unwrap_or_else(|e| e.into_inner()));
+    let sim = {
+        let mut lib = lib.0.lock().unwrap_or_else(|e| e.into_inner());
+        lib.set_dir(dir.as_deref().map(std::path::Path::new), false);
+        schematic::netlist_for_sim(&items, &mut lib)
+    };
     // Halt, a new simulation or the panel's Halt: also mid-step (bg_halt)
     let stop = move || ngspice::halted_since(op) || SWEEP_GEN.load(std::sync::atomic::Ordering::SeqCst) != gen;
     tauri::async_runtime::spawn_blocking(move || {

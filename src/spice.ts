@@ -473,3 +473,36 @@ export function formatMeas(m: Meas): string {
   }[m.type]();
   return `.meas ${m.an} ${m.name.trim() || "result"} ${body}`;
 }
+
+// ---------------------------------------------------------------- sampled results
+
+/** Trapezoid integral of y over [lo, hi] (samples inside, ends interpolated), its average and RMS. */
+export function integrate(xs: number[], ys: (number | null)[], lo: number, hi: number) {
+  const pts: [number, number][] = [[lo, at(xs, ys, lo)]];
+  xs.forEach((x, i) => x > lo && x < hi && ys[i] != null && pts.push([x, ys[i]!]));
+  pts.push([hi, at(xs, ys, hi)]);
+  pts.sort((p, q) => p[0] - q[0]); // a sweep may run downwards
+  let area = 0, sq = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const [[x0, y0], [x1, y1]] = [pts[i - 1], pts[i]];
+    if (Number.isNaN(y0) || Number.isNaN(y1)) continue;
+    area += ((y0 + y1) / 2) * (x1 - x0);
+    sq += ((y0 * y0 + y0 * y1 + y1 * y1) / 3) * (x1 - x0); // exact for a straight segment
+  }
+  const span = hi - lo;
+  return { area, avg: span ? area / span : NaN, rms: span ? Math.sqrt(sq / span) : NaN };
+}
+
+/** y at x on a sampled curve (linear between samples; NaN outside or at a gap). */
+export function at(xs: number[], ys: (number | null)[], x: number) {
+  if (!xs.length || x < Math.min(xs[0], xs[xs.length - 1]) || x > Math.max(xs[0], xs[xs.length - 1])) return NaN;
+  let lo = 0, hi = xs.length - 1;
+  const up = xs[hi] >= xs[0];
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (xs[mid] <= x === up) lo = mid; else hi = mid;
+  }
+  const f = xs[hi] === xs[lo] ? 0 : (x - xs[lo]) / (xs[hi] - xs[lo]);
+  const [a, b] = [ys[lo], ys[hi]];
+  return a == null || b == null ? NaN : a + Math.max(0, Math.min(1, f)) * (b - a);
+}

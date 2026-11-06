@@ -6,7 +6,7 @@ import { Plus, X } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { removeTrace, setPlot, useS } from "./store";
 import { openMenu } from "./Menu";
-import { si } from "./spice";
+import { at, integrate, si } from "./spice";
 import { keys } from "./lib/utils";
 import type { Trace } from "./types";
 import { saveSvg, withLightTheme, xmlEscape } from "./svgExport";
@@ -111,19 +111,6 @@ function plotSvg(us: uPlot[], panes: Pane[], cur: { a: number | null; b: number 
 }
 
 /** Linear interpolation of ys at x; NaN outside the data (a cursor from a longer previous run). */
-function at(xs: number[], ys: (number | null)[], x: number) {
-  if (!xs.length || x < Math.min(xs[0], xs[xs.length - 1]) || x > Math.max(xs[0], xs[xs.length - 1])) return NaN;
-  let lo = 0, hi = xs.length - 1;
-  const up = xs[hi] >= xs[0];
-  while (hi - lo > 1) {
-    const mid = (lo + hi) >> 1;
-    if (xs[mid] <= x === up) lo = mid; else hi = mid;
-  }
-  const f = xs[hi] === xs[lo] ? 0 : (x - xs[lo]) / (xs[hi] - xs[lo]);
-  const [a, b] = [ys[lo], ys[hi]];
-  return a == null || b == null ? NaN : a + Math.max(0, Math.min(1, f)) * (b - a);
-}
-
 export const Waveform = memo(function Waveform() {
   const run = useS((s) => s.sim?.run);
   const traces = useS((s) => s.traces);
@@ -317,6 +304,7 @@ export const Waveform = memo(function Waveform() {
       </div>
       <div className="flex w-[340px] shrink-0 flex-col border-l border-border bg-surface-panel text-xs">
         <Readout traces={traces} panes={panes} xs={xs} xUnit={xUnit} plot={run?.plot ?? ""} />
+        <Measurements xUnit={xUnit} />
         <button
           className="m-2 inline-flex h-[22px] items-center justify-center gap-1 rounded-control border border-border-control text-text-secondary hover:bg-surface-hover hover:text-text-strong disabled:opacity-40"
           disabled={!run}
@@ -332,6 +320,22 @@ export const Waveform = memo(function Waveform() {
   );
 });
 
+/** `.meas` results of the run (ngspice reports them in the log; LTspice in its error log). */
+function Measurements({ xUnit }: { xUnit: string }) {
+  const meas = useS((s) => s.sim?.run?.meas);
+  if (!meas?.length) return null;
+  return (
+    <div className="border-b border-border px-2 py-1 font-mono text-2xs">
+      <div className="text-text-tertiary">Measurements (.meas)</div>
+      {meas.map(([name, v, info]) => (
+        <div key={name} className="truncate" title={v == null ? "ngspice could not evaluate it: see the log (⌘L)" : info}>
+          <span className="text-text">{name}</span> = {v == null ? <span className="text-status-danger">failed</span> : si(v, /targ=|trig=/.test(info) ? xUnit : "", 5)}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /** Trace table: values under the hover crosshair and at cursors A/B. Own component + hover store,
  *  so mouse moves over the plot re-render only this table. */
 const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot }: { traces: Trace[]; panes: Pane[]; xs: number[]; xUnit: string; plot: string }) {
@@ -345,6 +349,10 @@ const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot }: { trac
     return { t, val, delta };
   });
   const dx = a != null && b != null ? b - a : null;
+  // average, RMS, integral (LTspice: ctrl-click a trace label) between the cursors, else over what is shown
+  const zoom = useS((s) => s.plot.zoom);
+  const [lo, hi] = dx ? [Math.min(a!, b!), Math.max(a!, b!)] : zoom ?? [xs[0], xs[xs.length - 1]];
+  const stats = traces.flatMap((t) => panes.flatMap((p) => p.series.filter((s) => s.t === t && p.unit !== "dB" && p.unit !== "°").map((s) => ({ t, unit: p.unit, ...integrate(xs, s.y, lo, hi) }))));
   return (
     <>
       <table className="w-full table-fixed font-mono text-2xs">
@@ -381,6 +389,16 @@ const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot }: { trac
         <div className="border-b border-border px-2 py-1 font-mono text-2xs text-text-secondary">
           Δx = {si(dx, xUnit)}{xUnit === "s" && dx ? ` · 1/Δx = ${si(1 / Math.abs(dx), "Hz")}` : ""}
           {rows.map(({ t, delta }) => <div key={t.expr} className="truncate">Δ {t.label} = {delta}</div>)}
+        </div>
+      )}
+      {!!stats.length && hi > lo && (
+        <div className="border-b border-border px-2 py-1 font-mono text-2xs text-text-secondary">
+          <div className="text-text-tertiary">{dx ? "A–B" : zoom ? "shown range" : "whole run"}: average · RMS · integral</div>
+          {stats.map(({ t, unit, avg, rms, area }, k) => (
+            <div key={`${t.expr}${k}`} className="truncate" title={`${t.label} from ${si(lo, xUnit)} to ${si(hi, xUnit)}`}>
+              {t.label}: {si(avg, unit)} · {si(rms, unit)} · {si(area, unit && xUnit ? `${unit}·${xUnit}` : unit || xUnit)}
+            </div>
+          ))}
         </div>
       )}
     </>

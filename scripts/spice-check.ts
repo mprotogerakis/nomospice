@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import {
   tokens, formatAnalysis, formatIc, formatInclude, formatMeas, formatModel, formatParams, formatSource, numInfo, parseAnalysis,
-  parseIc, parseInclude, parseMeas, parseModel, parseParams, parseSource, sample, si, spiceNum, directiveKind, analysisRoundTrips, analysisEditable, analysisOptions, stripAnalyses, portablePaths, sourceRoundTrips, holdsAnalysis,
+  parseIc, parseInclude, parseMeas, parseModel, parseParams, parseSource, sample, si, spiceNum, directiveKind, analysisRoundTrips, analysisEditable, analysisOptions, at, integrate, stripAnalyses, portablePaths, sourceRoundTrips, holdsAnalysis,
 } from "../src/spice.ts";
 
 // numbers and the classic pitfalls
@@ -69,6 +69,13 @@ for (const [l, k] of [[".ic V(out)=1", "ic"], [".temp 25", "temp"], [".meas ac f
 assert.equal(formatMeas(parseMeas(".meas ac f3db WHEN V(out)=0.707")!), ".meas ac f3db WHEN V(out)=0.707"); // no edge added
 assert.ok(analysisRoundTrips(".tran 1m startup") && analysisRoundTrips(".noise v(out) V1 dec 10 10 1Meg 1"));
 assert.equal(analysisRoundTrips(".dc lin V1 0 5 0.1"), false);
+// average/RMS/integral between cursors: a ramp 0..2 over 0..2 (also sampled downwards, as a sweep may be)
+{
+  const r = integrate([0, 1, 2], [0, 1, 2], 0, 2);
+  assert.ok(Math.abs(r.area - 2) < 1e-12 && Math.abs(r.avg - 1) < 1e-12 && Math.abs(r.rms - Math.sqrt(4 / 3)) < 1e-12, JSON.stringify(r));
+  assert.ok(Math.abs(integrate([2, 1, 0], [2, 1, 0], 0.5, 1.5).avg - 1) < 1e-12);
+  assert.equal(at([0, 1], [0, 10], 0.25), 2.5);
+}
 // result tabs: one per kind, the active one wins, alternatives from comments, fixed order
 {
   const o = analysisOptions([{ text: ".ac dec 10 1 1k", directive: false }, { text: ".param R=1k\n.tran 0 1m\n+ 0 1u", directive: true }, { text: ".ac dec 50 1 1Meg", directive: true }, { text: "a note" }]);

@@ -123,11 +123,15 @@ export function redo() {
   refreshNets();
 }
 
-export async function loadSymbols(items: Item[] = []) {
-  const names = [...new Set(items.flatMap((it) => (it.t === "sym" ? [it.sym] : [])))].filter((n) => !get().lib[symKey(n)]);
-  if (Object.keys(get().lib).length && !names.length) return;
-  const defs = await invoke<SymbolDef[]>("symbols", { names });
-  set({ lib: { ...get().lib, ...Object.fromEntries(defs.map((d) => [d.name, d])) } });
+/** The folder whose symbols the library holds (the schematic's: its .asy are listed too). */
+let symDir: string | null | undefined;
+export async function loadSymbols(items: Item[] = [], dir = dirOf(get().path)) {
+  const moved = dir !== symDir; // another folder: its own symbols instead of the last one's
+  const names = [...new Set(items.flatMap((it) => (it.t === "sym" ? [it.sym] : [])))].filter((n) => moved || !get().lib[symKey(n)]);
+  if (Object.keys(get().lib).length && !names.length && !moved) return;
+  symDir = dir;
+  const defs = await invoke<SymbolDef[]>("symbols", { names, dir });
+  set({ lib: Object.fromEntries(defs.map((d) => [d.name, d])) }); // the backend's whole set
 }
 
 /** Bumped on every document load; in-flight simulations of an older document are discarded. */
@@ -149,7 +153,7 @@ export async function refreshLibrarySymbols() {
 }
 
 export async function loadDoc(items: Item[], path: string | null) {
-  await loadSymbols(items);
+  await loadSymbols(items, dirOf(path));
   docGen++;
   autoPlotted = new Set();
   set({ tab: null, tabs: {}, items, path, past: [], future: [], sel: [], dirty: false, sim: null, traces: [], stale: false, nets: null, netsItems: null, plot: NO_PLOT, panel: get().panel === "op" ? null : get().panel, diff: null, tool: { k: "select" }, fitToken: get().fitToken + 1 });
