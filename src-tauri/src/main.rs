@@ -164,8 +164,9 @@ struct Sim {
 
 /// The deck ngspice runs for `items`: the netlist with current sensors, includes inlined and filtered
 /// (`prepare`). Simulation and root locus share it, so the locus runs the circuit the plot shows.
-fn sim_deck(items: &[Item], dir: Option<&str>, lib: &mut Library, warnings: &mut Vec<String>) -> schematic::Prepared {
-    let sim = schematic::netlist_for_sim(items, lib);
+fn sim_deck(items: &[Item], dir: Option<&str>, lib: &Lib, warnings: &mut Vec<String>) -> schematic::Prepared {
+    let sim = schematic::netlist_for_sim(items, &mut lib.0.lock().unwrap_or_else(|e| e.into_inner()));
+    // after the library lock: prepare reads the .include/.lib files, which can be slow
     schematic::prepare(&sim.text, dir.map(std::path::Path::new), warnings).with_sensors(sim.sensors)
 }
 
@@ -188,12 +189,8 @@ impl Drop for Done {
 async fn simulate(items: Vec<Item>, dir: Option<String>, lib: tauri::State<'_, Lib>) -> Result<Sim, String> {
     let op = ngspice::begin(); // a Halt pressed from here on (netlisting, include expansion) still counts
     // the UI gets the clean netlist (same nets/insts/probes); the one with current sensors runs
-    let (netlist, prepared) = {
-        let mut lib = lib.0.lock().unwrap_or_else(|e| e.into_inner());
-        let mut netlist = schematic::netlist(&items, &mut lib);
-        let deck = sim_deck(&items, dir.as_deref(), &mut lib, &mut netlist.warnings);
-        (netlist, deck)
-    };
+    let mut netlist = schematic::netlist(&items, &mut lib.0.lock().unwrap_or_else(|e| e.into_inner()));
+    let prepared = sim_deck(&items, dir.as_deref(), &lib, &mut netlist.warnings);
     let simulated = prepared.text().to_string();
     // the newer request wins: a running root locus stops at its next step, then this runs
     SWEEP_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -215,7 +212,7 @@ async fn simulate(items: Vec<Item>, dir: Option<String>, lib: tauri::State<'_, L
 async fn root_locus(items: Vec<Item>, dir: Option<String>, target: String, values: Vec<f64>, lib: tauri::State<'_, Lib>) -> Result<Vec<Option<Vec<(f64, f64)>>>, String> {
     let op = ngspice::begin();
     let gen = SWEEP_GEN.load(std::sync::atomic::Ordering::SeqCst); // at once: a cancel while netlisting counts
-    let deck = sim_deck(&items, dir.as_deref(), &mut lib.0.lock().unwrap_or_else(|e| e.into_inner()), &mut vec![]);
+    let deck = sim_deck(&items, dir.as_deref(), &lib, &mut vec![]);
     let pz = deck.text().lines().map(|l| l.trim().to_lowercase()).find(|l| l.starts_with(".pz"));
     match pz {
         None => return Err("the schematic has no .pz analysis (Simulation command → Poles/zeros)".into()),
@@ -230,15 +227,19 @@ async fn root_locus(items: Vec<Item>, dir: Option<String>, target: String, value
         let _op = ngspice::enter(op);
         SWEEPING.store(true, std::sync::atomic::Ordering::SeqCst);
         let _done = Done;
-        let (mut steps, mut first_error) = (vec![], None);
+        let (mut steps, mut first_error, mut stopped) = (vec![], None, false);
         for &v in &values {
             if stop() {
+                stopped = true;
                 break;
             }
             let step = deck.at(&spans, v);
             match ngspice::run(&step) {
                 // interrupted by Halt (bg_halt ends the run with partial data) or cancelled: not a step
-                _ if stop() => break,
+                _ if stop() => {
+                    stopped = true;
+                    break;
+                }
                 // aborted by ngspice itself (no convergence near a crossing): a gap, the sweep goes on
                 Ok(run) if run.aborted => steps.push(None),
                 Ok(run) => steps.push(Some(run.op.into_iter().filter(|o| o.0.starts_with("pole")).map(|o| (o.1, o.2)).collect())),
@@ -249,7 +250,8 @@ async fn root_locus(items: Vec<Item>, dir: Option<String>, target: String, value
             }
         }
         match first_error {
-            Some(e) if steps.iter().all(Option::is_none) => Err(e),
+            // all failed (and not merely stopped early): the reason, not an empty locus
+            Some(e) if !stopped && steps.iter().all(Option::is_none) => Err(e),
             _ => Ok(steps),
         }
     }).await.map_err(|e| e.to_string())?

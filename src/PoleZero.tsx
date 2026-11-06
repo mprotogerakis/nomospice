@@ -37,14 +37,18 @@ function branches(steps: P[][]): (P | null)[][] {
 
 /** `.param` names a root locus can sweep in a directive text (the rules of vary_spans in schematic.rs). */
 function topParams(text: string) {
-  let sub = 0;
-  return text.replace(/\n\s*\+/g, " ").split("\n").flatMap((l) => {
+  const defs: string[] = [];
+  let sub = 0, inParam = false;
+  for (const l of text.split("\n")) {
     const first = l.trim().split(/\s+/)[0]?.toLowerCase() ?? "";
     if (first === ".subckt") sub++;
     if (first === ".ends") sub = Math.max(sub - 1, 0);
-    if (sub > 0 || first !== ".param") return [];
-    return parseParams(l.replace(/\s[;$].*$/, "")).map(([n]) => n).filter((n) => /^[a-z_]\w*$/i.test(n));
-  });
+    const skip = !first || first.startsWith("*"); // comment and blank lines do not end a .param
+    if (first === ".param") (inParam = true), sub || defs.push(l.trim().slice(6));
+    else if (inParam && first.startsWith("+")) sub || defs.push(l.trim().slice(1));
+    else if (!skip) inParam = false;
+  }
+  return defs.flatMap((d) => parseParams(d.replace(/(^|\s)[;$].*$/, "")).map(([n]) => n).filter((n) => /^[a-z_]\w*$/i.test(n)));
 }
 
 /** Tick step for a span: 1, 2 or 5 × 10^n, about six ticks. */
@@ -192,6 +196,7 @@ function Sidebar({ poles, zeros, locus, setLocus, error, setError }: {
     if (n > 500) return setError("At most 500 steps (each is one .pz run).");
     // the locus is drawn over this run's poles: it must be the same circuit
     if (useS.getState().stale) return setError("The schematic changed since this run: run it again first.");
+    if (useS.getState().running) return setError("A simulation is running: draw the locus when it is done.");
     const gen = docId(), sim0 = useS.getState().sim;
     const values = Array.from({ length: n }, (_, i) => (f.scale === "log" ? a * (b / a) ** (i / (n - 1)) : a + ((b - a) * i) / (n - 1)));
     setError("");

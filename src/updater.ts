@@ -22,9 +22,10 @@ export async function checkForUpdate(manual = false) {
     if (old && old !== update) void old.close(); // each check returns a new resource handle
     useUpdate.setState({ update });
     if (manual && !update) await message("nomospice is up to date.", { title: "nomospice" });
+    if (manual && update) await installUpdate(); // asks, with the release notes
   } catch (e) {
     // releases cover Apple Silicon Macs and x64 Windows; other builds (Linux, Intel Mac) come from source
-    if (/platform .* (was )?not found/i.test(String(e))) {
+    if (/none of the fallback platforms|platform .* (was )?not found/i.test(String(e))) { // TargetsNotFound / TargetNotFound
       if (manual) await message("There are no automatic updates for this kind of build: get the new version from the releases page or build it from source.", { title: "nomospice" });
       return;
     }

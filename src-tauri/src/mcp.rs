@@ -94,7 +94,6 @@ fn call(base: &Path, name: &str, args: &Value) -> Result<Value, String> {
             let sim = schematic::netlist_for_sim(&items, &mut lib);
             let mut warnings = shown.warnings.clone();
             let dir = path.as_ref().and_then(|p| p.parent().map(Path::to_path_buf));
-            let _op = ngspice::enter(ngspice::begin());
             let prepared = schematic::prepare(&sim.text, dir.as_deref(), &mut warnings).with_sensors(sim.sensors.clone());
             let run = match ngspice::run(&prepared) {
                 Ok(run) => run,
