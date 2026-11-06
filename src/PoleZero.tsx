@@ -61,8 +61,8 @@ export const PoleZero = memo(function PoleZero({ run }: { run: Run }) {
     return { cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, sx: x1 - x0, sy: y1 - y0 };
   }, [poles, zeros, paths]);
   const [view, setView] = useState<{ cx: number; cy: number; k: number } | null>(null);
-  const P = Math.min(28, size.w / 4, size.h / 4); // margin for the tick labels (less in a tiny pane)
-  const base = Math.max(Math.min((size.w - 2 * P) / fit.sx, (size.h - 2 * P) / fit.sy), 1e-30); // never negative: that mirrors the plot
+  const margin = Math.min(28, size.w / 4, size.h / 4); // for the tick labels (less in a tiny pane)
+  const base = Math.max(Math.min((size.w - 2 * margin) / fit.sx, (size.h - 2 * margin) / fit.sy), 1e-30); // never negative: that mirrors the plot
   const v = view ?? { cx: fit.cx, cy: fit.cy, k: base };
   const px = (p: P) => [size.w / 2 + (p.re - v.cx) * v.k, size.h / 2 - (p.im - v.cy) * v.k];
   const val = (x: number, y: number): P => ({ re: v.cx + (x - size.w / 2) / v.k, im: v.cy - (y - size.h / 2) / v.k });

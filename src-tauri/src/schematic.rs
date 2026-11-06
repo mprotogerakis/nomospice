@@ -477,9 +477,11 @@ fn part_value(line: &str) -> Option<(usize, usize)> {
 }
 
 /// Where `target` is set in `text` (byte spans): every top-level `.param` definition of that name
-/// (SPICE uses the last), or else the value of the top-level R, C or L instance of that name
-/// ([`part_value`]). `.subckt` bodies are left alone. None if neither is in the deck.
-pub fn vary_spans(text: &str, target: &str) -> Option<Vec<(usize, usize)>> {
+/// (SPICE uses the last), or the value of the top-level R, C or L instance of that name
+/// ([`part_value`]). `.subckt` bodies are left alone. None if neither is in the deck. Both there:
+/// the .param if `param_first` (the user's own deck defines it: pz_sallen_key's `.param Rb` with
+/// part Rb = {Rb}), else the part (an included library's .param that happens to share its name).
+pub fn vary_spans(text: &str, target: &str, param_first: bool) -> Option<Vec<(usize, usize)>> {
     let t = target.trim();
     if t.is_empty() || !t.is_ascii() {
         return None;
@@ -488,13 +490,10 @@ pub fn vary_spans(text: &str, target: &str) -> Option<Vec<(usize, usize)>> {
     let defs: Vec<(usize, usize)> = lines.iter().filter(|l| l.top && l.param())
         .flat_map(|l| param_defs(l.line, &l.low).into_iter().filter(|(n, _)| n.eq_ignore_ascii_case(t)).map(move |(_, (a, e))| (l.start + a, l.start + e)))
         .collect();
-    // a .param of that name wins over a part of the same name (pz_sallen_key: `.param Rb`, part Rb = {Rb})
-    if !defs.is_empty() {
-        return Some(defs);
-    }
     let low = t.to_ascii_lowercase();
-    lines.iter().filter(|l| l.top).find(|l| l.low.split_whitespace().next() == Some(low.as_str()))
-        .and_then(|l| part_value(l.line).map(|(a, e)| vec![(l.start + a, l.start + e)]))
+    let part = lines.iter().filter(|l| l.top).find(|l| l.low.split_whitespace().next() == Some(low.as_str()))
+        .and_then(|l| part_value(l.line).map(|(a, e)| vec![(l.start + a, l.start + e)]));
+    if !defs.is_empty() && (param_first || part.is_none()) { Some(defs) } else { part }
 }
 
 /// What a sweep can vary in `text` (vary_spans' rules), for the locus panel's list: top-level
@@ -502,7 +501,8 @@ pub fn vary_spans(text: &str, target: &str) -> Option<Vec<(usize, usize)>> {
 /// netlister's parasitics such as `RC1_rser`).
 pub fn sweepable(text: &str, placed: &[String]) -> Vec<String> {
     let lines = deck_lines(text);
-    let params = lines.iter().filter(|l| l.top && l.param()).flat_map(|l| param_defs(l.line, &l.low).into_iter().map(|(n, _)| n.to_string()));
+    let params = lines.iter().filter(|l| l.top && l.param()).flat_map(|l| param_defs(l.line, &l.low).into_iter().map(|(n, _)| n.to_string()))
+        .filter(|n| !n.eq_ignore_ascii_case("pi")); // the netlister's built-in constant
     let parts = lines.iter().filter(|l| l.top && part_value(l.line).is_some()).filter_map(|l| l.line.split_whitespace().next())
         .filter(|n| placed.iter().any(|p| p.eq_ignore_ascii_case(n))).map(str::to_string);
     let mut out: Vec<String> = vec![];
@@ -541,7 +541,7 @@ pub fn splice(text: &str, spans: &[(usize, usize)], value: f64) -> String {
 /// `text` with `target` set to `value` (see [`vary_spans`]).
 #[cfg(test)]
 pub fn vary(text: &str, target: &str, value: f64) -> Option<String> {
-    Some(splice(text, &vary_spans(text, target)?, value))
+    Some(splice(text, &vary_spans(text, target, true)?, value))
 }
 
 /// SPICE number with suffix (f p n u µ m k meg g t), trailing units ignored.
@@ -665,10 +665,6 @@ impl Prepared {
         }).collect::<Vec<_>>().join("\n") + "\n";
         Prepared(text, self.1.clone())
     }
-    /// Where `target` is set in this deck (see [`vary_spans`]): found once per sweep.
-    pub fn spans(&self, target: &str) -> Option<Vec<(usize, usize)>> {
-        vary_spans(&self.0, target)
-    }
     /// This deck with the value at `spans` set to `value` (one step of a sweep such as a root locus).
     pub fn at(&self, spans: &[(usize, usize)], value: f64) -> Prepared {
         Prepared(splice(&self.0, spans, value), self.1.clone())
@@ -689,11 +685,6 @@ pub struct Sensor {
     pub inst: String,
 }
 
-/// Make a netlist safe and self-contained for ngspice. This is the single security filter:
-/// - `.include`/`.inc`/`.lib` are inlined here (relative to the schematic's folder, like LTspice),
-///   so ngspice never opens a file itself;
-/// - `.control` blocks and `*#` lines are dropped everywhere (ngspice executes them on load,
-///   including `shell`), in the schematic and in included files alike.
 impl Netlist {
     /// The deck ngspice runs for this (simulation) netlist: includes inlined and filtered, its
     /// current sensors known. The GUI's simulation and root locus and MCP all run this. It reads the
@@ -703,6 +694,11 @@ impl Netlist {
     }
 }
 
+/// Make a netlist safe and self-contained for ngspice. This is the single security filter:
+/// - `.include`/`.inc`/`.lib` are inlined here (relative to the schematic's folder, like LTspice),
+///   so ngspice never opens a file itself;
+/// - `.control` blocks and `*#` lines are dropped everywhere (ngspice executes them on load,
+///   including `shell`), in the schematic and in included files alike.
 pub fn prepare(text: &str, dir: Option<&std::path::Path>, warnings: &mut Vec<String>) -> Prepared {
     let mut x = Expander { warnings, out: String::new(), seen: HashSet::new(), read: true, diode: None, behavioural: vec![] };
     x.expand(text, dir, None, 0);
@@ -1436,6 +1432,10 @@ mod tests {
         assert!(vary(".param Ra=1k\n\n+ Rb=10k\n", "Rb", 2e4).unwrap().contains("+ Rb=2e4"), "blank line between");
         assert!(vary(".ends\nR1 a b 1k\n", "R1", 2.0).unwrap().contains("R1 a b 2e0"), "stray .ends");
         assert_eq!(vary(".param Rb=10k Rb=20k\n", "Rb", 3.0).unwrap(), ".param Rb=3e0 Rb=3e0\n", "every definition on a line");
+        let lib = ".param R1=5\nR1 a b 1k\n"; // a library's .param named like the user's part: the part
+        assert_eq!(splice(lib, &vary_spans(lib, "R1", false).unwrap(), 2.0), ".param R1=5\nR1 a b 2e0\n");
+        assert_eq!(vary_spans(".param x=1\n", "x", false).map(|s| s.len()), Some(1), "no part: the .param still");
+        assert!(sweepable(".param pi=3.14159\n.param a=1\n", &[]) == ["a"], "built-in pi not offered");
         // what the root-locus panel offers: the same rules
         let placed = |n: &[&str]| n.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         assert_eq!(sweepable(".param a=1 b = {a*2} ; c=3\n.subckt x 1 2\nR9 1 2 1k\n.ends\nR1 n1 n2 1k\nC1 n2 0 1n\nV1 n1 0 1\n", &placed(&["R9", "R1", "C1", "V1"])), ["a", "b", "R1", "C1"]);
@@ -1465,7 +1465,7 @@ mod tests {
         let bode = EXAMPLES.iter().find(|e| e.0 == "rc_bode").unwrap().1.replace(".ac dec 50 10 1Meg", ".pz in 0 out 0 vol pz");
         let nl = netlist_for_sim(&parse_asc(&bode), &mut Library::builtin());
         let p = prepare(&nl.text, None, &mut vec![]).with_sensors(nl.sensors.clone());
-        let run = crate::ngspice::run(&p.at(&p.spans("R1").unwrap(), 2000.0)).unwrap();
+        let run = crate::ngspice::run(&p.at(&vary_spans(p.text(), "R1", true).unwrap(), 2000.0)).unwrap();
         let pole = run.op.iter().find(|o| o.0.starts_with("pole")).unwrap();
         assert!((pole.1 + 5000.0).abs() < 1.0, "{:?}", run.op);
     }
@@ -1600,8 +1600,10 @@ mod tests {
                     // K = 2: Q = 1, w0 = 1/RC = 1e4 -> -5000 ± j8660; Rb = 30k (K = 4): right half-plane
                     let p = run.op.iter().find(|o| o.0.starts_with("pole") && o.2 > 0.0).unwrap_or_else(|| panic!("{:?}", run.op));
                     assert!((p.1 + 5000.0).abs() < 150.0 && (p.2 - 8660.0).abs() < 200.0, "{name}: {:?}", run.op);
-                    let k4 = crate::ngspice::run(&deck.at(&deck.spans("Rb").unwrap(), 30e3)).unwrap();
+                    let k4 = crate::ngspice::run(&deck.at(&vary_spans(deck.text(), "Rb", true).unwrap(), 30e3)).unwrap();
                     assert!(k4.op.iter().any(|o| o.0.starts_with("pole") && o.1 > 0.0), "{name}: {:?}", k4.op);
+                    let ui = netlist(&parse_asc(src), &mut Library::builtin()); // what simulate lists from
+                    assert_eq!(sweepable(&ui.text, &ui.insts).first().map(String::as_str), Some("Rb"), "{name}: the locus panel's default");
                 }
                 _ => {
                     assert!(!run.scale.is_empty(), "{name}: {run:?}");

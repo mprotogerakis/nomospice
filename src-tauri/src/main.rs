@@ -217,7 +217,9 @@ async fn root_locus(items: Vec<Item>, dir: Option<String>, target: String, value
         }
         // where the value sits in the deck: found once, then spliced per step
         let deck = deck.only_pz();
-        let spans = deck.spans(&target).ok_or_else(|| format!("`{target}` is neither a .param nor an R, C or L with a numeric value in the schematic"))?;
+        // the user's own .param of that name wins over a part of it; a library's does not
+        let own = schematic::sweepable(&sim.text, &[]).iter().any(|n| n.eq_ignore_ascii_case(target.trim()));
+        let spans = schematic::vary_spans(deck.text(), &target, own).ok_or_else(|| format!("`{target}` is neither a .param nor an R, C or L with a numeric value in the schematic"))?;
         let _sweep = SWEEP.lock().unwrap_or_else(|e| e.into_inner());
         let (mut steps, mut first_error, mut stopped) = (vec![], None, false);
         for &v in &values {
