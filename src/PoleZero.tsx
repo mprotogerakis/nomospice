@@ -161,7 +161,8 @@ function Sidebar({ poles, zeros, locus, setLocus, error, setError }: {
   const [running, setRunning] = useState(false);
   // sweepable: .param names and R/C/L instances
   const targets = useMemo(() => [...new Set([
-    ...items.flatMap((it) => (it.t === "text" && it.directive ? it.text.split("\n") : [])).filter((l) => /^\s*\.param\b/i.test(l))
+    // `+` continuation lines joined to their .param (names defined there can be swept too)
+    ...items.flatMap((it) => (it.t === "text" && it.directive ? it.text.replace(/\n\s*\+/g, " ").split("\n") : [])).filter((l) => /^\s*\.param\b/i.test(l))
       .flatMap((l) => parseParams(l).map(([n]) => n).filter((n) => /^[a-z_]\w*$/i.test(n))),
     ...circuitInsts(items, nets, lib).filter((x) => "RCL".includes(x.prefix || "-")).map((x) => x.inst),
   ])], [items, lib, nets]);
@@ -228,7 +229,7 @@ function Sidebar({ poles, zeros, locus, setLocus, error, setError }: {
       <Select compact label="Spacing" value={f.scale} set={(scale) => setF({ ...f, scale })} options={[["log", "logarithmic"], ["lin", "linear"]]} />
       <div className="flex gap-2">
         <Button type="button" variant="primary" disabled={running} onClick={compute}>{running ? "Computing…" : "Draw root locus"}</Button>
-        {running && <Button type="button" onClick={() => void invoke("halt")}>Halt</Button>}
+        {running && <Button type="button" onClick={() => void invoke("cancel_locus")}>Halt</Button>}
         {!!locus && <Button type="button" onClick={() => setLocus(null)}>Clear</Button>}
       </div>
       {error && <p className="whitespace-pre-wrap text-2xs text-status-danger">{error}</p>}

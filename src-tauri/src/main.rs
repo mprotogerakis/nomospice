@@ -169,6 +169,12 @@ fn sim_deck(items: &[Item], dir: Option<&str>, lib: &mut Library, warnings: &mut
     schematic::prepare(&sim.text, dir.map(std::path::Path::new), warnings).with_sensors(sim.sensors)
 }
 
+/// A root locus loads one .pz deck after another, so meanwhile ngspice's current plot is not the
+/// user's simulation. A sweep holds this lock for its whole run; simulate and trace wait for it.
+static SWEEP: Mutex<()> = Mutex::new(());
+/// Bumped to stop a running sweep at its next step (a new simulation, or the locus panel's Halt).
+static SWEEP_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// `dir`: folder of the .asc, for relative `.include`/`.lib` paths.
 #[tauri::command]
 async fn simulate(items: Vec<Item>, dir: Option<String>, lib: tauri::State<'_, Lib>) -> Result<Sim, String> {
@@ -181,7 +187,12 @@ async fn simulate(items: Vec<Item>, dir: Option<String>, lib: tauri::State<'_, L
         (netlist, deck)
     };
     let simulated = prepared.text().to_string();
-    let res = tauri::async_runtime::spawn_blocking(move || ngspice::run(&prepared)).await.map_err(|e| e.to_string())?;
+    // the newer request wins: a running root locus stops at its next step, then this runs
+    SWEEP_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let res = tauri::async_runtime::spawn_blocking(move || {
+        let _sweep = SWEEP.lock().unwrap_or_else(|e| e.into_inner());
+        ngspice::run(&prepared)
+    }).await.map_err(|e| e.to_string())?;
     Ok(match res {
         Ok(mut run) => Sim { netlist, simulated, log: std::mem::take(&mut run.log), run: Some(run) },
         Err(log) => Sim { netlist, simulated, run: None, log },
@@ -200,16 +211,19 @@ async fn root_locus(items: Vec<Item>, dir: Option<String>, target: String, value
     }
     // where the value sits in the deck: found once, then spliced per step
     let spans = deck.spans(&target).ok_or_else(|| format!("`{target}` is neither a .param nor an R, C or L in the schematic"))?;
+    let gen = SWEEP_GEN.load(std::sync::atomic::Ordering::SeqCst);
+    let stop = move || ngspice::halted() || SWEEP_GEN.load(std::sync::atomic::Ordering::SeqCst) != gen;
     tauri::async_runtime::spawn_blocking(move || {
+        let _sweep = SWEEP.lock().unwrap_or_else(|e| e.into_inner());
         let (mut steps, mut first_error) = (vec![], None);
         for &v in &values {
-            if ngspice::halted() {
+            if stop() {
                 break;
             }
             let step = deck.at(&spans, v);
             match ngspice::run(&step) {
-                // interrupted by Halt (bg_halt ends the run with partial data): not a step
-                _ if ngspice::halted() => break,
+                // interrupted by Halt (bg_halt ends the run with partial data) or cancelled: not a step
+                _ if stop() => break,
                 // aborted by ngspice itself (no convergence near a crossing): a gap, the sweep goes on
                 Ok(run) if run.aborted => steps.push(None),
                 Ok(run) => steps.push(Some(run.op.into_iter().filter(|o| o.0.starts_with("pole")).map(|o| (o.1, o.2)).collect())),
@@ -226,9 +240,18 @@ async fn root_locus(items: Vec<Item>, dir: Option<String>, target: String, value
     }).await.map_err(|e| e.to_string())?
 }
 
+/// Stops a running root locus at its next step (its panel's Halt; the toolbar Halt stops everything).
+#[tauri::command]
+fn cancel_locus() {
+    SWEEP_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+}
+
 #[tauri::command]
 async fn trace(expr: String, scale: String) -> Result<ngspice::Trace, String> {
-    tauri::async_runtime::spawn_blocking(move || ngspice::trace(&expr, &scale)).await.map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        let _sweep = SWEEP.lock().unwrap_or_else(|e| e.into_inner()); // not from a locus step's plot
+        ngspice::trace(&expr, &scale)
+    }).await.map_err(|e| e.to_string())?
 }
 
 static ARGS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
@@ -574,7 +597,7 @@ fn main() {
         // updates from the GitHub releases (latest.json, signed with the key in ~/.tauri; see scripts/publish-release.sh)
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .invoke_handler(tauri::generate_handler![symbols, examples, path_exists, open_asc, save_asc, export_svg, netlist, simulate, root_locus, trace, halt, cli_args, quit, recovery_save, recovery_take, recovery_resolve, recovery_clear,
+        .invoke_handler(tauri::generate_handler![symbols, examples, path_exists, open_asc, save_asc, export_svg, netlist, simulate, root_locus, cancel_locus, trace, halt, cli_args, quit, recovery_save, recovery_take, recovery_resolve, recovery_clear,
             library_sources, library_set_sources, library_search, library_text, library_fetch_microcap,
             git_status, git_log, git_show, git_commit, git_init])
         .setup(|app| {

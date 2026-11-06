@@ -23,12 +23,13 @@ function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: 
   const [it, setIt] = useState(item);
   const attr = (k: string) => (it.t === "sym" ? it.attrs[k] ?? "" : "");
   const setAttr = (k: string, v: string) => it.t === "sym" && setIt({ ...it, attrs: { ...it.attrs, [k]: v } });
+  const def = it.t === "sym" ? defOf(lib, it) : undefined;
   const done = () => {
-    if (it.t === "sym") onDone({ ...it, attrs: Object.fromEntries(Object.entries(it.attrs).filter(([, v]) => v.trim())) });
+    // empty attributes go, except an emptied SpiceLine over a symbol default (missing = the default)
+    if (it.t === "sym") onDone({ ...it, attrs: Object.fromEntries(Object.entries(it.attrs).filter(([k, v]) => v.trim() || (k === "SpiceLine" && def?.spice_line))) });
     else if (it.t === "flag" && !it.name.trim()) close();
     else onDone(it);
   };
-  const def = it.t === "sym" ? defOf(lib, it) : undefined;
   // independent sources (V, I; not the controlled E/G/F/H) get the waveform form
   const source = it.t === "sym" && /^[VI]$/i.test(def?.prefix ?? "");
   // R, C, L: show how SPICE reads a single value (1M is a milliohm, 10F ten femtofarad)

@@ -407,10 +407,11 @@ pub fn vary_spans(text: &str, target: &str) -> Option<Vec<(usize, usize)>> {
     if t.is_empty() || !t.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_') {
         return None;
     }
-    // the value span of `t=` on a .param line, if it defines t: whole top-level tokens only, so
-    // `{x==1?2:3}` (one token) and `µa=1` (another name) are not definitions of x / a.
-    // Forms: `t=v`, `t= v`, `t =v`, `t = v`.
+    // the value spans of `t=` on a .param line (every definition on it: SPICE uses the last): whole
+    // top-level tokens only, so `{x==1?2:3}` (one token) and `µa=1` (another name) are not
+    // definitions of x / a. Forms: `t=v`, `t= v`, `t =v`, `t = v`.
     let param_value = |line: &str, low: &str| {
+        let mut found = vec![];
         let sp = token_spans(line);
         for (i, &(a, e)) in sp.iter().enumerate() {
             if low[a..].starts_with(';') || low[a..].starts_with('$') {
@@ -429,11 +430,9 @@ pub fn vary_spans(text: &str, target: &str) -> Option<Vec<(usize, usize)>> {
                 }
                 _ => None,
             };
-            if val.is_some() {
-                return val;
-            }
+            found.extend(val);
         }
-        None
+        found
     };
     // top-level lines only (outside .subckt … .ends), with their lowercase twin and whether they
     // are part of a .param (its own line, or a `+` continuation of one)
@@ -452,16 +451,14 @@ pub fn vary_spans(text: &str, target: &str) -> Option<Vec<(usize, usize)>> {
         (start, line, low, top, in_param && !skip) // a comment line is never a definition
     }).collect();
     // a .param of that name wins over a part of the same name (pz_sallen_key: `.param Rb`, part Rb = {Rb})
-    let params = lines.iter().any(|(_, l, low, top, p)| *top && *p && param_value(l, low).is_some());
+    let params = lines.iter().any(|(_, l, low, top, p)| *top && *p && !param_value(l, low).is_empty());
     let mut spans = vec![];
     for (start, line, low, top, is_param) in &lines {
-        let span = if !top { None }
-            else if params { is_param.then(|| param_value(line, low)).flatten() }
-            else if spans.is_empty() && low.split_whitespace().next() == Some(t.as_str()) && "rcl".contains(&t[..1]) { token_spans(line).get(3).copied() }
-            else { None };
-        if let Some((a, e)) = span {
-            spans.push((start + a, start + e));
-        }
+        let here: Vec<(usize, usize)> = if !top { vec![] }
+            else if params { if *is_param { param_value(line, low) } else { vec![] } }
+            else if spans.is_empty() && low.split_whitespace().next() == Some(t.as_str()) && "rcl".contains(&t[..1]) { token_spans(line).get(3).copied().into_iter().collect() }
+            else { vec![] };
+        spans.extend(here.into_iter().map(|(a, e)| (start + a, start + e)));
     }
     (!spans.is_empty()).then_some(spans)
 }
@@ -479,6 +476,7 @@ pub fn splice(text: &str, spans: &[(usize, usize)], value: f64) -> String {
 }
 
 /// `text` with `target` set to `value` (see [`vary_spans`]).
+#[cfg(test)]
 pub fn vary(text: &str, target: &str, value: f64) -> Option<String> {
     Some(splice(text, &vary_spans(text, target)?, value))
 }
@@ -602,6 +600,7 @@ impl Prepared {
     pub fn at(&self, spans: &[(usize, usize)], value: f64) -> Prepared {
         Prepared(splice(&self.0, spans, value), self.1.clone())
     }
+    #[cfg(test)]
     pub fn varied(&self, target: &str, value: f64) -> Option<Prepared> {
         Some(self.at(&self.spans(target)?, value))
     }
@@ -1357,6 +1356,7 @@ mod tests {
         assert!(vary(".param Ra=1k\n* note\n+Rb=10k\n", "Rb", 2e4).unwrap().contains("+Rb=2e4"), "no space after +, comment between");
         assert!(vary(".param Ra=1k\n\n+ Rb=10k\n", "Rb", 2e4).unwrap().contains("+ Rb=2e4"), "blank line between");
         assert!(vary(".ends\nR1 a b 1k\n", "R1", 2.0).unwrap().contains("R1 a b 2e0"), "stray .ends");
+        assert_eq!(vary(".param Rb=10k Rb=20k\n", "Rb", 3.0).unwrap(), ".param Rb=3e0 Rb=3e0\n", "every definition on a line");
         // comments are not definitions: the part R1 is varied
         let c = vary(".param a=1 ; R1=5\n* R1=old value\nR1 x y 1k\n", "R1", 2e3).unwrap();
         assert!(c.contains("R1 x y 2e3") && c.contains("; R1=5") && c.contains("* R1=old value"), "{c}");

@@ -26,7 +26,7 @@ export function tokens(s: string): string[] {
   return out;
 }
 /** Numbers and parameter expressions ({T}, 'T*2') are values; `uic` & co. are not. */
-export const isNum = (t: string) => /^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?[a-zµμ]*$/i.test(t) || /^[{']/.test(t);
+export const isNum = (t: string) => spiceNum(t) !== null || /^[{']/.test(t);
 
 /** Suffix -> power of ten (mil: 25.4 µm). Negative powers divide, so 10u is exactly 1e-5. */
 const SUFFIX: [RegExp, number][] = [
@@ -55,7 +55,7 @@ export function numInfo(s: string, unit = ""): { text: string; warn?: string } |
     : /^F/.test(tail) ? "F is femto in SPICE (write 10u, not 10F)"
     : /^a/i.test(tail) ? "a is atto (1e-18) in SPICE: for amperes write the number alone (1, not 1A)"
     : undefined;
-  return { text: `= ${si(n, unit)}`, warn };
+  return { text: `= ${si(n, unit).replace(/(\d)M/, "$1Meg")}`, warn }; // Meg, as SPICE writes mega
 }
 
 // ---------------------------------------------------------------- independent sources (V, I)

@@ -104,4 +104,5 @@ assert.equal(spiceNum("1a"), 1e-18); // ngspice reads a as atto (checked against
 assert.match(numInfo("1A", "A")!.warn!, /atto/);
 assert.deepEqual([parseSource(undefined, undefined, "Rser = 50").rser, parseSource(undefined, undefined, "Rser = 50").rest], ["50", ""]);
 assert.deepEqual(tokens('PWL file="my wave.txt" r=0'), ["PWL", 'file="my wave.txt"', "r=0"]); // double quotes like schematic.rs
+assert.equal(numInfo("1Meg", "Hz")!.text, "= 1MegHz"); // not "1M", the milli trap's spelling
 console.log("spice-check: ok");
