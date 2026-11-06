@@ -13,6 +13,7 @@ import type { Item } from "./types";
 import { Schematic } from "./Schematic";
 import { Waveform } from "./Waveform";
 import { PoleZero } from "./PoleZero";
+import { checkForUpdate, installUpdate, useUpdate } from "./updater";
 import { Dialogs } from "./Dialogs";
 import { Boundary } from "./Boundary";
 import { docId, viewOf, loadDoc, loadSymbols, placeSymbol, plotKind, redo, refreshGit, refreshNets, relToDoc, simulate, undo, useS, useStatus } from "./store";
@@ -161,6 +162,11 @@ export function App() {
   const [mode, setMode] = useState<ThemeMode>(() => initializeTheme().mode);
   const [split, setSplit] = useState(0.45);
   const [drop, setDrop] = useState<string | null>(null); // what releasing the dragged files would do
+
+  useEffect(() => {
+    const t = setTimeout(() => void checkForUpdate(), 4000); // a newer release on GitHub? (quietly, after startup)
+    return () => clearTimeout(t);
+  }, []);
 
   useEffect(() => {
     // files dragged in from the Finder / Explorer (Tauri's native drag & drop)
@@ -382,6 +388,7 @@ export function App() {
           </StatusSegment>
         )}
         <CursorStatus />
+        <UpdateStatus />
         {warnings.length > 0 && (
           <StatusSegment className="text-status-warning" onClick={() => useS.setState({ panel: "netlist" })} title={warnings.join("\n")}>
             {warnings.length} warning{warnings.length > 1 ? "s" : ""}
@@ -404,6 +411,17 @@ export function App() {
       )}
       <ContextMenu />
     </div>
+  );
+}
+
+/** "Update x.y.z" when a newer release is out; click to install (or the download progress). */
+function UpdateStatus() {
+  const { update, busy } = useUpdate();
+  if (!update) return null;
+  return (
+    <StatusSegment className="text-status-info" onClick={() => void installUpdate()} title={`nomospice ${update.version} is available: click to install and restart`}>
+      {busy || `Update ${update.version}`}
+    </StatusSegment>
   );
 }
 

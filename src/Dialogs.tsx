@@ -13,6 +13,7 @@ import { DirectiveDialog } from "./DirectiveDialog";
 import { analysisLine, analysisRoundTrips, holdsAnalysis, tokens } from "./spice";
 import { cn } from "@/lib/utils";
 import thirdParty from "./third-party.json";
+import { checkForUpdate } from "./updater";
 
 const close = closeDialog;
 
@@ -291,6 +292,7 @@ function AboutDialog() {
           <span className="font-medium text-text-strong">nomospice {version}</span> is free software under the GNU Affero General
           Public License v3.0 or later. Source code: <span className="select-text font-mono">https://github.com/mprotogerakis/nomospice</span>
         </p>
+        <Button type="button" className="self-start" onClick={() => void checkForUpdate(true)}>Check for updates</Button>
         <h3 className="font-medium text-text-strong">Built with</h3>
         {table(thirdParty.included)}
         <h3 className="font-medium text-text-strong">Used, but not included</h3>

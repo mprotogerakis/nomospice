@@ -561,6 +561,9 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(Lib(Mutex::new(Library::builtin())))
+        // updates from the GitHub releases (latest.json, signed with the key in ~/.tauri; see scripts/publish-release.sh)
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![symbols, examples, path_exists, open_asc, save_asc, export_svg, netlist, simulate, root_locus, trace, halt, cli_args, quit, recovery_save, recovery_take, recovery_resolve, recovery_clear,
             library_sources, library_set_sources, library_search, library_text, library_fetch_microcap,
             git_status, git_log, git_show, git_commit, git_init])

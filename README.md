@@ -40,7 +40,9 @@ files — with a modern UI, ngspice as the engine, a Rust core and a React front
 ## Download
 
 [Releases](https://github.com/mprotogerakis/nomospice/releases): Windows installer (x64) and a signed,
-notarized macOS app (Apple Silicon, macOS 11+). Both include ngspice.
+notarized macOS app (Apple Silicon, macOS 11+). Both include ngspice. From 0.1.5 on the app looks for a
+newer release at startup (status bar: *Update x.y.z*; About → *Check for updates*) and installs it after
+asking; updates are signed and verified against the key built into the app.
 
 ## Requirements (building from source)
 
@@ -64,6 +66,7 @@ NOMOSPICE_MC12=<Micro-Cap LIBRARY folder> cargo test microcap -- --ignored
 pnpm tauri build                                 # installers; CI builds all three OSes (.github/workflows)
 node scripts/licenses.mjs                        # after dependency changes: THIRD-PARTY-LICENSES.txt + NOTICE.md
 scripts/macos-release.sh                         # signed + notarized macOS app with its own ngspice (see script)
+NOTES_FILE=notes.md scripts/publish-release.sh   # release: macOS build + Windows installers from CI + updater files
 ```
 
 ## MCP

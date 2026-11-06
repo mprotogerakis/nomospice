@@ -10,8 +10,39 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [{ "title": "nomospice", "width": 1400, "height": 900, "minWidth": 900, "minHeight": 600 }],
-    "security": { "csp": null }
+    "windows": [
+      {
+        "title": "nomospice",
+        "width": 1400,
+        "height": 900,
+        "minWidth": 900,
+        "minHeight": 600
+      }
+    ],
+    "security": {
+      "csp": null
+    }
   },
-  "bundle": { "active": true, "targets": "all", "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"] }
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDNEMTA1MUU1QTM4MTRGODcKUldTSFQ0R2o1VkVRUFc4MXJSZjNDTGd3Nit1Qkp3cG5keHI2OFJza28wY1Y0NzI0eFNVakRwd2IK",
+      "endpoints": [
+        "https://github.com/mprotogerakis/nomospice/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
 }

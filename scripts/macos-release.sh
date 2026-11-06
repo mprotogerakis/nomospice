@@ -48,4 +48,8 @@ codesign --force --timestamp --sign "$ID" "$DMG"
 notarize "$DMG"
 xcrun stapler staple "$DMG"
 spctl -a -t open --context context:primary-signature -v "$DMG"
+
+# 5. the in-app updater's archive of the stapled app, signed (scripts/publish-release.sh uploads it)
+COPYFILE_DISABLE=1 tar -czf "$OUT/nomospice_${VERSION}_aarch64.app.tar.gz" -C "$(dirname "$APP")" nomospice.app
+scripts/sign-update.sh "$OUT/nomospice_${VERSION}_aarch64.app.tar.gz"
 echo "$DMG"
