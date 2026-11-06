@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import type { GitStatus, Item, Netlist, Sim, SymbolDef, Trace, TraceData } from "./types";
 import { currentLabel, defOf, symKey, vexpr, type Lib } from "./geom";
+import { analysisOptions, stripAnalyses, type Analysis } from "./spice";
 
 export type Tool =
   | { k: "select" }
@@ -13,7 +14,8 @@ export type Dialog =
   /** raw: a directive as plain text, even when a form could edit it */
   | { k: "edit"; index: number; raw?: boolean; draft?: string }
   | { k: "new"; item: Item; at?: [number, number] }
-  | { k: "sim" }
+  /** `add`: a new analysis of that kind (its own result tab) */
+  | { k: "sim"; add?: Analysis }
   /** `replace`: choose a model for that part instead of placing a new one */
   | { k: "parts"; replace?: number; kind?: string; libraries?: boolean }
   | { k: "trace" }
@@ -47,7 +49,15 @@ interface State {
   git: GitStatus | null;
   /** visual diff: the schematic of an older commit, overlaid on the current one */
   diff: { hash: string; items: Item[] } | null;
+  /** The result tab the user chose (an analysis kind); null: the schematic's active analysis. */
+  tab: Analysis | null;
+  /** The other tabs' results, kept while another tab is shown. */
+  tabs: Partial<Record<Analysis, TabState>>;
 }
+
+/** A result tab in the background: what `sim`, `traces`, `plot`, `stale` hold for the shown one;
+ *  `at`: the items when it was put away (edited since: stale). */
+interface TabState { sim: Sim | null; traces: Trace[]; plot: PlotView; stale: boolean; at: Item[] }
 
 /** `kind`: the analysis these belong to; a run of another kind starts fresh. */
 export interface PlotView { kind: string; zoom: [number, number] | null; a: number | null; b: number | null }
@@ -59,7 +69,7 @@ export const plotKind = (sim: Sim | null) => `${sim?.run?.plot.replace(/\d+$/, "
 export const useS = create<State>(() => ({
   items: [], past: [], future: [], sel: [], tool: { k: "select" }, lib: {}, path: null, dirty: false,
   nets: null, netsItems: null, sim: null, running: false, stale: false, traces: [], live: false, panel: null, dialog: null,
-  fitToken: 0, plot: NO_PLOT, menu: null, git: null, diff: null,
+  fitToken: 0, plot: NO_PLOT, menu: null, git: null, diff: null, tab: null, tabs: {},
 }));
 const set = useS.setState;
 const get = useS.getState;
@@ -122,8 +132,8 @@ export async function loadSymbols(items: Item[] = []) {
 
 /** Bumped on every document load; in-flight simulations of an older document are discarded. */
 let docGen = 0;
-/** Labelled nets are auto-plotted once per document, not every time the trace list is empty. */
-let autoPlotGen = -1;
+/** Labelled nets are auto-plotted once per document and analysis, not every time the list is empty. */
+let autoPlotted = new Set<string>();
 
 /** Git status of the open file (none for an unsaved document). */
 export async function refreshGit() {
@@ -141,7 +151,8 @@ export async function refreshLibrarySymbols() {
 export async function loadDoc(items: Item[], path: string | null) {
   await loadSymbols(items);
   docGen++;
-  set({ items, path, past: [], future: [], sel: [], dirty: false, sim: null, traces: [], stale: false, nets: null, netsItems: null, plot: NO_PLOT, panel: get().panel === "op" ? null : get().panel, diff: null, tool: { k: "select" }, fitToken: get().fitToken + 1 });
+  autoPlotted = new Set();
+  set({ tab: null, tabs: {}, items, path, past: [], future: [], sel: [], dirty: false, sim: null, traces: [], stale: false, nets: null, netsItems: null, plot: NO_PLOT, panel: get().panel === "op" ? null : get().panel, diff: null, tool: { k: "select" }, fitToken: get().fitToken + 1 });
   refreshNets();
   refreshGit();
 }
@@ -202,14 +213,55 @@ export const docId = () => docGen;
 /** Counts simulation starts: a trace fetched while a run started may belong to either circuit. */
 let runSeq = 0;
 
+// ---------------------------------------------------------------- result tabs
+
+/** The analyses of the schematic, one per kind: the result tabs (see `analysisOptions`). */
+export const analysesOf = (items: Item[]) => analysisOptions(items.flatMap((it) => (it.t === "text" ? [it] : [])));
+
+/** The tab shown: the chosen one while the schematic still has it, else its active analysis. */
+export function currentTab(s: { tab: Analysis | null; items: Item[] }): Analysis | null {
+  const o = analysesOf(s.items);
+  return (s.tab && o.some((x) => x.kind === s.tab) ? s.tab : o.find((x) => x.active)?.kind) ?? null;
+}
+
+/** Index of the text item holding the analysis of `kind` (the active one first). */
+export function analysisItem(items: Item[], kind: Analysis | null) {
+  const holds = (it: Item) => it.t === "text" && analysisOptions([it]).some((o) => o.kind === kind);
+  const active = items.findIndex((it) => it.t === "text" && it.directive && holds(it));
+  return active >= 0 ? active : items.findIndex(holds);
+}
+
+/** Show another result tab: the shown one is put away, the other's results come back (a tab
+ *  that never ran runs now). Not while a simulation runs: its result belongs to the shown tab. */
+export function selectTab(kind: Analysis) {
+  const s = get();
+  const cur = currentTab(s);
+  if (s.running || cur === kind) return;
+  const tabs = { ...s.tabs };
+  if (cur) tabs[cur] = { sim: s.sim, traces: s.traces, plot: s.plot, stale: s.stale, at: s.items };
+  const next = tabs[kind];
+  delete tabs[kind];
+  const sim = next?.sim ?? null, view = viewOf(sim);
+  set({
+    tabs, tab: kind, sim, traces: next?.traces ?? [], plot: next?.plot ?? NO_PLOT,
+    stale: !!sim && (next!.stale || next!.at !== s.items),
+    panel: view === "table" ? "op" : s.panel === "op" ? null : s.panel,
+  });
+  if (!sim) void simulate();
+}
+
 export async function simulate() {
   if (get().running) return;
-  const { items, path } = get();
+  const { items, path, tab } = get();
+  // a chosen tab runs its analysis instead of the schematic's: the items keep their indices (the
+  // netlist's arrays are aligned with them), the analyses are taken out, the tab's line goes last
+  const pick = tab ? analysesOf(items).find((o) => o.kind === tab) : undefined;
+  const deck = pick ? [...items.map((it) => (it.t === "text" && it.directive ? { ...it, text: stripAnalyses(it.text) } : it)), { t: "text", x: 0, y: 0, text: pick.line, directive: true } as Item] : items;
   const gen = docGen;
   runSeq++;
   set({ running: true });
   try {
-    const sim = await invoke<Sim>("simulate", { items, dir: dirOf(path) });
+    const sim = await invoke<Sim>("simulate", { items: deck, dir: dirOf(path) });
     if (gen !== docGen) return; // another document was opened meanwhile
     const changed = get().items !== items; // edited while ngspice ran: results are already stale
     const op = isOp(sim);
@@ -227,8 +279,8 @@ export async function simulate() {
     }
     // first plottable run of a document: plot the labelled nets so there is something to look at
     // (.sens plots hold no nodes: they do not use up this one-time auto-plot)
-    if (sim.run && !op && !sim.run.plot.startsWith("sens") && autoPlotGen !== docGen && gen === docGen) {
-      autoPlotGen = docGen;
+    if (sim.run && !op && !sim.run.plot.startsWith("sens") && !autoPlotted.has(plotKind(sim)) && gen === docGen) {
+      autoPlotted.add(plotKind(sim));
       const nets = new Set(items.flatMap((it, i) => (it.t === "flag" ? [sim.netlist.nets[i]?.[0]] : [])));
       if (get().traces.length) { /* the user already plotted something */ }
       else if (sim.run.plot.startsWith("noise")) await addTraceNow("onoise", "onoise_spectrum", "V/√Hz"); // .noise v(...): volts
@@ -264,10 +316,12 @@ async function addTraceNow(label: string, expr: string, unit: string) {
   const { traces, sim } = get();
   if (!sim?.run || isOp(sim) || traces.some((t) => t.expr === expr)) return;
   const gen = docGen;
-  let seq: number, t: Trace;
+  let seq: number, t: Trace, rerun = true;
   do {
     seq = runSeq;
     t = await fetchTrace({ label, expr, unit, slot: 0 });
+    // this tab's results are no longer in ngspice (another tab or a root locus ran since): run it again, once
+    if (rerun && seq === runSeq && /replaced by a later run/.test(t.error ?? "")) (rerun = false), await simulate();
     if (seq !== runSeq) await idle(); // a run started meanwhile: evaluate again on its result
   } while (seq !== runSeq);
   if (gen !== docGen || !get().sim?.run || isOp(get().sim)) return;

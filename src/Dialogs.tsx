@@ -3,14 +3,14 @@ import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { open } from "@tauri-apps/plugin-dialog";
 import type { Item, LibEntry, LibSource } from "./types";
-import { addTrace, commit, loadSymbols, placePart, placeSymbol, refreshLibrarySymbols, useS } from "./store";
+import { addTrace, analysisItem, commit, currentTab, loadSymbols, placePart, placeSymbol, refreshLibrarySymbols, useS } from "./store";
 import { defOf, vexpr } from "./geom";
 import { Button } from "./ui/button";
 import { closeDialog as close, Field, FIELD, Modal, numHelp, TextField } from "./ui/dialog";
 import { SourceEditor } from "./SourceEditor";
 import { SimDialog } from "./SimDialog";
 import { DirectiveDialog } from "./DirectiveDialog";
-import { analysisEditable, analysisLine, holdsAnalysis, tokens } from "./spice";
+import { analysisEditable, analysisLine, tokens } from "./spice";
 import { cn } from "@/lib/utils";
 import thirdParty from "./third-party.json";
 import { checkForUpdate } from "./updater";
@@ -351,7 +351,8 @@ export const Dialogs = memo(function Dialogs() {
     case "edit": {
       const it = items[dialog.index];
       if (!it) return null;
-      if (it.t === "text") return it.directive ? directive(dialog.index, dialog.raw, dialog.draft) : <DirectiveDialog key={dialog.index} item={it} title="Comment" raw onDone={commitAt(dialog.index)} />;
+      if (it.t === "text" && !it.directive && !dialog.raw && analysisLine(it.text) && analysisEditable(it.text)) return <SimDialog key={dialog.index} index={dialog.index} />; // an alternative analysis
+      if (it.t === "text") return it.directive ? directive(dialog.index, dialog.raw, dialog.draft) : <DirectiveDialog key={dialog.index} item={dialog.draft === undefined ? it : { ...it, text: dialog.draft }} title="Comment" raw onDone={commitAt(dialog.index)} />;
       return <ItemForm key={dialog.index} item={it} title={it.t === "sym" ? `Edit ${it.attrs.InstName ?? it.sym}` : "Net Name"} onDone={commitAt(dialog.index)} />;
     }
     case "new": {
@@ -361,7 +362,8 @@ export const Dialogs = memo(function Dialogs() {
       return <ItemForm item={dialog.item} title="Net Name" onDone={place} />;
     }
     case "sim": { // the form also for an analysis it does not fully cover: it says so, and OK rewrites the line
-      const i = items.findIndex((x) => holdsAnalysis(x));
+      if (dialog.add) return <SimDialog kind0={dialog.add} />;
+      const i = analysisItem(items, currentTab(useS.getState())); // what the shown result tab runs
       return <SimDialog key={i} index={i >= 0 ? i : undefined} />;
     }
     case "parts": return <PartsDialog replace={dialog.replace} kind0={dialog.kind} libraries={dialog.libraries} />;

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -7,7 +7,7 @@ import { listen } from "@tauri-apps/api/event";
 import { ask, message, open, save } from "@tauri-apps/plugin-dialog";
 import {
   Code, Component, Copy, FilePlus, FlipHorizontal2, FolderOpen, Moon, MousePointer2, Play, Redo2, RotateCw, Save,
-  Info, Scissors, ScrollText, SlidersHorizontal, Spline, Square, Sun, Tag, Type, Undo2, Zap,
+  Info, Plus, Scissors, ScrollText, SlidersHorizontal, Spline, Square, Sun, Tag, Type, Undo2, Zap,
 } from "lucide-react";
 import type { Item } from "./types";
 import { Schematic } from "./Schematic";
@@ -16,12 +16,12 @@ import { PoleZero } from "./PoleZero";
 import { checkForUpdate, installUpdate, useUpdate } from "./updater";
 import { Dialogs } from "./Dialogs";
 import { Boundary } from "./Boundary";
-import { docId, viewOf, loadDoc, loadSymbols, placeSymbol, plotKind, redo, refreshGit, refreshNets, relToDoc, simulate, undo, useS, useStatus } from "./store";
+import { analysesOf, currentTab, docId, viewOf, loadDoc, loadSymbols, placeSymbol, plotKind, redo, refreshGit, refreshNets, relToDoc, selectTab, simulate, undo, useS, useStatus } from "./store";
 import { History } from "./History";
 import { currentLabel, mirror, rotate } from "./geom";
-import { si } from "./spice";
+import { ANALYSES, si } from "./spice";
 import { deleteSelection, duplicate, newItem, placeFlag, transform } from "./actions";
-import { ContextMenu } from "./Menu";
+import { ContextMenu, openMenu } from "./Menu";
 import { Toolbar, ToolbarButton, ToolbarSeparator, ToolbarSpacer } from "./ui/toolbar";
 import { StatusBar, StatusSegment } from "./ui/status-bar";
 import { initializeTheme, updateThemePreference, type ThemeMode } from "./lib/theme";
@@ -84,6 +84,7 @@ export function installGuards() {
   });
   listen("quit-requested", async () => (await leave()) && invoke("quit"));
   listen("open-libraries", openLibraries);
+  listen("close-requested", closeFile);
   // mirror unsaved work for exits we cannot intercept (Dock > Quit, logout, crashes)
   useS.subscribe((s, prev) => {
     if (s.items === prev.items && s.dirty === prev.dirty && s.path === prev.path) return;
@@ -152,6 +153,9 @@ async function saveFile(as = false) {
 async function newFile() {
   if (await discardOk()) await loadDoc([], null);
 }
+/** ⌘W / Ctrl+W: the document goes, the app stays (an empty, untitled schematic). */
+const closeFile = newFile;
+const isMac = /Mac/.test(navigator.userAgent);
 async function openExample(items: Item[]) {
   if (await discardOk()) await loadDoc(items, null);
 }
@@ -261,6 +265,7 @@ export function App() {
         if (k === "n") return run(newFile);
         if (k === "k") return run(() => useS.setState({ dialog: { k: "parts" } }));
         if (k === ",") return run(openLibraries); // macOS: the app menu's item has it
+        if (k === "w" && !isMac) return run(closeFile); // macOS: File → Close (the menu item takes ⌘W)
         if (k === "l") return run(() => useS.setState({ panel: useS.getState().panel ? null : "log" }));
         if (k === "enter") return run(simulate);
         return;
@@ -356,6 +361,7 @@ export function App() {
       </Toolbar>
 
       <div ref={mainRef} className="flex min-h-0 flex-1 flex-col">
+        <AnalysisTabs />
         {showWave && (
           <>
             <div style={{ height: `${split * 100}%` }} className="min-h-0 shrink-0">{pz ? <PoleZero run={s.sim!.run!} /> : <Waveform key={`${mode}:${plotKind(s.sim)}`} />}</div>
@@ -416,6 +422,37 @@ export function App() {
         </div>
       )}
       <ContextMenu />
+    </div>
+  );
+}
+
+/** One tab per analysis in the schematic (commented alternatives too); each keeps its own results,
+ *  traces, zoom and cursors. "+" adds an analysis; double-click edits the tab's. */
+function AnalysisTabs() {
+  const items = useS((s) => s.items), tab = useS((s) => s.tab), running = useS((s) => s.running);
+  const opts = useMemo(() => analysesOf(items), [items]);
+  if (!opts.length) return null;
+  const cur = currentTab({ tab, items });
+  const name = (k: string) => ANALYSES.find(([a]) => a === k)?.[1] ?? k;
+  const more = ANALYSES.filter(([k]) => !opts.some((o) => o.kind === k));
+  return (
+    <div role="tablist" className="flex shrink-0 items-end gap-0.5 border-b border-border bg-surface-panel-head px-2 pt-1 text-xs">
+      {opts.map((o) => (
+        <button
+          key={o.kind} type="button" role="tab" aria-selected={o.kind === cur} disabled={running && o.kind !== cur}
+          title={`${o.line}${o.active ? "" : "\nAlternative analysis (a comment in the schematic)"}\nDouble-click to edit`}
+          onClick={() => selectTab(o.kind)} onDoubleClick={() => useS.setState({ dialog: { k: "sim" } })}
+          className={cn("-mb-px rounded-t-control border px-3 py-1 disabled:opacity-50", o.kind === cur ? "border-border border-b-surface-panel bg-surface-panel font-medium text-text-strong" : "border-transparent text-text-secondary hover:text-text-strong")}
+        >
+          {name(o.kind)}
+        </button>
+      ))}
+      {!!more.length && (
+        <button type="button" title="Add an analysis (it gets its own result tab)" aria-label="Add an analysis" className="mb-0.5 rounded-control px-1.5 py-0.5 text-text-secondary hover:bg-surface-hover hover:text-text-strong"
+          onClick={(e) => openMenu(e.clientX, e.clientY, more.map(([k, label]) => ({ label, run: () => useS.setState({ dialog: { k: "sim", add: k } }) })))}>
+          <Plus className="h-3.5 w-3.5" />
+        </button>
+      )}
     </div>
   );
 }

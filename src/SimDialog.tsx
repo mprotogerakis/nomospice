@@ -1,25 +1,24 @@
 // "Edit Simulation Command": every analysis as a form (LTspice's dialog, plus .tf, .pz, .sens).
 import { useState } from "react";
 import type { Item } from "./types";
-import { commit, useS } from "./store";
-import { analysisEditable, analysisIndex, formatAnalysis, knownSweep, parseAnalysis, type Analysis, type Fields } from "./spice";
+import { analysesOf, commit, useS } from "./store";
+import { ANALYSES, analysisEditable, analysisIndex, formatAnalysis, knownSweep, parseAnalysis, type Analysis, type Fields } from "./spice";
 import { CircuitLists, Tabs, closeDialog, Field, Modal, NumField, Section, Select, SpiceLine, TextField } from "./ui/dialog";
 import { Button } from "./ui/button";
 
-const TABS: [Analysis, string][] = [
-  ["tran", "Transient"], ["ac", "AC"], ["dc", "DC sweep"], ["noise", "Noise"], ["op", "DC op pnt"],
-  ["tf", "Transfer fn"], ["pz", "Poles/zeros"], ["sens", "Sensitivity"],
-];
+const TABS = ANALYSES;
 const SWEEPS: [string, string][] = [["dec", "Decade (log)"], ["oct", "Octave (log)"], ["lin", "Linear"]];
 const PER: Record<string, string> = { dec: "Points per decade", oct: "Points per octave", lin: "Points (total)" };
 
-/** Edits the analysis line of directive `index` (Dialogs picks it), else places a new one. */
-export function SimDialog({ index }: { index?: number }) {
+/** Edits the analysis line of directive `index` (Dialogs picks it), else places a new one (of
+ *  kind `kind0`: "+" on the result tabs). */
+export function SimDialog({ index, kind0 }: { index?: number; kind0?: Analysis }) {
   const items = useS((s) => s.items);
   const idx = index ?? -1;
   const lines = idx >= 0 && items[idx].t === "text" ? items[idx].text.split("\n") : [];
   const li = analysisIndex(lines); // the same rule Dialogs used to pick this dialog
   const [init] = useState(() => {
+    if (kind0) return { kind: kind0, f: {} as Fields };
     const a = parseAnalysis(li >= 0 ? lines[li] : ".tran 1m");
     // a sweep the form does not know (`.ac list 1k 2k`): its values mean something else, start empty
     return knownSweep(a.f) ? a : { kind: a.kind, f: {} };
@@ -44,8 +43,11 @@ export function SimDialog({ index }: { index?: number }) {
       const it = items[idx] as Extract<Item, { t: "text" }>;
       commit(items.map((x, i) => (i === idx ? { ...it, text: edited } : x)));
       closeDialog();
-    } else useS.setState({ dialog: null, tool: { k: "place", item: { t: "text", x: 0, y: 0, text: line, directive: true } } });
+    } else useS.setState({ dialog: null, tab: kind, tool: { k: "place", item: { t: "text", x: 0, y: 0, text: line, directive: !alternate } } });
   };
+  // the schematic already runs an analysis: a new one is an alternative (a comment, as LTspice keeps
+  // them), run in its own result tab; LTspice opens the file as before
+  const alternate = idx < 0 && analysesOf(items).some((o) => o.active);
 
   const sweep = (pts: string) => (
     <>
@@ -73,6 +75,7 @@ export function SimDialog({ index }: { index?: number }) {
   return (
     <Modal title="Edit Simulation Command" onSubmit={submit} wide>
       <CircuitLists />
+      {alternate && <p className="text-2xs text-text-tertiary">Added as an alternative analysis with its own result tab. It is kept as a comment, the way LTspice keeps alternatives, so the schematic's own analysis stays as it is.</p>}
       {partial && <p className="text-2xs text-status-warning">⚠ The form does not cover all of “{lines[li].trim()}”{lines.some((_, j) => cont(j)) ? " and its + lines" : ""}: a change here replaces it with the line below. “Edit as text” keeps it.</p>}
       <Tabs tabs={TABS} value={kind} set={setKind} />
       {kind === "tran" && (

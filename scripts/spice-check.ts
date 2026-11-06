@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import {
   tokens, formatAnalysis, formatIc, formatInclude, formatMeas, formatModel, formatParams, formatSource, numInfo, parseAnalysis,
-  parseIc, parseInclude, parseMeas, parseModel, parseParams, parseSource, sample, si, spiceNum, directiveKind, analysisRoundTrips, analysisEditable, portablePaths, sourceRoundTrips, holdsAnalysis,
+  parseIc, parseInclude, parseMeas, parseModel, parseParams, parseSource, sample, si, spiceNum, directiveKind, analysisRoundTrips, analysisEditable, analysisOptions, stripAnalyses, portablePaths, sourceRoundTrips, holdsAnalysis,
 } from "../src/spice.ts";
 
 // numbers and the classic pitfalls
@@ -69,6 +69,12 @@ for (const [l, k] of [[".ic V(out)=1", "ic"], [".temp 25", "temp"], [".meas ac f
 assert.equal(formatMeas(parseMeas(".meas ac f3db WHEN V(out)=0.707")!), ".meas ac f3db WHEN V(out)=0.707"); // no edge added
 assert.ok(analysisRoundTrips(".tran 1m startup") && analysisRoundTrips(".noise v(out) V1 dec 10 10 1Meg 1"));
 assert.equal(analysisRoundTrips(".dc lin V1 0 5 0.1"), false);
+// result tabs: one per kind, the active one wins, alternatives from comments, fixed order
+{
+  const o = analysisOptions([{ text: ".ac dec 10 1 1k", directive: false }, { text: ".param R=1k\n.tran 0 1m\n+ 0 1u", directive: true }, { text: ".ac dec 50 1 1Meg", directive: true }, { text: "a note" }]);
+  assert.deepEqual(o.map((x) => [x.kind, x.line, x.active]), [["tran", ".tran 0 1m\n+ 0 1u", true], ["ac", ".ac dec 50 1 1Meg", true]]);
+  assert.equal(stripAnalyses(".param R=1k\n.tran 0 1m\n* c\n+ 0 1u\n.meas tran x AVG V(a)"), ".param R=1k\n* c\n.meas tran x AVG V(a)");
+}
 { const { f } = parseAnalysis(".sens V(out) dc"); assert.equal(formatAnalysis("sens", { ...f, mode: "ac" }), ".sens V(out) ac dec 10 10 1Meg"); } // `dc` is the mode, not an option
 assert.ok(analysisEditable(".param a=1\n.tran 0 1m") && !analysisEditable(".tran 0 1m\n* c\n+ 0 1u") && !analysisEditable(".param a=1"));
 // extra function arguments (PULSE cycles) survive an edit elsewhere

@@ -238,6 +238,45 @@ export function sample(s: Source, n = 240): [number, number][] | null {
 export type Analysis = "tran" | "ac" | "dc" | "noise" | "op" | "tf" | "pz" | "sens";
 export const ANALYSIS = /^\.(tran|ac|dc|op|noise|tf|pz|sens)\b/i;
 /** The first analysis line of a directive text (the one the simulation dialog edits). */
+/** Display names, in the order of the simulation form's tabs and the result tabs. */
+export const ANALYSES: [Analysis, string][] = [
+  ["tran", "Transient"], ["ac", "AC"], ["dc", "DC sweep"], ["noise", "Noise"], ["op", "DC op pnt"],
+  ["tf", "Transfer fn"], ["pz", "Poles/zeros"], ["sens", "Sensitivity"],
+];
+
+/** The analyses a schematic offers (one per kind, for the result tabs): its active analysis
+ *  directives and the commented-out alternatives (LTspice keeps those as `;.ac …` comments).
+ *  Per kind the active one wins, else the first written; `line` includes its `+` lines. */
+export function analysisOptions(texts: { text: string; directive?: boolean }[]) {
+  const found: { kind: Analysis; line: string; active: boolean }[] = [];
+  for (const { text, directive } of texts) {
+    const lines = text.split("\n");
+    lines.forEach((l, i) => {
+      if (!ANALYSIS.test(l.trim())) return;
+      const more: string[] = [];
+      for (const n of lines.slice(i + 1)) {
+        const t = n.trim();
+        if (t.startsWith("+")) more.push(t);
+        else if (t && !t.startsWith("*")) break;
+      }
+      found.push({ kind: parseAnalysis(l.trim()).kind, line: [l.trim(), ...more].join("\n"), active: !!directive });
+    });
+  }
+  return ANALYSES.flatMap(([k]) => found.find((f) => f.kind === k && f.active) ?? found.find((f) => f.kind === k) ?? []);
+}
+
+/** `text` without its analysis statements (and their `+` lines): a result tab runs its own instead. */
+export function stripAnalyses(text: string) {
+  let drop = false;
+  return text.split("\n").filter((l) => {
+    const t = l.trim();
+    if (t.startsWith("+")) return !drop;
+    if (!t || t.startsWith("*")) return true;
+    drop = ANALYSIS.test(t);
+    return !drop;
+  }).join("\n");
+}
+
 export const analysisIndex = (lines: string[]) => lines.findIndex((l) => ANALYSIS.test(l.trim()));
 export const analysisLine = (text: string) => { const l = text.split("\n"); return l[analysisIndex(l)] as string | undefined; };
 /** Whether a schematic item is a directive holding an analysis (the one the simulation dialog edits). */

@@ -543,7 +543,8 @@ fn quit(app: tauri::AppHandle) {
 }
 
 /// macOS: ⌘Q goes straight to applicationWillTerminate (no way to veto), so the app menu's
-/// Quit item is replaced by one that asks the frontend about unsaved changes first.
+/// Quit item is replaced by one that asks the frontend about unsaved changes first. ⌘W closes
+/// the document, not the only window (which would quit the app).
 #[cfg(target_os = "macos")]
 fn install_menu(app: &tauri::App) -> tauri::Result<()> {
     use tauri::menu::{Menu, MenuItem, MenuItemKind};
@@ -556,6 +557,19 @@ fn install_menu(app: &tauri::App) -> tauri::Result<()> {
         // where macOS users look for settings: after About
         let libraries = MenuItem::with_id(app, "libraries", "Model Libraries…", true, Some("CmdOrCtrl+,"))?;
         app_menu.insert_items(&[&libraries, &tauri::menu::PredefinedMenuItem::separator(app)?], 2)?;
+    }
+    for sub in menu.items()? {
+        let MenuItemKind::Submenu(sub) = sub else { continue };
+        for it in sub.items()? {
+            if let MenuItemKind::Predefined(p) = &it {
+                if p.text()? == "Close Window" {
+                    sub.remove(p)?;
+                }
+            }
+        }
+        if sub.text()? == "File" {
+            sub.append(&MenuItem::with_id(app, "close", "Close", true, Some("CmdOrCtrl+W"))?)?;
+        }
     }
     app.set_menu(menu)?;
     Ok(())
@@ -633,6 +647,9 @@ fn main() {
             }
             if event.id() == "libraries" {
                 let _ = app.emit("open-libraries", ());
+            }
+            if event.id() == "close" {
+                let _ = app.emit("close-requested", ());
             }
         })
         .run(tauri::generate_context!())
