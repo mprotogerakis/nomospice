@@ -450,7 +450,7 @@ function AnalysisTabs() {
         </button>
       ))}
       {!!more.length && (
-        <button type="button" title="Add an analysis (it gets its own result tab)" aria-label="Add an analysis" className="mb-0.5 rounded-control px-1.5 py-0.5 text-text-secondary hover:bg-surface-hover hover:text-text-strong"
+        <button type="button" disabled={running} title="Add an analysis (it gets its own result tab)" aria-label="Add an analysis" className="disabled:opacity-50 mb-0.5 rounded-control px-1.5 py-0.5 text-text-secondary hover:bg-surface-hover hover:text-text-strong"
           onClick={(e) => openMenu(e.clientX, e.clientY, more.map(([k, label]) => ({ label, run: () => useS.setState({ dialog: { k: "sim", add: k } }) })))}>
           <Plus className="h-3.5 w-3.5" />
         </button>

@@ -285,11 +285,12 @@ fn measurements(log: &[String]) -> Vec<(String, Option<f64>, String)> {
                 out.push((name.to_string(), None, "failed".into()));
             }
         } else if let Some((name, rest)) = t.split_once('=').filter(|(n, _)| !n.trim().is_empty() && !n.trim().contains(char::is_whitespace)) {
+            // `name = <number> …` only (an error line inside the report does not end it)
             let rest = rest.trim();
             let (v, info) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
-            out.push((name.trim().to_string(), v.trim_end_matches(',').parse().ok(), info.trim().to_string()));
-        } else {
-            on = false; // the report is over: later `x = y` lines are not measurements
+            if let Ok(v) = v.trim_end_matches(',').parse::<f64>() {
+                out.push((name.trim().to_string(), Some(v), info.trim().to_string()));
+            }
         }
     }
     out

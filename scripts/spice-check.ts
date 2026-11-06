@@ -84,6 +84,7 @@ assert.equal(analysisRoundTrips(".dc lin V1 0 5 0.1"), false);
 {
   const o = analysisOptions([{ text: ".ac dec 10 1 1k", directive: false }, { text: ".param R=1k\n.tran 0 1m\n+ 0 1u", directive: true }, { text: ".ac dec 50 1 1Meg", directive: true }, { text: "a note" }]);
   assert.deepEqual(o.map((x) => [x.kind, x.line, x.active]), [["tran", ".tran 0 1m\n+ 0 1u", true], ["ac", ".ac dec 50 1 1Meg", true]]);
+  assert.deepEqual(analysisOptions([{ text: ".op point is checked first" }, { text: ".tran is great" }, { text: ".tran 0 1m startup" }]).map((o) => o.kind), ["tran"], "notes are not analyses");
   assert.equal(stripAnalyses(".param R=1k\n.tran 0 1m\n* c\n+ 0 1u\n.meas tran x AVG V(a)"), ".param R=1k\n* c\n.meas tran x AVG V(a)");
 }
 { const { f } = parseAnalysis(".sens V(out) dc"); assert.equal(formatAnalysis("sens", { ...f, mode: "ac" }), ".sens V(out) ac dec 10 10 1Meg"); } // `dc` is the mode, not an option
@@ -142,5 +143,10 @@ assert.equal(numInfo("1Meg", "Hz")!.text, "= 1MegHz"); // not "1M", the milli tr
   const two = [{ t: "flag" as const, x: 0, y: 0, name: "a" }, { t: "flag" as const, x: 100, y: 0, name: "b" }, W(0, 0, 100, 0), W(50, 0, 50, 50)];
   const out = dragPlan(two as never, {}, new Set([0, 1]))(0, 20) as ReturnType<typeof W>[];
   assert.ok(out.length === 4 && out[2].y1 === 20 && out[2].y2 === 20 && out[3].y1 === 20 && out[3].y2 === 50, JSON.stringify(out));
+  // a resting part's pin on that wire: it stretches around the pin instead (the pin keeps its wires)
+  const lib = { r: { name: "r", pins: [{ name: "a", x: 0, y: 0 }], shapes: [], prefix: "R", value: "", spice_line: "", desc: "" } };
+  const withPin = [...two, { t: "sym" as const, sym: "r", x: 50, y: 0, rot: "R0", attrs: {} }];
+  const bent = dragPlan(withPin as never, lib as never, new Set([0, 1]))(0, 20);
+  assert.ok(connectivity(bent as never, lib as never).dots.some(([x, y]) => x === 50 && y === 0), JSON.stringify(bent));
 }
 console.log("spice-check: ok");

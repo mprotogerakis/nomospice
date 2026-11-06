@@ -169,17 +169,21 @@ export function dragPlan(items: Item[], lib: Lib, sel: Set<number>) {
     if (sel.has(i)) ps.forEach(move);
   });
   const ends = (w: Wire): Pt[] => [[w.x1, w.y1], [w.x2, w.y2]];
+  // pins of parts that stay: a wire must not take a connection away from them
+  const fixed = new Set(items.flatMap((it, i) => (it.t === "sym" && !sel.has(i) ? pins(it, defOf(lib, it)).map((p) => key(...p)) : [])));
+  const pinned = (w: Wire) => conn.some((p) => fixed.has(key(...p)) && inside(p, w));
   // wires that move whole, and what hangs on them, until nothing more joins
   const whole = new Set<number>(items.flatMap((it, i) => (sel.has(i) && it.t === "wire" ? [i] : [])));
   for (let grew = true; grew; ) {
     grew = false;
     items.forEach((it, i) => {
       if (it.t !== "wire") return;
-      if (!whole.has(i) && ends(it).every((p) => moving.has(key(...p)))) (whole.add(i), (grew = true));
+      // (one with a resting part's pin on it stretches instead: the pin keeps its wires)
+      if (!whole.has(i) && ends(it).every((p) => moving.has(key(...p))) && !pinned(it)) (whole.add(i), (grew = true));
       if (!whole.has(i)) return;
       items.forEach((o, j) => {
         const ps: Pt[] = whole.has(j) || sel.has(j) ? [] : o.t === "wire" ? ends(o) : o.t === "flag" ? [[o.x, o.y]] : [];
-        ps.forEach((p) => inside(p, it) && !moving.has(key(...p)) && (move(p), (grew = true))); // T-legs follow
+        ps.forEach((p) => inside(p, it) && !moving.has(key(...p)) && !fixed.has(key(...p)) && (move(p), (grew = true))); // T-legs follow
       });
     });
   }

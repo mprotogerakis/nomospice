@@ -17,6 +17,7 @@ struct Lib(Mutex<Library>);
 #[tauri::command]
 async fn symbols(names: Vec<String>, dir: Option<String>, lib: tauri::State<'_, Lib>) -> Result<Vec<SymbolDef>, String> {
     let mut lib = lib.0.lock().unwrap_or_else(|e| e.into_inner());
+    lib.sync(); // library sources switched off: their symbols go
     lib.set_dir(dir.as_deref().map(std::path::Path::new), true); // a symbol saved there meanwhile counts
     names.iter().for_each(|n| _ = lib.get(n));
     Ok(lib.0.values().cloned().collect())

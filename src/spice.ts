@@ -251,7 +251,7 @@ export function analysisOptions(texts: { text: string; directive?: boolean }[]) 
   for (const { text, directive } of texts) {
     const lines = text.split("\n");
     lines.forEach((l, i) => {
-      if (!ANALYSIS.test(l.trim())) return;
+      if (!ANALYSIS.test(l.trim()) || (!directive && !plausible(l.trim()))) return;
       const more: string[] = [];
       for (const n of lines.slice(i + 1)) {
         const t = n.trim();
@@ -262,6 +262,20 @@ export function analysisOptions(texts: { text: string; directive?: boolean }[]) 
     });
   }
   return ANALYSES.flatMap(([k]) => found.find((f) => f.kind === k && f.active) ?? found.find((f) => f.kind === k) ?? []);
+}
+
+/** A comment that reads as an analysis (an alternative), not a note that starts with `.op` … */
+function plausible(line: string) {
+  const { kind, f } = parseAnalysis(line);
+  const num = (k: string) => !!f[k] && (spiceNum(f[k]) !== null || /^\{.*\}$/.test(f[k]));
+  const words = (f.rest ?? "").split(/\s+/).filter(Boolean);
+  switch (kind) {
+    case "op": return !words.length;
+    case "tran": return num("stop") && words.every((w) => /^(startup|steady|nodiscard|step|uic)$/i.test(w));
+    case "ac": case "noise": return num("fstart") && num("fstop");
+    case "dc": return num("start") && num("stop");
+    default: return true; // .tf/.pz/.sens name nodes and sources
+  }
 }
 
 /** `text` without its analysis statements (and their `+` lines): a result tab runs its own instead. */

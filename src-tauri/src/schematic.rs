@@ -130,9 +130,10 @@ pub fn sym_key(name: &str) -> String {
 /// generated for, and the symbols loaded from the schematic's folder.
 pub struct Library(pub HashMap<String, SymbolDef>, HashSet<String>, u64, Local);
 
-/// The schematic's folder and the keys of the symbols loaded from it.
+/// The schematic's folder, the keys of the symbols loaded from it, and its modification time when
+/// they were (a symbol saved or removed there changes it).
 #[derive(Default)]
-pub struct Local(Option<std::path::PathBuf>, HashSet<String>);
+pub struct Local(Option<std::path::PathBuf>, HashSet<String>, Option<std::time::SystemTime>);
 
 impl Library {
     pub fn builtin() -> Self {
@@ -145,9 +146,11 @@ impl Library {
     /// none) drops them again; `rescan` reloads the same folder (a symbol saved meanwhile).
     pub fn set_dir(&mut self, dir: Option<&std::path::Path>, rescan: bool) {
         let moved = self.3 .0.as_deref() != dir;
-        if !rescan && !moved {
+        let stamp = dir.and_then(|d| std::fs::metadata(d).and_then(|m| m.modified()).ok());
+        if !moved && (!rescan || stamp == self.3 .2) {
             return;
         }
+        self.3 .2 = stamp;
         for k in self.3 .1.drain() {
             self.0.remove(&k);
         }
@@ -175,16 +178,27 @@ impl Library {
     /// Misses are cached so netlisting never rescans the disk for the same name.
     pub fn get(&mut self, name: &str) -> Option<&SymbolDef> {
         let key = sym_key(name);
-        let g = crate::library::generation();
-        if self.2 != g {
-            // other libraries now: regenerate subckt boxes, retry what was missing
-            self.0.retain(|k, _| !k.starts_with("subckt:"));
-            self.1.clear();
-            self.2 = g;
-        }
+        self.sync();
         if self.1.contains(&key) {
             return None;
         }
+        self.load(name, key)
+    }
+
+    /// The library sources changed (generation): forget what they lent or lacked.
+    pub fn sync(&mut self) {
+        let g = crate::library::generation();
+        if self.2 != g {
+            // other libraries now: regenerate subckt boxes, drop symbols a library folder lent (it
+            // may be off now: they come back from where they are), retry what was missing
+            let local = &self.3 .1;
+            self.0.retain(|k, _| BUILTIN_SYMBOLS.iter().any(|(n, _)| n == k) || local.contains(k));
+            self.1.clear();
+            self.2 = g;
+        }
+    }
+
+    fn load(&mut self, name: &str, key: String) -> Option<&SymbolDef> {
         if let (false, Some(sub)) = (self.0.contains_key(&key), key.strip_prefix("subckt:")) {
             // a library subcircuit placed from the library browser: generated box symbol
             match crate::library::subckt_symbol(sub) {
@@ -197,7 +211,8 @@ impl Library {
             let folders = crate::library::sources().into_iter().filter(|s| s.enabled).map(|s| s.path);
             let def = ltspice_sym_dirs().into_iter().chain(folders).find_map(|dir| {
                 // folders only (the entry type comes with the listing: no stat per model file)
-                let subdirs = std::fs::read_dir(&dir).into_iter().flatten().flatten().filter(|e| e.file_type().is_ok_and(|t| t.is_dir())).map(|e| e.path());
+                let folder = |e: &std::fs::DirEntry| e.file_type().is_ok_and(|t| t.is_dir() || (t.is_symlink() && e.path().is_dir()));
+                let subdirs = std::fs::read_dir(&dir).into_iter().flatten().flatten().filter(folder).map(|e| e.path());
                 let path = std::iter::once(dir.join(name.replace('\\', "/") + ".asy"))
                     .chain(std::iter::once(dir.clone()).chain(subdirs).map(|d| d.join(&file)))
                     .find(|p| p.is_file())?;
@@ -800,7 +815,7 @@ fn meas_statement(s: &str, sensors: &[Sensor], an: &str) -> String {
         }
     }
     let s = sensor_currents(flat.trim_end(), sensors);
-    let toks = spice_tokens(&s);
+    let mut toks: Vec<String> = spice_tokens(&s).into_iter().map(str::to_string).collect();
     let low = |t: &str| t.to_ascii_lowercase();
     // a vector, V(..)/I(..) and ngspice's vdb(..), vm(..) … or a number: ngspice reads it as it is
     // (par() would turn it into a B-source, which knows none of the vdb/vm/… forms)
@@ -817,57 +832,96 @@ fn meas_statement(s: &str, sensors: &[Sensor], an: &str) -> String {
             || (v.chars().all(|c| c.is_ascii_alphanumeric() || ".+-".contains(c)) && v.starts_with(|c: char| c.is_ascii_digit() || ".+-".contains(c)) && spice_num(v).is_some())
     };
     let par = |x: &str| format!("par('{}')", x.trim().trim_matches('\''));
+    let typ = toks.get(1).map(|t| low(t)).filter(|t| TYPES_MEAS.contains(&t.as_str())).unwrap_or(an.to_string());
+    // AC: par() is a B-source, linearized there: an expression would come out silently wrong.
+    // LTspice's mag()/db()/ph()/re()/im() of a voltage are ngspice's vm/vdb/vp/vr/vi; anything else
+    // stays as written (ngspice then reports it failed rather than a wrong number)
+    let ac_vector = |x: &str| -> Option<String> {
+        let (x, l) = (x.trim(), low(x.trim()));
+        let o = l.find('(')?;
+        let f = [("mag", "vm"), ("db", "vdb"), ("ph", "vp"), ("phase", "vp"), ("re", "vr"), ("real", "vr"), ("im", "vi"), ("imag", "vi")].iter().find(|(n, _)| *n == &l[..o])?.1;
+        let inner = x.get(o + 1..x.len().checked_sub(1)?)?.trim();
+        (l.ends_with(')') && low(inner).starts_with("v(") && inner.ends_with(')') && !inner[2..inner.len() - 1].contains(['(', ')'])).then(|| format!("{f}{}", &inner[1..]))
+    };
+    let measured = |x: &str| if simple(x) { x.to_string() } else if typ == "ac" { ac_vector(x).unwrap_or(x.to_string()) } else { par(x) };
     let keyword = |t: &str| t.contains('=') || ["trig", "targ", "when", "at", "last"].contains(&low(t).as_str());
     let when_end = |t: &str| ["td=", "rise=", "fall=", "cross=", "from=", "to=", "last", "trig", "targ"].iter().any(|k| low(t).starts_with(k));
-    let mut out: Vec<String> = toks.iter().take(1).map(|t| t.to_string()).collect();
+    const OPTION: [&str; 8] = ["val", "td", "rise", "fall", "cross", "at", "from", "to"];
+    let mut out: Vec<String> = toks.iter().take(1).cloned().collect();
     let mut i = 1;
     match toks.get(1) {
         Some(t) if TYPES_MEAS.contains(&low(t).as_str()) => {
-            out.push(t.to_string());
+            out.push(t.clone());
             i = 2;
         }
         _ if !an.is_empty() => out.push(an.to_string()),
         _ => {}
     }
     if let Some(name) = toks.get(i) {
-        out.push(name.to_string());
+        out.push(name.clone());
         i += 1;
     }
     while i < toks.len() {
-        let (t, l) = (toks[i], low(toks[i]));
+        let (t, l) = (toks[i].clone(), low(&toks[i]));
         i += 1;
         match l.as_str() {
             "avg" | "rms" | "min" | "max" | "pp" | "integ" | "integral" | "find" | "deriv" | "derivative" | "trig" | "targ" => {
-                out.push(t.to_string());
+                out.push(t);
                 let start = i;
-                while i < toks.len() && !keyword(toks[i]) {
+                while i < toks.len() && !keyword(&toks[i]) {
                     i += 1;
                 }
-                let x = toks[start..i].join(" ");
-                let val = toks.get(i).filter(|_| l == "trig" || l == "targ").and_then(|v| v.get(4..).filter(|_| low(v).starts_with("val=")));
-                match val {
-                    Some(v) if !x.is_empty() && !number(v) && !low(&x).starts_with("par(") => {
-                        out.push(par(&format!("{x}-({v})")));
-                        out.push("VAL=0".into());
+                let mut x = toks[start..i].join(" ");
+                let edge = l == "trig" || l == "targ";
+                // the level: LTspice's `TRIG V(in)=0.5*V(vdd)` ([VAL]=), else a VAL= among this
+                // TRIG/TARG's options (TD=, RISE= may come first)
+                let (mut level, mut val_at) = (None, None);
+                if edge && x.is_empty() {
+                    if let Some((a, b)) = toks.get(i).and_then(|tk| tk.split_once('=')).filter(|(a, _)| !a.is_empty() && !OPTION.contains(&low(a).as_str())) {
+                        (x, level) = (a.to_string(), Some(b.to_string()));
                         i += 1;
                     }
+                }
+                if edge && level.is_none() {
+                    val_at = (i..toks.len()).take_while(|&j| toks[j].contains('=')).find(|&j| low(&toks[j]).starts_with("val="));
+                    level = val_at.map(|j| toks[j][4..].to_string());
+                }
+                match level {
+                    Some(v) if !x.is_empty() && !number(&v) && typ != "ac" && !low(&x).starts_with("par(") => {
+                        out.push(par(&format!("{x}-({v})")));
+                        match val_at {
+                            Some(j) => toks[j] = "VAL=0".into(),
+                            None => out.push("VAL=0".into()),
+                        }
+                    }
+                    Some(v) if val_at.is_none() => {
+                        out.push(measured(&x));
+                        out.push(format!("VAL={v}")); // `TRIG V(in)=1`: ngspice wants VAL=
+                    }
                     _ if x.is_empty() => {}
-                    _ => out.push(if simple(&x) { x } else { par(&x) }),
+                    _ => out.push(measured(&x)),
                 }
             }
             "when" => {
                 let start = i;
-                while i < toks.len() && !when_end(toks[i]) {
+                while i < toks.len() && !when_end(&toks[i]) {
                     i += 1;
                 }
                 let w = toks[start..i].join("");
                 match w.split_once('=') {
-                    // ngspice reads `vector=number` and `vector=vector` itself
-                    Some((a, b)) if !(simple(a) && (number(b) || simple(b))) => out.push(format!("WHEN {}=0", par(&format!("{a}-({b})")))),
-                    _ => out.push(format!("WHEN {w}")),
+                    Some((a, b)) => {
+                        let a = if typ == "ac" { ac_vector(a).unwrap_or(a.to_string()) } else { a.to_string() };
+                        // ngspice reads `vector=number` and `vector=vector` itself (and AC stays as written)
+                        if simple(&a) && (number(b) || simple(b)) || typ == "ac" {
+                            out.push(format!("WHEN {a}={b}"));
+                        } else {
+                            out.push(format!("WHEN {}=0", par(&format!("{a}-({b})"))));
+                        }
+                    }
+                    None => out.push(format!("WHEN {w}")),
                 }
             }
-            _ => out.push(t.to_string()),
+            _ => out.push(t),
         }
     }
     out.join(" ")
@@ -1702,6 +1756,13 @@ mod tests {
         for same in [".meas tran x AVG par('v(a)*v(b)')", ".meas ac x WHEN vdb(out)=vdb(in)"] {
             assert_eq!(m(same), same, "ngspice's own forms stay");
         }
+        assert_eq!(m(".meas tran t TRIG V(in)=0.5*V(vdd) RISE=1 TARG V(out)=1 RISE=1"),
+            ".meas tran t TRIG par('V(in)-(0.5*V(vdd))') VAL=0 RISE=1 TARG V(out) VAL=1 RISE=1", "LTspice's [VAL]= form");
+        assert_eq!(m(".meas tran t TRIG V(in) TD=2n VAL=0.5*V(vdd) RISE=1 TARG V(out) VAL=1"),
+            ".meas tran t TRIG par('V(in)-(0.5*V(vdd))') TD=2n VAL=0 RISE=1 TARG V(out) VAL=1", "VAL after TD=");
+        assert_eq!(m(".meas ac g MAX mag(V(out))"), ".meas ac g MAX vm(out)", "AC: no par() (linearized), ngspice's vector form");
+        assert_eq!(m(".meas ac bw WHEN db(V(out))=-3"), ".meas ac bw WHEN vdb(out)=-3");
+        assert_eq!(m(".meas ac r MAX V(out)/V(in)"), ".meas ac r MAX V(out)/V(in)", "AC: as written rather than wrong");
         let cont = ltspice_meas(".tran 1m\n.meas tran p AVG -I(V1)*V(in) ; power\n+ FROM=1m TO=2m\n.meas tran q AVG V(a)*2 $ note\n", &[]);
         assert!(cont.contains(".meas tran p AVG par('-I(V1)*V(in)') FROM=1m TO=2m") && cont.contains(".meas tran q AVG par('V(a)*2')\n"), "comments cut per line: {cont}");
         // the manual's delay and power measurements, end to end

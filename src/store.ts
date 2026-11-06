@@ -127,8 +127,8 @@ export function redo() {
 
 /** The folder whose symbols the library holds (the schematic's: its .asy are listed too). */
 let symDir: string | null | undefined;
-export async function loadSymbols(items: Item[] = [], dir = dirOf(get().path)) {
-  const moved = dir !== symDir; // another folder: its own symbols instead of the last one's
+export async function loadSymbols(items: Item[] = [], dir = dirOf(get().path), force = false) {
+  const moved = dir !== symDir || force; // another folder (or other libraries): ask again for all
   const names = [...new Set(items.flatMap((it) => (it.t === "sym" ? [it.sym] : [])))].filter((n) => moved || !get().lib[symKey(n)]);
   if (Object.keys(get().lib).length && !names.length && !moved) return;
   symDir = dir;
@@ -150,8 +150,7 @@ export async function refreshGit() {
 
 /** The library sources changed: generated subckt boxes may differ now. */
 export async function refreshLibrarySymbols() {
-  set({ lib: Object.fromEntries(Object.entries(get().lib).filter(([k]) => !k.startsWith("subckt:"))) });
-  await loadSymbols(get().items);
+  await loadSymbols(get().items, dirOf(get().path), true); // the backend's set replaces ours
 }
 
 export async function loadDoc(items: Item[], path: string | null) {
