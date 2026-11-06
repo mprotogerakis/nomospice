@@ -11,6 +11,11 @@ export const useUpdate = create<{ update: Update | null; busy: string }>(() => (
 /** Looks for a newer release; `manual` (About dialog) also reports "up to date" and errors. */
 export async function checkForUpdate(manual = false) {
   if (import.meta.env.DEV && !manual) return; // dev builds are not the released app
+  // releases (and latest.json) cover macOS and Windows; Linux builds come from CI or source
+  if (/linux/i.test(navigator.userAgent) && !/android/i.test(navigator.userAgent)) {
+    if (manual) await message("Automatic updates are available for the macOS and Windows releases; on Linux, build the new version from source.", { title: "nomospice" });
+    return;
+  }
   try {
     const update = await check();
     useUpdate.setState({ update });

@@ -26,8 +26,13 @@ export function SimDialog({ index }: { index?: number }) {
   const v = (k: string) => f[k] ?? "";
   const set = (k: string) => (val: string) => setForms({ ...forms, [kind]: { ...f, [k]: val } });
   const line = formatAnalysis(kind, f);
+  // unchanged (same kind, same line as read): the directive stays exactly as written
+  const [pristine] = useState(() => formatAnalysis(init.kind, init.f));
+  const unchanged = idx >= 0 && kind === init.kind && line === pristine;
+  const edited = unchanged ? lines.join("\n") : lines.map((l, j) => (j === li ? line : l)).join("\n");
 
   const submit = () => {
+    if (unchanged) return closeDialog();
     if (idx >= 0) {
       const it = items[idx] as Extract<Item, { t: "text" }>;
       commit(items.map((x, i) => (i === idx ? { ...it, text: lines.map((l, j) => (j === li ? line : l)).join("\n") } : x)));
@@ -131,7 +136,7 @@ export function SimDialog({ index }: { index?: number }) {
       {(v("rest") || (kind === init.kind && init.f.rest)) && <TextField label="Other options" value={v("rest")} set={set("rest")} hint="kept as written" />}
       <SpiceLine>{line}</SpiceLine>
       {idx >= 0 && (
-        <Button type="button" size="sm" className="self-start" onClick={() => useS.setState({ dialog: { k: "edit", index: idx, raw: true, draft: lines.map((l, j) => (j === li ? line : l)).join("\n") } })}>Edit as text</Button>
+        <Button type="button" size="sm" className="self-start" onClick={() => useS.setState({ dialog: { k: "edit", index: idx, raw: true, draft: edited } })}>Edit as text</Button>
       )}
     </Modal>
   );

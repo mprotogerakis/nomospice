@@ -15,11 +15,12 @@ MAC=$OUT/nomospice_${VERSION}_aarch64.app.tar.gz
 [ -f "$OUT/nomospice_${VERSION}_aarch64.dmg" ] && [ -f "$MAC.sig" ] || { echo "run scripts/macos-release.sh for $VERSION first" >&2; exit 1; }
 [ "$(git rev-parse "@{u}")" = "$SHA" ] || { echo "push $SHA first" >&2; exit 1; }
 
-# Windows installers from the successful CI run of this commit
-RUN=$(gh run list -R $REPO --commit "$SHA" --json databaseId,conclusion --jq '[.[] | select(.conclusion == "success")][0].databaseId')
-[ -n "$RUN" ] && [ "$RUN" != null ] || { echo "no successful CI run for $SHA (yet)" >&2; exit 1; }
+# Windows installers from the newest completed CI run of this commit (the Windows job uploads them
+# when it succeeds, even if another OS's job failed)
+RUN=$(gh run list -R $REPO --commit "$SHA" --json databaseId,status --jq '[.[] | select(.status == "completed")][0].databaseId')
+[ -n "$RUN" ] && [ "$RUN" != null ] || { echo "no completed CI run for $SHA (yet)" >&2; exit 1; }
 WIN=$(mktemp -d)
-gh run download "$RUN" -R $REPO -n nomospice-windows-latest -D "$WIN"
+gh run download "$RUN" -R $REPO -n nomospice-windows-latest -D "$WIN" || { echo "run $RUN has no Windows installers" >&2; exit 1; }
 EXE=$(find "$WIN" -name "nomospice_${VERSION}_x64-setup.exe" | head -1)
 MSI=$(find "$WIN" -name "nomospice_${VERSION}_x64_*.msi" | head -1)
 [ -n "$EXE" ] && [ -n "$MSI" ] || { echo "the CI run has no $VERSION installers" >&2; exit 1; }

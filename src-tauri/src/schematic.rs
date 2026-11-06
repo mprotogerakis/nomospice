@@ -414,6 +414,9 @@ pub fn vary(text: &str, target: &str, value: f64) -> Option<String> {
     let param_value = |line: &str, low: &str| {
         let sp = token_spans(line);
         for (i, &(a, e)) in sp.iter().enumerate() {
+            if low[a..].starts_with(';') || low[a..].starts_with('$') {
+                break; // an inline comment: `.param a=1 ; R1=5` does not define R1
+            }
             // `+Rb=10k`: a continuation's first token carries the `+`
             let a = if low[a..e].starts_with('+') && e > a + 1 { a + 1 } else { a };
             let tok = &low[a..e];
@@ -440,10 +443,11 @@ pub fn vary(text: &str, target: &str, value: f64) -> Option<String> {
         let low = line.to_ascii_lowercase();
         let first = low.split_whitespace().next().unwrap_or("");
         match first { ".subckt" => sub += 1, ".ends" => sub -= 1, _ => {} }
-        // `+` continues a .param, also across comment lines in between
-        in_param = first == ".param" || (in_param && (first.starts_with('+') || first.starts_with('*')));
+        // `+` continues a .param, also across comment and blank lines in between (SPICE skips those)
+        let skip = first.is_empty() || first.starts_with('*');
+        in_param = first == ".param" || (in_param && (first.starts_with('+') || skip));
         let top = sub == 0 && first != ".ends";
-        (line, low, top, in_param)
+        (line, low, top, in_param && !skip) // a comment line is never a definition
     }).collect();
     // a .param of that name wins over a part of the same name (pz_sallen_key: `.param Rb`, part Rb = {Rb})
     let params = lines.iter().any(|(l, low, top, p)| *top && *p && param_value(l, low).is_some());
@@ -1326,6 +1330,10 @@ mod tests {
         assert!(vary(".param µa=1 a=2\n", "a", 3.0).unwrap().contains("µa=1 a=3e0"));
         assert!(vary(".param Ra=1k\n+ Rb=10k\nR5 a b 1k\n", "Rb", 2e4).unwrap().contains("+ Rb=2e4"), "continuation line");
         assert!(vary(".param Ra=1k\n* note\n+Rb=10k\n", "Rb", 2e4).unwrap().contains("+Rb=2e4"), "no space after +, comment between");
+        assert!(vary(".param Ra=1k\n\n+ Rb=10k\n", "Rb", 2e4).unwrap().contains("+ Rb=2e4"), "blank line between");
+        // comments are not definitions: the part R1 is varied
+        let c = vary(".param a=1 ; R1=5\n* R1=old value\nR1 x y 1k\n", "R1", 2e3).unwrap();
+        assert!(c.contains("R1 x y 2e3") && c.contains("; R1=5") && c.contains("* R1=old value"), "{c}");
         assert!(vary("R1 a b 1k\n+ tc=1\n", "tc", 2.0).is_none(), "a part's continuation is not a .param");
         for l in [".param x = 5\n", ".param x =5\n", ".param x= 5\n"] {
             assert!(vary(l, "x", 7.0).unwrap().contains("7e0") && !vary(l, "x", 7.0).unwrap().contains('5'), "{l}");

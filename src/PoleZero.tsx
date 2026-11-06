@@ -165,6 +165,8 @@ function Sidebar({ poles, zeros, locus, setLocus, error, setError }: {
     ...circuitInsts(items, nets, lib).filter((x) => "RCL".includes(x.prefix || "-")).map((x) => x.inst),
   ])], [items, lib, nets]);
   const [f, setF] = useState({ target: targets[0] ?? "", from: "", to: "", steps: "40", scale: "log" });
+  // the names arrive with the netlist (it may lag the run): fill in the first one if still empty
+  useEffect(() => { if (targets[0]) setF((x) => (x.target ? x : { ...x, target: targets[0] })); }, [targets]);
 
   const compute = async () => {
     const [a, b, n] = [spiceNum(f.from), spiceNum(f.to), Math.round(spiceNum(f.steps) ?? 0)];

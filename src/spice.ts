@@ -117,7 +117,7 @@ export function parseSource(...parts: (string | undefined)[]): Source {
     if (fn && !s.func) {
       s.func = (fn[1].toUpperCase() === "SIN" ? "SINE" : fn[1].toUpperCase()) as Func;
       s.args = tokens(argCommas(fn[2]));
-    } else if (/^dc$/i.test(w) && t[i + 1]) s.dc = t[++i][0];
+    } else if (/^dc$/i.test(w) && t[i + 1] && isNum(t[i + 1][0])) s.dc = t[++i][0];
     else if (/^ac$/i.test(w) && t[i + 1] && isNum(t[i + 1][0])) {
       s.acMag = t[++i][0];
       if (t[i + 1] && isNum(t[i + 1][0])) s.acPhase = t[++i][0];
@@ -134,8 +134,9 @@ export function parseSource(...parts: (string | undefined)[]): Source {
 export function sourceRoundTrips(...parts: (string | undefined)[]): boolean {
   const norm = (s: string) => tokens(argCommas(s).replace(/\bsin\(/gi, "SINE(").replace(/(^|\s)dc\s+/gi, "$1").toUpperCase()).map((t) => t.replace(/\s+/g, " ")).sort().join(" ");
   const p = parseSource(...parts);
-  // a waveform the form did not recognise (`SINE (…)`, `PWL file=…`) would show as DC: text instead
-  if (/\(|\b(sine?|pulse|exp|sffm|pwl|am|trnoise|trrandom)\b/i.test(p.vrest)) return false;
+  // a waveform the form did not recognise (`SINE (…)`, `PWL file=…`, `DC PULSE(…)`) would show as DC,
+  // and a stray number (`AC 1 2 3`) would become the DC value when written back: text instead
+  if (/\(|\b(sine?|pulse|exp|sffm|pwl|am|trnoise|trrandom|dc)\b/i.test(p.vrest) || tokens(p.vrest).some(isNum)) return false;
   const f = formatSource(p);
   return norm(parts.filter(Boolean).join(" ") || "0") === norm(`${f.Value} ${f.Value2} ${f.SpiceLine}`); // nothing: DC 0
 }

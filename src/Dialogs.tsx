@@ -6,7 +6,7 @@ import type { Item, LibEntry, LibSource } from "./types";
 import { addTrace, commit, loadSymbols, placePart, placeSymbol, refreshLibrarySymbols, useS } from "./store";
 import { defOf, vexpr } from "./geom";
 import { Button } from "./ui/button";
-import { closeDialog, Field, FIELD, Modal, numHelp, TextField } from "./ui/dialog";
+import { closeDialog as close, Field, FIELD, Modal, numHelp, TextField } from "./ui/dialog";
 import { SourceEditor } from "./SourceEditor";
 import { SimDialog } from "./SimDialog";
 import { DirectiveDialog } from "./DirectiveDialog";
@@ -15,7 +15,6 @@ import { cn } from "@/lib/utils";
 import thirdParty from "./third-party.json";
 import { checkForUpdate } from "./updater";
 
-const close = closeDialog;
 
 /** Edits a part or a net label; `onDone` receives the result (commit in place, or start placing it).
  *  Comments and directives use DirectiveDialog. */
@@ -34,7 +33,8 @@ function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: 
   const source = it.t === "sym" && /^[VI]$/i.test(def?.prefix ?? "");
   // R, C, L: show how SPICE reads a single value (1M is a milliohm, 10F ten femtofarad)
   const unit = ({ R: "Ω", C: "F", L: "H" } as Record<string, string>)[def?.prefix?.[0]?.toUpperCase() ?? ""];
-  const valueHelp = unit && !/\s/.test(attr("Value").trim()) ? numHelp(attr("Value"), unit, (v) => setAttr("Value", v)) : null;
+  // a plain value only: not `10µ Rser=0.1`, not LTspice's behavioural `R=V(a)*1k`
+  const valueHelp = unit && !/[\s=(]/.test(attr("Value").trim()) ? numHelp(attr("Value"), unit, (v) => setAttr("Value", v)) : null;
   return (
     <Modal title={title} onSubmit={done} wide={source ? "xl" : false}>
       {it.t === "sym" && (
@@ -310,8 +310,6 @@ function AboutDialog() {
   );
 }
 
-/** The directive that holds the schematic's analysis (the toolbar's "Edit simulation command"). */
-const analysisItem = (items: Item[]) => items.findIndex((x) => holdsAnalysis(x));
 
 export const Dialogs = memo(function Dialogs() {
   const dialog = useS((s) => s.dialog);
@@ -339,7 +337,7 @@ export const Dialogs = memo(function Dialogs() {
       return <ItemForm item={dialog.item} title="Net Name" onDone={place} />;
     }
     case "sim": {
-      const i = analysisItem(items);
+      const i = items.findIndex((x) => holdsAnalysis(x));
       return i >= 0 ? directive(i) : <SimDialog />;
     }
     case "parts": return <PartsDialog replace={dialog.replace} kind0={dialog.kind} />;

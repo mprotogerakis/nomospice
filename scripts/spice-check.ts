@@ -96,4 +96,5 @@ assert.ok(sample(parseSource("EXP(0 1 0 0)"))!.every(([, v]) => Number.isFinite(
 assert.ok(sourceRoundTrips("") && sourceRoundTrips(undefined, "", "")); // an empty source is DC 0, not text
 assert.equal(analysisRoundTrips(".ac list 1k 2k 5k"), false); // the form has no `list` sweep
 assert.ok(holdsAnalysis({ t: "text", directive: true, text: ".param a=1\n.tran 1m" }) && !holdsAnalysis({ t: "text", directive: false, text: ".tran 1m" }));
+for (const v of ["AC 1 2 3", "DC PULSE(0 5 0 1n 1n 1m 2m)"]) assert.equal(sourceRoundTrips(v), false, v); // would change meaning
 console.log("spice-check: ok");
