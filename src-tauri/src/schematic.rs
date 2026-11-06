@@ -442,7 +442,7 @@ pub fn vary(text: &str, target: &str, value: f64) -> Option<String> {
     let lines: Vec<(&str, String, bool, bool)> = text.lines().map(|line| {
         let low = line.to_ascii_lowercase();
         let first = low.split_whitespace().next().unwrap_or("");
-        match first { ".subckt" => sub += 1, ".ends" => sub -= 1, _ => {} }
+        match first { ".subckt" => sub += 1, ".ends" => sub = (sub - 1).max(0), _ => {} } // a stray .ends must not hide the rest
         // `+` continues a .param, also across comment and blank lines in between (SPICE skips those)
         let skip = first.is_empty() || first.starts_with('*');
         in_param = first == ".param" || (in_param && (first.starts_with('+') || skip));
@@ -1331,6 +1331,7 @@ mod tests {
         assert!(vary(".param Ra=1k\n+ Rb=10k\nR5 a b 1k\n", "Rb", 2e4).unwrap().contains("+ Rb=2e4"), "continuation line");
         assert!(vary(".param Ra=1k\n* note\n+Rb=10k\n", "Rb", 2e4).unwrap().contains("+Rb=2e4"), "no space after +, comment between");
         assert!(vary(".param Ra=1k\n\n+ Rb=10k\n", "Rb", 2e4).unwrap().contains("+ Rb=2e4"), "blank line between");
+        assert!(vary(".ends\nR1 a b 1k\n", "R1", 2.0).unwrap().contains("R1 a b 2e0"), "stray .ends");
         // comments are not definitions: the part R1 is varied
         let c = vary(".param a=1 ; R1=5\n* R1=old value\nR1 x y 1k\n", "R1", 2e3).unwrap();
         assert!(c.contains("R1 x y 2e3") && c.contains("; R1=5") && c.contains("* R1=old value"), "{c}");

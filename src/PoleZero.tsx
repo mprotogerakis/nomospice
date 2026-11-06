@@ -86,7 +86,7 @@ export const PoleZero = memo(function PoleZero({ run }: { run: Run }) {
   const onWheel = (e: React.WheelEvent) => {
     const r = host.current!.getBoundingClientRect(), at = val(e.clientX - r.left, e.clientY - r.top);
     const f = Math.exp(-e.deltaY * 0.002), k = v.k * f;
-    if (f > 1 && size.w / k < Math.max(Math.abs(v.cx), Math.abs(v.cy)) * 1e-6) return; // no deeper than a millionth of the values
+    if (f > 1 && k > base * 1e6) return; // at most a million times the fitted view (also around the origin)
     setView({ k, cx: at.re - (at.re - v.cx) / f, cy: at.im - (at.im - v.cy) / f });
   };
 
@@ -157,7 +157,8 @@ function Sidebar({ poles, zeros, locus, setLocus, error, setError }: {
   const items = useS((s) => s.items);
   const lib = useS((s) => s.lib);
   const nets = useS(currentNets); // null while the netlist lags the items: no index-aligned names then
-  const running = useS((s) => s.running);
+  // its own busy state: the global `running` would make simulate() drop a Run meanwhile
+  const [running, setRunning] = useState(false);
   // sweepable: .param names and R/C/L instances
   const targets = useMemo(() => [...new Set([
     ...items.flatMap((it) => (it.t === "text" && it.directive ? it.text.split("\n") : [])).filter((l) => /^\s*\.param\b/i.test(l))
@@ -178,7 +179,7 @@ function Sidebar({ poles, zeros, locus, setLocus, error, setError }: {
     const gen = docId();
     const values = Array.from({ length: n }, (_, i) => (f.scale === "log" ? a * (b / a) ** (i / (n - 1)) : a + ((b - a) * i) / (n - 1)));
     setError("");
-    useS.setState({ running: true });
+    setRunning(true);
     try {
       const { items, path } = useS.getState();
       // a step is null where .pz failed (drawn as a gap); fewer steps than values: halted
@@ -190,7 +191,7 @@ function Sidebar({ poles, zeros, locus, setLocus, error, setError }: {
     } catch (e) {
       setError(String(e));
     } finally {
-      useS.setState({ running: false });
+      setRunning(false);
     }
   };
   // conjugate pairs once: σ ± jω
@@ -226,6 +227,7 @@ function Sidebar({ poles, zeros, locus, setLocus, error, setError }: {
       <Select compact label="Spacing" value={f.scale} set={(scale) => setF({ ...f, scale })} options={[["log", "logarithmic"], ["lin", "linear"]]} />
       <div className="flex gap-2">
         <Button type="button" variant="primary" disabled={running} onClick={compute}>{running ? "Computing…" : "Draw root locus"}</Button>
+        {running && <Button type="button" onClick={() => void invoke("halt")}>Halt</Button>}
         {!!locus && <Button type="button" onClick={() => setLocus(null)}>Clear</Button>}
       </div>
       {error && <p className="whitespace-pre-wrap text-2xs text-status-danger">{error}</p>}

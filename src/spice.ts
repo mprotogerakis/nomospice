@@ -29,7 +29,7 @@ export const isNum = (t: string) => /^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?[a-zµμ
 
 /** Suffix -> power of ten (mil: 25.4 µm). Negative powers divide, so 10u is exactly 1e-5. */
 const SUFFIX: [RegExp, number][] = [
-  [/^meg/, 6], [/^t/, 12], [/^g/, 9], [/^k/, 3], [/^m/, -3], [/^[uµμ]/, -6], [/^n/, -9], [/^p/, -12], [/^f/, -15],
+  [/^meg/, 6], [/^t/, 12], [/^g/, 9], [/^k/, 3], [/^m/, -3], [/^[uµμ]/, -6], [/^n/, -9], [/^p/, -12], [/^f/, -15], [/^a/, -18],
 ];
 /** A SPICE number (`4.7k`, `1Meg`, `10uF`); null for expressions, names and junk. */
 export function spiceNum(s: string): number | null {
@@ -52,6 +52,7 @@ export function numInfo(s: string, unit = ""): { text: string; warn?: string } |
   const tail = v.match(/[a-zµμ]+$/i)?.[0] ?? "";
   const warn = /^M/.test(tail) && !/^(meg|mil)/i.test(tail) ? "M is milli in SPICE: write Meg for mega"
     : /^F/.test(tail) ? "F is femto in SPICE (write 10u, not 10F)"
+    : /^a/i.test(tail) ? "a is atto (1e-18) in SPICE: for amperes write the number alone (1, not 1A)"
     : undefined;
   return { text: `= ${si(n, unit)}`, warn };
 }
@@ -116,7 +117,7 @@ const argCommas = (s: string) => {
 export function parseSource(...parts: (string | undefined)[]): Source {
   const s: Source = { dc: "", func: "", args: [], acMag: "", acPhase: "", rser: "", cpar: "", vrest: "", rest: "" };
   // tokens of Value first, then Value2 and SpiceLine; `inValue` tells where an unknown one goes
-  const t = parts.flatMap((p, k) => tokens(p ?? "").map((w) => [w, k === 0] as const));
+  const t = parts.flatMap((p, k) => tokens((p ?? "").replace(/\s*=\s*/g, "=")).map((w) => [w, k === 0] as const)); // `Rser = 50` is `Rser=50`
   const vrest: string[] = [], rest: string[] = [];
   for (let i = 0; i < t.length; i++) {
     const [w, inValue] = t[i];
@@ -140,7 +141,7 @@ export function parseSource(...parts: (string | undefined)[]): Source {
 /** Whether the source form writes these attributes back with the same meaning (token order,
  *  SIN/SINE, a leading DC and commas in argument lists do not matter); otherwise it opens as text. */
 export function sourceRoundTrips(...parts: (string | undefined)[]): boolean {
-  const norm = (s: string) => tokens(argCommas(s).replace(/\bsin\(/gi, "SINE(").replace(/(^|\s)dc\s+/gi, "$1").toUpperCase()).map((t) => t.replace(/\s+/g, " ")).sort().join(" ");
+  const norm = (s: string) => tokens(argCommas(s.replace(/\s*=\s*/g, "=")).replace(/\bsin\(/gi, "SINE(").replace(/(^|\s)dc\s+/gi, "$1").toUpperCase()).map((t) => t.replace(/\s+/g, " ")).sort().join(" ");
   const p = parseSource(...parts);
   // a waveform the form did not recognise (`SINE (…)`, `PWL file=…`, `DC PULSE(…)`) would show as DC,
   // and a stray number (`AC 1 2 3`) would become the DC value when written back: text instead
@@ -234,7 +235,8 @@ export function sample(s: Source, n = 240): [number, number][] | null {
 export type Analysis = "tran" | "ac" | "dc" | "noise" | "op" | "tf" | "pz" | "sens";
 export const ANALYSIS = /^\.(tran|ac|dc|op|noise|tf|pz|sens)\b/i;
 /** The first analysis line of a directive text (the one the simulation dialog edits). */
-export const analysisLine = (text: string) => text.split("\n").find((l) => ANALYSIS.test(l.trim()));
+export const analysisIndex = (lines: string[]) => lines.findIndex((l) => ANALYSIS.test(l.trim()));
+export const analysisLine = (text: string) => { const l = text.split("\n"); return l[analysisIndex(l)] as string | undefined; };
 /** Whether a schematic item is a directive holding an analysis (the one the simulation dialog edits). */
 export const holdsAnalysis = (it?: { t: string; directive?: boolean; text?: string }) => it?.t === "text" && !!it.directive && !!analysisLine(it.text ?? "");
 export type Fields = Record<string, string>;

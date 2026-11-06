@@ -100,4 +100,7 @@ for (const v of ["AC 1 2 3", "DC PULSE(0 5 0 1n 1n 1m 2m)"]) assert.equal(source
 assert.equal(formatSource(parseSource("SINE(0 'max(a,b)' 1k)")).Value, "SINE(0 'max(a,b)' 1k)"); // quoted commas stay
 assert.equal(formatSource({ ...parseSource("SINE(0 1 1k)"), args: [] }).Value, "SINE(0 1)"); // required ones: the shown defaults
 assert.equal(sample({ ...parseSource("SINE(0 1 1k)"), args: [] }), null); // frequency left to SPICE (from .tran): no preview
+assert.equal(spiceNum("1a"), 1e-18); // ngspice reads a as atto (checked against the shared library)
+assert.match(numInfo("1A", "A")!.warn!, /atto/);
+assert.deepEqual([parseSource(undefined, undefined, "Rser = 50").rser, parseSource(undefined, undefined, "Rser = 50").rest], ["50", ""]);
 console.log("spice-check: ok");

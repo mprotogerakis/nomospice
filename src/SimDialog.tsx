@@ -2,7 +2,7 @@
 import { useState } from "react";
 import type { Item } from "./types";
 import { commit, useS } from "./store";
-import { analysisLine, holdsAnalysis, formatAnalysis, parseAnalysis, type Analysis, type Fields } from "./spice";
+import { analysisIndex, holdsAnalysis, formatAnalysis, parseAnalysis, type Analysis, type Fields } from "./spice";
 import { CircuitLists, Tabs, closeDialog, Field, Modal, NumField, Section, Select, SpiceLine, TextField } from "./ui/dialog";
 import { Button } from "./ui/button";
 
@@ -18,7 +18,7 @@ export function SimDialog({ index }: { index?: number }) {
   const items = useS((s) => s.items);
   const idx = index !== undefined && holdsAnalysis(items[index]) ? index : items.findIndex((it) => holdsAnalysis(it));
   const lines = idx >= 0 && items[idx].t === "text" ? items[idx].text.split("\n") : [];
-  const li = lines.indexOf(analysisLine(lines.join("\n")) ?? "\u0000"); // the line Dialogs decided on
+  const li = analysisIndex(lines); // the same rule Dialogs used to pick this dialog
   const [init] = useState(() => parseAnalysis(li >= 0 ? lines[li] : ".tran 1m"));
   const [kind, setKind] = useState<Analysis>(init.kind);
   const [forms, setForms] = useState<Partial<Record<Analysis, Fields>>>({ [init.kind]: init.f });

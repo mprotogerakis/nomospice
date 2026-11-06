@@ -162,16 +162,24 @@ struct Sim {
     log: Vec<String>,
 }
 
+/// The deck ngspice runs for `items`: the netlist with current sensors, includes inlined and filtered
+/// (`prepare`). Simulation and root locus share it, so the locus runs the circuit the plot shows.
+fn sim_deck(items: &[Item], dir: Option<&str>, lib: &mut Library, warnings: &mut Vec<String>) -> schematic::Prepared {
+    let sim = schematic::netlist_for_sim(items, lib);
+    schematic::prepare(&sim.text, dir.map(std::path::Path::new), warnings).with_sensors(sim.sensors)
+}
+
 /// `dir`: folder of the .asc, for relative `.include`/`.lib` paths.
 #[tauri::command]
 async fn simulate(items: Vec<Item>, dir: Option<String>, lib: tauri::State<'_, Lib>) -> Result<Sim, String> {
     ngspice::arm(); // a Halt pressed from here on (netlisting, include expansion) still counts
     // the UI gets the clean netlist (same nets/insts/probes); the one with current sensors runs
-    let (mut netlist, sim) = {
+    let (netlist, prepared) = {
         let mut lib = lib.0.lock().unwrap_or_else(|e| e.into_inner());
-        (schematic::netlist(&items, &mut lib), schematic::netlist_for_sim(&items, &mut lib))
+        let mut netlist = schematic::netlist(&items, &mut lib);
+        let deck = sim_deck(&items, dir.as_deref(), &mut lib, &mut netlist.warnings);
+        (netlist, deck)
     };
-    let prepared = schematic::prepare(&sim.text, dir.as_deref().map(std::path::Path::new), &mut netlist.warnings).with_sensors(sim.sensors);
     let simulated = prepared.text().to_string();
     let res = tauri::async_runtime::spawn_blocking(move || ngspice::run(&prepared)).await.map_err(|e| e.to_string())?;
     Ok(match res {
@@ -186,8 +194,7 @@ async fn simulate(items: Vec<Item>, dir: Option<String>, lib: tauri::State<'_, L
 #[tauri::command]
 async fn root_locus(items: Vec<Item>, dir: Option<String>, target: String, values: Vec<f64>, lib: tauri::State<'_, Lib>) -> Result<Vec<Option<Vec<(f64, f64)>>>, String> {
     ngspice::arm();
-    let sim = schematic::netlist_for_sim(&items, &mut lib.0.lock().unwrap_or_else(|e| e.into_inner()));
-    let deck = schematic::prepare(&sim.text, dir.as_deref().map(std::path::Path::new), &mut vec![]).with_sensors(sim.sensors);
+    let deck = sim_deck(&items, dir.as_deref(), &mut lib.0.lock().unwrap_or_else(|e| e.into_inner()), &mut vec![]);
     if !deck.text().lines().any(|l| l.trim_start().to_lowercase().starts_with(".pz")) {
         return Err("the schematic has no .pz analysis (Simulation command → Poles/zeros)".into());
     }
@@ -204,7 +211,6 @@ async fn root_locus(items: Vec<Item>, dir: Option<String>, target: String, value
                 // aborted by ngspice itself (no convergence near a crossing): a gap, the sweep goes on
                 Ok(run) if run.aborted => steps.push(None),
                 Ok(run) => steps.push(Some(run.op.into_iter().filter(|o| o.0.starts_with("pole")).map(|o| (o.1, o.2)).collect())),
-                Err(_) if ngspice::halted() => break, // the step Halt interrupted is not a failed .pz
                 Err(log) => {
                     first_error.get_or_insert(log.join("\n"));
                     steps.push(None);
