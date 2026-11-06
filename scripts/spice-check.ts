@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import {
   formatAnalysis, formatIc, formatInclude, formatMeas, formatModel, formatParams, formatSource, numInfo, parseAnalysis,
-  parseIc, parseInclude, parseMeas, parseModel, parseParams, parseSource, sample, spiceNum, directiveKind, analysisRoundTrips, portablePaths, sourceRoundTrips,
+  parseIc, parseInclude, parseMeas, parseModel, parseParams, parseSource, sample, spiceNum, directiveKind, analysisRoundTrips, portablePaths, sourceRoundTrips, holdsAnalysis,
 } from "../src/spice.ts";
 
 // numbers and the classic pitfalls
@@ -94,4 +94,6 @@ assert.equal(formatInclude(false, parseInclude(".inc 'x.lib'").path, ""), '.incl
 assert.deepEqual(formatSource(parseSource("PWL(0 0 1m 1) r=0", "AC 1")), { Value: "PWL(0 0 1m 1) r=0", Value2: "AC 1", SpiceLine: "" });
 assert.ok(sample(parseSource("EXP(0 1 0 0)"))!.every(([, v]) => Number.isFinite(v))); // tau 0: no NaN
 assert.ok(sourceRoundTrips("") && sourceRoundTrips(undefined, "", "")); // an empty source is DC 0, not text
+assert.equal(analysisRoundTrips(".ac list 1k 2k 5k"), false); // the form has no `list` sweep
+assert.ok(holdsAnalysis({ t: "text", directive: true, text: ".param a=1\n.tran 1m" }) && !holdsAnalysis({ t: "text", directive: false, text: ".tran 1m" }));
 console.log("spice-check: ok");

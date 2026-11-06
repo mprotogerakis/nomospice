@@ -10,7 +10,7 @@ import { closeDialog, Field, FIELD, Modal, numHelp, TextField } from "./ui/dialo
 import { SourceEditor } from "./SourceEditor";
 import { SimDialog } from "./SimDialog";
 import { DirectiveDialog } from "./DirectiveDialog";
-import { analysisLine, analysisRoundTrips, tokens } from "./spice";
+import { analysisLine, analysisRoundTrips, holdsAnalysis, tokens } from "./spice";
 import { cn } from "@/lib/utils";
 import thirdParty from "./third-party.json";
 
@@ -309,7 +309,7 @@ function AboutDialog() {
 }
 
 /** The directive that holds the schematic's analysis (the toolbar's "Edit simulation command"). */
-const analysisItem = (items: Item[]) => items.findIndex((x) => x.t === "text" && x.directive && !!analysisLine(x.text));
+const analysisItem = (items: Item[]) => items.findIndex((x) => holdsAnalysis(x));
 
 export const Dialogs = memo(function Dialogs() {
   const dialog = useS((s) => s.dialog);

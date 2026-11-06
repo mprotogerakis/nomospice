@@ -45,7 +45,7 @@ export function SourceEditor({ attrs, setAttrs, current }: { attrs: Attrs; setAt
         <TextField label="Value2" value={attrs.Value2 ?? ""} set={(v) => setAttrs({ ...attrs, Value2: v })} hint="e.g. AC 1" />
         <TextField label="SpiceLine" value={attrs.SpiceLine ?? ""} set={(v) => setAttrs({ ...attrs, SpiceLine: v })} hint="e.g. Rser=50" />
         {sourceRoundTrips(attrs.Value, attrs.Value2, attrs.SpiceLine)
-          ? <Button type="button" size="sm" className="self-start" onClick={() => { setSrc(parseSource(attrs.Value, attrs.Value2, attrs.SpiceLine)); setText(false); }}>Back to the form</Button>
+          ? <Button type="button" size="sm" className="self-start" onClick={() => { setSrc(parseSource(attrs.Value, attrs.Value2, attrs.SpiceLine)); setMore(null); setText(false); }}>Back to the form</Button>
           : <p className="text-2xs text-text-tertiary">The form cannot show this source without changing it, so it stays text.</p>}
       </>
     );

@@ -2,7 +2,8 @@
 // and suggestion lists (nets, sources) from the open schematic.
 import { useEffect, useMemo, useRef } from "react";
 import { currentNets, useS } from "../store";
-import { defOf } from "../geom";
+import { defOf, type Lib } from "../geom";
+import type { Item, Netlist } from "../types";
 import { numInfo } from "../spice";
 import { Button } from "./button";
 import { FIELD_BASE, FIELD_FOCUS } from "./focus";
@@ -133,6 +134,10 @@ export const SpiceLine = ({ children }: { children: React.ReactNode }) => (
   <code className="select-text whitespace-pre-wrap break-all rounded-control border border-border bg-surface-raised px-2 py-1 font-mono text-xs text-text-strong">{children}</code>
 );
 
+/** The parts of the schematic: SPICE instance name (from the netlist when current) and prefix letter. */
+export const circuitInsts = (items: Item[], nets: Netlist | null, lib: Lib) =>
+  items.flatMap((it, i) => (it.t === "sym" ? [{ inst: nets?.insts[i] || it.attrs.InstName || "", prefix: defOf(lib, it)?.prefix?.[0]?.toUpperCase() ?? "" }] : [])).filter((x) => x.inst);
+
 /** <datalist>s for the fields: "nets", "sources" (V/I), "sweepable" (sources, R, TEMP), "vexprs" (V(net)). */
 export function CircuitLists() {
   const items = useS((s) => s.items);
@@ -140,9 +145,9 @@ export function CircuitLists() {
   const lib = useS((s) => s.lib);
   const { names, sources, sweepable } = useMemo(() => {
     const names = [...new Set((nets?.nets ?? []).flat().filter(Boolean))].sort((a, b) => (a === "0" ? -1 : b === "0" ? 1 : a.localeCompare(b, undefined, { numeric: true })));
-    const insts = items.flatMap((it, i) => (it.t === "sym" ? [{ inst: nets?.insts[i] || it.attrs.InstName || "", prefix: defOf(lib, it)?.prefix?.[0]?.toUpperCase() ?? "" }] : []));
-    const sources = insts.filter((x) => x.inst && (x.prefix === "V" || x.prefix === "I")).map((x) => x.inst);
-    const sweepable = [...sources, ...insts.filter((x) => x.inst && x.prefix === "R").map((x) => x.inst), "TEMP"];
+    const insts = circuitInsts(items, nets, lib);
+    const sources = insts.filter((x) => x.prefix === "V" || x.prefix === "I").map((x) => x.inst);
+    const sweepable = [...sources, ...insts.filter((x) => x.prefix === "R").map((x) => x.inst), "TEMP"];
     return { names, sources, sweepable };
   }, [items, nets, lib]);
   return (

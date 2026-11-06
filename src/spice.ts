@@ -225,6 +225,8 @@ export type Analysis = "tran" | "ac" | "dc" | "noise" | "op" | "tf" | "pz" | "se
 export const ANALYSIS = /^\.(tran|ac|dc|op|noise|tf|pz|sens)\b/i;
 /** The first analysis line of a directive text (the one the simulation dialog edits). */
 export const analysisLine = (text: string) => text.split("\n").find((l) => ANALYSIS.test(l.trim()));
+/** Whether a schematic item is a directive holding an analysis (the one the simulation dialog edits). */
+export const holdsAnalysis = (it?: { t: string; directive?: boolean; text?: string }) => it?.t === "text" && !!it.directive && !!analysisLine(it.text ?? "");
 export type Fields = Record<string, string>;
 
 /** `v(a)`, `v(a,b)`, `i(V1)` -> output fields (okind v|i, node, ref, isrc). */
@@ -321,7 +323,11 @@ export function directiveKind(text: string): DirectiveKind {
 }
 
 /** Whether the simulation dialog writes this analysis line back unchanged. */
-export const analysisRoundTrips = (line: string) => { const { kind, f } = parseAnalysis(line); return sameSpice(formatAnalysis(kind, f), line); };
+export const analysisRoundTrips = (line: string) => {
+  const { kind, f } = parseAnalysis(line);
+  if (f.sweep !== undefined && !["dec", "oct", "lin"].includes(f.sweep)) return false; // e.g. LTspice `.ac list …`
+  return sameSpice(formatAnalysis(kind, f), line);
+};
 
 /** Include paths with forward slashes: portable, and safe from the .asc `\n` newline escape. */
 export const portablePaths = (text: string) => text.split("\n").map((l) => (/^\s*\.(inc|lib)/i.test(l) ? l.replaceAll("\\", "/") : l)).join("\n");

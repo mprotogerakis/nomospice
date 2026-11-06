@@ -60,9 +60,13 @@ function Rows({ rows, set, a, b, list, unit }: { rows: string[][]; set: (r: stri
 function formState(k: DirectiveKind, txt: string) {
   const one = directiveKind(txt) === k ? txt.trim() : "";
   const m = k === "model" && one ? parseModel(one) : null;
+  const known = (n: string) => (MODEL_PARAMS[m?.type ?? "D"] ?? []).some(([p]) => p === n.toUpperCase());
   return {
     params: k === "param" && one ? parseParams(one) : [["", ""]],
-    mName: m?.name ?? "", mType: m?.type ?? "D", mParams: m?.params ?? [],
+    // listed parameters by name; others as rows that are never re-sorted while their name is typed
+    mName: m?.name ?? "", mType: m?.type ?? "D",
+    mKnown: Object.fromEntries((m?.params ?? []).filter(([n]) => known(n)).map(([n, v]) => [n.toUpperCase(), v])) as Record<string, string>,
+    mExtra: (m?.params ?? []).filter(([n]) => !known(n)),
     meas: (k === "meas" && one && parseMeas(one)) || ({ an: "tran", name: "", type: "stat", f: { op: "AVG" } } as Meas),
     ic: k === "ic" && one ? parseIc(one) : [["", ""]],
     temp: k === "temp" && one ? one.split(/\s+/)[1] ?? "" : "",
@@ -78,43 +82,39 @@ export function DirectiveDialog({ item, title, raw, onDone }: { item: Text; titl
   const [tab, setTab] = useState<DirectiveKind>(raw ? "text" : directiveKind(item.text));
   const [text, setText] = useState(item.text);
   const [directive, setDirective] = useState(item.directive); // the Text tab switches directive / comment
-  const [touched, setTouched] = useState(false); // the current form was used
   const [tried, setTried] = useState(false);
-  const [s0] = useState(() => formState(tab, item.text)); // the first tab reads the directive
-  const [params, setParams] = useState(s0.params);
-  const [mName, setMName] = useState(s0.mName);
-  const [mType, setMType] = useState(s0.mType);
-  const [mParams, setMParams] = useState<string[][]>(s0.mParams);
-  const [meas, setMeas] = useState<Meas>(s0.meas);
-  const [ic, setIc] = useState(s0.ic);
-  const [temp, setTemp] = useState(s0.temp);
-  const [inc, setInc] = useState(s0.inc);
-  const load = (k: DirectiveKind, txt: string) => {
-    const s = formState(k, txt);
-    setParams(s.params); setMName(s.mName); setMType(s.mType); setMParams(s.mParams); setMeas(s.meas); setIc(s.ic); setTemp(s.temp); setInc(s.inc);
-  };
-
-  const mp = (k: string) => mParams.find(([n]) => n.toUpperCase() === k)?.[1] ?? "";
-  const setMp = (k: string, v: string) => setMParams(mParams.some(([n]) => n.toUpperCase() === k) ? mParams.map((p) => (p[0].toUpperCase() === k ? [p[0], v] : p)) : [...mParams, [k, v]]);
-  const known = MODEL_PARAMS[mType] ?? [];
-  const extra = mParams.filter(([n]) => !known.some(([k]) => k === n.toUpperCase()));
-  const mf = (k: string) => meas.f[k] ?? "";
-  const setMf = (k: string) => (v: string) => setMeas({ ...meas, f: { ...meas.f, [k]: v } });
-
-  const line = {
+  const [st, setSt] = useState(() => formState(tab, item.text)); // the first tab reads the directive
+  const put = (patch: Partial<typeof st>) => setSt((s) => ({ ...s, ...patch }));
+  const { params, mName, mType, mKnown, mExtra, meas, ic, temp, inc } = st;
+  const lineOf = (k: DirectiveKind, s: typeof st) => ({
     text: () => text,
-    param: () => formatParams(params),
-    model: () => formatModel(mName, mType, mParams),
-    meas: () => formatMeas(meas),
-    ic: () => formatIc(ic),
-    temp: () => `.temp ${temp.trim() || "27"}`,
-    include: () => formatInclude(inc.lib, inc.path, inc.section),
-  }[tab]();
+    param: () => formatParams(s.params),
+    model: () => formatModel(s.mName, s.mType, [...Object.entries(s.mKnown), ...s.mExtra]),
+    meas: () => formatMeas(s.meas),
+    ic: () => formatIc(s.ic),
+    temp: () => `.temp ${s.temp.trim() || "27"}`,
+    include: () => formatInclude(s.inc.lib, s.inc.path, s.inc.section),
+  })[k]();
+  const line = lineOf(tab, st);
+  // "changed": the form writes something else than it read (a click alone, or Browse… cancelled, is no change)
+  const [base, setBase] = useState(line);
+  const touched = tab !== "text" && line !== base;
+  const load = (k: DirectiveKind, txt: string) => { const s = formState(k, txt); setSt(s); setBase(lineOf(k, s)); };
+
+  const known = MODEL_PARAMS[mType] ?? [];
+  // another device type: its listed parameters move into the table, the rest become extra rows
+  const retype = (t: string) => {
+    const all = [...Object.entries(mKnown), ...mExtra].filter(([n, v]) => n.trim() || v.trim());
+    const kn = (n: string) => (MODEL_PARAMS[t] ?? []).some(([p]) => p === n.toUpperCase());
+    put({ mType: t, mKnown: Object.fromEntries(all.filter(([n]) => kn(n)).map(([n, v]) => [n.toUpperCase(), v])), mExtra: all.filter(([n]) => !kn(n)) });
+  };
+  const mf = (k: string) => meas.f[k] ?? "";
+  const setMf = (k: string) => (v: string) => put({ meas: { ...meas, f: { ...meas.f, [k]: v } } });
 
   const browse = async () => {
     const path = await open({ multiple: false, filters: [{ name: "SPICE models", extensions: ["lib", "sub", "mod", "inc", "cir", "txt", "sp", "spi", "bjt", "dio", "jft", "mos"] }] });
     if (typeof path !== "string") return;
-    setInc({ ...inc, path: relToDoc(path) });
+    put({ inc: { ...inc, path: relToDoc(path) } });
   };
   // a form replaces a directive of its own kind; any other text stays and gets the line added
   const keeps = tab !== "text" && directiveKind(text) !== tab && text.trim() !== "";
@@ -126,17 +126,17 @@ export function DirectiveDialog({ item, title, raw, onDone }: { item: Text; titl
     if (invalid) return setTried(true);
     if (!result.trim()) return useS.setState({ dialog: null });
     // the checkbox decides whenever the result is the text itself (Text tab, or an untouched form)
-    onDone({ ...item, text: portablePaths(result), directive: result === text ? directive : true });
+    const isDirective = result === text ? directive : true;
+    onDone({ ...item, text: isDirective ? portablePaths(result) : result, directive: isDirective }); // a comment stays as written
   };
   // leaving a used form writes its result into the text; the next form reads the text
   const toTab = (k: DirectiveKind) => {
     if (k === tab) return;
-    if (touched && invalid) return setTried(true); // a half-filled form: say what is missing instead of dropping it
-    const next = tab !== "text" && touched && !invalid ? result : text;
+    if (touched && invalid) return setTried(true); // a half-filled form: say what is missing (or discard it)
+    const next = touched ? result : text;
     setText(next);
     if (k !== "text") load(k, next);
     setTab(k);
-    setTouched(false);
     setTried(false);
   };
   // an analysis the simulation form cannot read stays here (the button would only come back)
@@ -160,31 +160,30 @@ export function DirectiveDialog({ item, title, raw, onDone }: { item: Text; titl
           {!simForm && <p className="text-2xs text-text-tertiary">This analysis uses options the simulation form does not know, so it is edited here as text.</p>}
         </>
       )}
-      <div className="contents" onInputCapture={() => setTouched(true)} onClickCapture={(e) => (e.target as HTMLElement).closest("button") && setTouched(true)}>
       {tab === "param" && (
         <Field label="Parameters" hint="use them in values as {name}, e.g. {R*2}">
-          <Rows rows={params} set={setParams} a="name" b="value" />
+          <Rows rows={params} set={(params) => put({ params })} a="name" b="value" />
         </Field>
       )}
       {tab === "model" && (
         <>
-          <TextField label="Model name" value={mName} set={setMName} placeholder="MyDiode" autofocus hint="the Value of the parts that use it" />
-          <Select label="Device type" value={mType} set={setMType} options={MODEL_TYPES.map((t) => [t, { D: "D – diode", NPN: "NPN – bipolar", PNP: "PNP – bipolar", NMOS: "NMOS – MOSFET", PMOS: "PMOS – MOSFET", NJF: "NJF – JFET", PJF: "PJF – JFET", SW: "SW – voltage-controlled switch", CSW: "CSW – current-controlled switch" }[t] ?? t])} />
+          <TextField label="Model name" value={mName} set={(mName) => put({ mName })} placeholder="MyDiode" autofocus hint="the Value of the parts that use it" />
+          <Select label="Device type" value={mType} set={retype} options={MODEL_TYPES.map((t) => [t, { D: "D – diode", NPN: "NPN – bipolar", PNP: "PNP – bipolar", NMOS: "NMOS – MOSFET", PMOS: "PMOS – MOSFET", NJF: "NJF – JFET", PJF: "PJF – JFET", SW: "SW – voltage-controlled switch", CSW: "CSW – current-controlled switch" }[t] ?? t])} />
           <Section>Parameters (empty: SPICE default)</Section>
           <div className="flex flex-col gap-1">
-            {known.map(([k, desc, unit]) => <ParamRow key={k} name={k} desc={desc} unit={unit} value={mp(k)} set={(v) => setMp(k, v)} />)}
+            {known.map(([k, desc, unit]) => <ParamRow key={k} name={k} desc={desc} unit={unit} value={mKnown[k] ?? ""} set={(v) => put({ mKnown: { ...mKnown, [k]: v } })} />)}
           </div>
-          {extra.length > 0 && <Section>Other parameters</Section>}
-          {extra.length > 0 && <Rows rows={extra} set={(rows) => setMParams([...mParams.filter(([n]) => known.some(([k]) => k === n.toUpperCase())), ...rows])} a="name" b="value" />}
-          {!extra.length && <Button type="button" size="sm" className="self-start" onClick={() => setMParams([...mParams, ["", ""]])}>Add another parameter</Button>}
+          {mExtra.length > 0 && <Section>Other parameters</Section>}
+          {mExtra.length > 0 && <Rows rows={mExtra} set={(mExtra) => put({ mExtra })} a="name" b="value" />}
+          {!mExtra.length && <Button type="button" size="sm" className="self-start" onClick={() => put({ mExtra: [["", ""]] })}>Add another parameter</Button>}
         </>
       )}
       {tab === "meas" && (
         <>
           <p className="text-xs text-text-secondary">Measures a number after the run; the result is listed in the Log.</p>
-          <Select label="Analysis" value={meas.an} set={(an) => setMeas({ ...meas, an })} options={[["tran", "Transient"], ["ac", "AC"], ["dc", "DC sweep"]]} />
-          <TextField label="Name" value={meas.name} set={(name) => setMeas({ ...meas, name: name.replace(/\s/g, "_") })} placeholder="result" autofocus />
-          <Select label="Measure" value={meas.type} set={(type) => setMeas({ ...meas, type: type as Meas["type"] })} options={MEAS_TYPES} />
+          <Select label="Analysis" value={meas.an} set={(an) => put({ meas: { ...meas, an } })} options={[["tran", "Transient"], ["ac", "AC"], ["dc", "DC sweep"]]} />
+          <TextField label="Name" value={meas.name} set={(name) => put({ meas: { ...meas, name: name.replace(/\s/g, "_") } })} placeholder="result" autofocus />
+          <Select label="Measure" value={meas.type} set={(type) => put({ meas: { ...meas, type: type as Meas["type"] } })} options={MEAS_TYPES} />
           {meas.type === "stat" && (
             <>
               <Select label="Quantity" value={mf("op") || "AVG"} set={setMf("op")} options={[["AVG", "Average"], ["RMS", "RMS"], ["MIN", "Minimum"], ["MAX", "Maximum"], ["PP", "Peak-to-peak"], ["INTEG", "Integral"]]} />
@@ -225,26 +224,30 @@ export function DirectiveDialog({ item, title, raw, onDone }: { item: Text; titl
       )}
       {tab === "ic" && (
         <Field label="Node voltages" hint="the transient starts from these (with uic: without an operating point)">
-          <Rows rows={ic} set={setIc} a="node" b="voltage" list="nets" unit="V" />
+          <Rows rows={ic} set={(ic) => put({ ic })} a="node" b="voltage" list="nets" unit="V" />
         </Field>
       )}
-      {tab === "temp" && <NumField label="Temperature" value={temp} set={setTemp} unit="°C" placeholder="27" autofocus hint="circuit temperature for all models" />}
+      {tab === "temp" && <NumField label="Temperature" value={temp} set={(temp) => put({ temp })} unit="°C" placeholder="27" autofocus hint="circuit temperature for all models" />}
       {tab === "include" && (
         <>
           <Field label="File">
             <span className="flex gap-1">
-              <input className={FIELD} value={inc.path} placeholder="models/mymodels.lib" data-autofocus onChange={(e) => setInc({ ...inc, path: e.target.value })} />
+              <input className={FIELD} value={inc.path} placeholder="models/mymodels.lib" data-autofocus onChange={(e) => put({ inc: { ...inc, path: e.target.value } })} />
               <Button type="button" onClick={browse}>Browse…</Button>
             </span>
           </Field>
-          <Select label="Load as" value={inc.lib ? "lib" : "include"} set={(k) => setInc({ ...inc, lib: k === "lib" })} options={[["include", ".include – the whole file"], ["lib", ".lib – a library (optionally one section)"]]} />
-          {inc.lib && <TextField label="Section" value={inc.section} set={(section) => setInc({ ...inc, section })} hint="empty: the whole file" />}
+          <Select label="Load as" value={inc.lib ? "lib" : "include"} set={(k) => put({ inc: { ...inc, lib: k === "lib" } })} options={[["include", ".include – the whole file"], ["lib", ".lib – a library (optionally one section)"]]} />
+          {inc.lib && <TextField label="Section" value={inc.section} set={(section) => put({ inc: { ...inc, section } })} hint="empty: the whole file" />}
         </>
       )}
-      </div>
       {tab !== "text" && <SpiceLine>{line}</SpiceLine>}
       {keeps && <p className="text-2xs text-text-tertiary">Added as a new line; the directive keeps {text.split("\n").filter((l) => l.trim()).length} line(s): {text.trim().split("\n")[0]}{text.trim().includes("\n") ? " …" : ""}</p>}
-      {tried && invalid && <p className="text-2xs text-status-danger">{invalid}</p>}
+      {tried && invalid && (
+        <p className="text-2xs text-status-danger">
+          {invalid}
+          <button type="button" className="ml-2 underline hover:text-text-strong" onClick={() => { load(tab, text); setTried(false); }}>Discard this form's changes</button>
+        </p>
+      )}
     </Modal>
   );
 }

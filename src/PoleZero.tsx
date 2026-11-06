@@ -5,8 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { Run } from "./types";
 import { currentNets, dirOf, docId, useS } from "./store";
 import { parseParams, si, spiceNum } from "./spice";
-import { defOf } from "./geom";
-import { NumField, Select, TextField } from "./ui/dialog";
+import { circuitInsts, NumField, Select, TextField } from "./ui/dialog";
 import { Button } from "./ui/button";
 import { cn } from "@/lib/utils";
 
@@ -45,7 +44,8 @@ export const PoleZero = memo(function PoleZero({ run }: { run: Run }) {
   const [locus, setLocus] = useState<{ values: number[]; steps: P[][]; target: string } | null>(null);
   const paths = useMemo(() => (locus ? branches(locus.steps) : []), [locus]);
   // a new run (edited circuit, live mode): an old locus and zoom would describe another circuit
-  useEffect(() => (setLocus(null), setView(null)), [run]);
+  const [error, setError] = useState("");
+  useEffect(() => (setLocus(null), setView(null), setError("")), [run]);
 
   // view: equal scale on both axes (angles = damping), wheel zoom around the cursor
   const host = useRef<HTMLDivElement>(null);
@@ -72,7 +72,7 @@ export const PoleZero = memo(function PoleZero({ run }: { run: Run }) {
   const val = (x: number, y: number): P => ({ re: v.cx + (x - size.w / 2) / v.k, im: v.cy - (y - size.h / 2) / v.k });
 
   // hover: the nearest pole, zero or locus point within 14 px
-  const [hit, setHit] = useState<(Hit & { x: number; y: number }) | null>(null);
+  const [hit, setHit] = useState<Hit | null>(null);
   const hits = useMemo<Hit[]>(() => [
     ...poles.map((p) => ({ ...p, kind: "pole" as const })), ...zeros.map((p) => ({ ...p, kind: "zero" as const })),
     ...paths.flatMap((b) => b.flatMap((p, k) => (p ? [{ ...p, kind: "locus" as const, param: locus!.values[k] }] : []))),
@@ -81,7 +81,7 @@ export const PoleZero = memo(function PoleZero({ run }: { run: Run }) {
     const r = host.current!.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
     let best: Hit | null = null, bd = 14;
     for (const h of hits) { const [hx, hy] = px(h); const d = Math.hypot(hx - x, hy - y); if (d < bd) (best = h, bd = d); }
-    setHit(best && { ...best, x, y });
+    if (best !== hit) setHit(best); // re-render only when the nearest point changes
   };
   const onWheel = (e: React.WheelEvent) => {
     const r = host.current!.getBoundingClientRect(), at = val(e.clientX - r.left, e.clientY - r.top);
@@ -89,6 +89,15 @@ export const PoleZero = memo(function PoleZero({ run }: { run: Run }) {
     if (f > 1 && size.w / k < Math.max(Math.abs(v.cx), Math.abs(v.cy)) * 1e-6) return; // no deeper than a millionth of the values
     setView({ k, cx: at.re - (at.re - v.cx) / f, cy: at.im - (at.im - v.cy) / f });
   };
+
+  // locus path strings: recomputed when data, view or size change, not on hover
+  const drawn = useMemo(() => paths.map((b) => {
+    const segs: string[] = [];
+    let cur = "";
+    b.forEach((p) => { if (p) { const [x, y] = px(p); cur += `${cur ? "L" : "M"}${x},${y}`; } else if (cur) (segs.push(cur), (cur = "")); });
+    if (cur) segs.push(cur);
+    return { segs, first: b.find((p) => p) ?? null, last: lastOf(b) };
+  }), [paths, v.cx, v.cy, v.k, size.w, size.h]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // grid and axes
   const lo = val(0, size.h), hi = val(size.w, 0);
@@ -115,12 +124,7 @@ export const PoleZero = memo(function PoleZero({ run }: { run: Run }) {
             <text x={size.w - 8} y={oy - 6} fontSize={11} textAnchor="end" fill="currentColor">σ (1/s)</text>
             <text x={ox + 6} y={14} fontSize={11} fill="currentColor">jω (rad/s)</text>
             {ox < size.w - 70 && <text x={size.w - 8} y={14} fontSize={10} textAnchor="end" fill="var(--status-danger)">unstable</text>}
-            {paths.map((b, i) => {
-              const segs: string[] = [];
-              let cur = "";
-              b.forEach((p) => { if (p) { const [x, y] = px(p); cur += `${cur ? "L" : "M"}${x},${y}`; } else if (cur) (segs.push(cur), (cur = "")); });
-              if (cur) segs.push(cur);
-              const first = b.find((p) => p), last = lastOf(b);
+            {drawn.map(({ segs, first, last }, i) => {
               return (
                 <g key={i} stroke="var(--series-2)" fill="none" strokeWidth={1.6}>
                   {segs.map((d, j) => <path key={j} d={d} />)}
@@ -134,7 +138,7 @@ export const PoleZero = memo(function PoleZero({ run }: { run: Run }) {
           </svg>
         )}
         {hit && (
-          <div className="pointer-events-none absolute rounded-control border border-border bg-surface-panel px-2 py-1 font-mono text-2xs text-text shadow-float" style={{ left: Math.min(hit.x + 12, size.w - 220), top: Math.max(hit.y - 64, 4) }}>
+          <div className="pointer-events-none absolute rounded-control border border-border bg-surface-panel px-2 py-1 font-mono text-2xs text-text shadow-float" style={{ left: Math.min(px(hit)[0] + 12, size.w - 220), top: Math.max(px(hit)[1] - 64, 4) }}>
             <div className="text-text-tertiary">{hit.kind === "locus" ? `${locus?.target} = ${si(hit.param!, "", 4)}` : hit.kind}</div>
             <div>s = {describe(hit).s} rad/s</div>
             <div>f₀ = {describe(hit).f} · ζ = {describe(hit).zeta}</div>
@@ -142,12 +146,14 @@ export const PoleZero = memo(function PoleZero({ run }: { run: Run }) {
         )}
         {!poles.length && !zeros.length && <div className="absolute inset-0 flex items-center justify-center text-xs text-text-tertiary">No poles or zeros found: check the .pz input and output nodes (see Log).</div>}
       </div>
-      <Sidebar poles={poles} zeros={zeros} locus={locus} setLocus={setLocus} />
+      <Sidebar poles={poles} zeros={zeros} locus={locus} setLocus={setLocus} error={error} setError={setError} />
     </div>
   );
 });
 
-function Sidebar({ poles, zeros, locus, setLocus }: { poles: P[]; zeros: P[]; locus: unknown; setLocus: (l: { values: number[]; steps: P[][]; target: string } | null) => void }) {
+function Sidebar({ poles, zeros, locus, setLocus, error, setError }: {
+  poles: P[]; zeros: P[]; locus: unknown; setLocus: (l: { values: number[]; steps: P[][]; target: string } | null) => void; error: string; setError: (e: string) => void;
+}) {
   const items = useS((s) => s.items);
   const lib = useS((s) => s.lib);
   const nets = useS(currentNets); // null while the netlist lags the items: no index-aligned names then
@@ -156,10 +162,9 @@ function Sidebar({ poles, zeros, locus, setLocus }: { poles: P[]; zeros: P[]; lo
   const targets = useMemo(() => [...new Set([
     ...items.flatMap((it) => (it.t === "text" && it.directive ? it.text.split("\n") : [])).filter((l) => /^\s*\.param\b/i.test(l))
       .flatMap((l) => parseParams(l).map(([n]) => n).filter((n) => /^[a-z_]\w*$/i.test(n))),
-    ...items.flatMap((it, i) => (it.t === "sym" && "RCL".includes(defOf(lib, it)?.prefix?.[0]?.toUpperCase() ?? "-") ? [nets?.insts[i] || it.attrs.InstName || ""] : [])).filter(Boolean),
+    ...circuitInsts(items, nets, lib).filter((x) => "RCL".includes(x.prefix || "-")).map((x) => x.inst),
   ])], [items, lib, nets]);
   const [f, setF] = useState({ target: targets[0] ?? "", from: "", to: "", steps: "40", scale: "log" });
-  const [error, setError] = useState("");
 
   const compute = async () => {
     const [a, b, n] = [spiceNum(f.from), spiceNum(f.to), Math.round(spiceNum(f.steps) ?? 0)];
