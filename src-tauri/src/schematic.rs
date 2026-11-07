@@ -838,7 +838,9 @@ fn ltspice_meas(text: &str, sensors: &[Sensor], warnings: &mut Vec<String>) -> S
     if !contains_ci(text, ".meas") {
         return text.to_string(); // nothing to rewrite: no pass over a big deck
     }
-    if let Some(w) = statements(text, &[".meas", ".measure"]).iter().find_map(|l| whole_ic_current(l, sensors)) {
+    if let Some(w) = statements(text, &[".meas", ".measure"]).iter().find_map(|l| {
+        whole_ic_current(l, sensors).or_else(|| unknown_current(&sensor_currents(l, sensors)).map(|c| format!("no part current {c} in this circuit")))
+    }) {
         warnings.push(format!(".meas: {w}"));
     }
     let lines = deck_lines(text);
@@ -1139,6 +1141,17 @@ pub fn sensor_currents(s: &str, sensors: &[Sensor]) -> String {
     }
     out.push_str(rest);
     out
+}
+
+/// A part current's name left in `s` after `sensor_currents` (`Ib(Q9)`, `Ix(U1:NC)`: a typo, a part
+/// without it): ngspice has no such functions, so these names are always ours.
+pub fn unknown_current(s: &str) -> Option<String> {
+    let low = s.to_ascii_lowercase();
+    let k = (0..low.len()).find(|&k| {
+        low[k..].len() > 3 && low.is_char_boundary(k) && low.as_bytes()[k] == b'i' && b"xcbedgs".contains(&low.as_bytes()[k + 1]) && low.as_bytes()[k + 2] == b'('
+            && !low[..k].ends_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
+    })?;
+    Some(s[k..].split_inclusive(')').next().unwrap_or(&s[k..]).to_string())
 }
 
 /// `I(U1)` of a subcircuit (as LTspice allows): no single current, its pins have one each. The
@@ -2060,6 +2073,8 @@ mod tests {
         assert_eq!(pin_labels('Q', "Q1", &[pin("C"), pin("B"), pin("E")]), ["Ic(Q1)", "Ib(Q1)", "Ie(Q1)"]);
         let u1 = [Sensor { source: "vsense_u1".into(), node: "y".into(), inst: "u1".into(), pin: 0, label: "Ix(U1:IN)".into(), name: "u1".into(), hold: String::new() }];
         assert_eq!(sensor_currents("I(U1)+ix(u1:in)", &u1), "I(U1)+i(vsense_u1)");
+        assert_eq!(unknown_current("v(a)*Ib(Q9)"), Some("Ib(Q9)".into()));
+        assert_eq!(unknown_current("i(v1)+mix(1)+vin(a)"), None, "a source's i(), other words");
         assert_eq!(m(".meas tran p AVG 1µ*I(R1)"), ".meas tran p AVG par('1µ*i(vsense_r1)')", "multi-byte text: no panic");
         assert_eq!(m(".meas tran a AVG V(out) FROM = 1m TO =2m"), ".meas tran a AVG V(out) FROM=1m TO=2m", "blanks around =");
         assert_eq!(m(".meas tran w WHEN V(out) = 0.5 RISE = 1"), ".meas tran w WHEN V(out)=0.5 RISE=1");

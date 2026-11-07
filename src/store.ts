@@ -469,12 +469,12 @@ export function canProbe(target: Item | undefined, pin?: number) {
   return ((target.t === "wire" || target.t === "flag") && !ground) || part;
 }
 
-/** The name of part `i`'s current, which is also its trace expression (the backend reads I(R1),
- *  Ib(Q1) …): into `pin` where that has a sensor, else the part's own (pin 1; a source's I(V1)).
- *  "": none (a subcircuit's current is per pin). */
 /** A two-pin part's power by the name of its current: I(D1) -> P(D1). */
 export const powerName = (current: string) => current.replace(/^I/, "P");
 
+/** The name of part `i`'s current, which is also its trace expression (the backend reads I(R1),
+ *  Ib(Q1) …): into `pin` where that has a sensor, else the part's own (pin 1; a source's I(V1)).
+ *  "": none (a subcircuit's current is per pin). */
 export function partCurrent(nl: Netlist, i: number, pin?: number) {
   const named = nl.pin_currents?.[i] ?? [];
   return (pin != null && named[pin]) || (nl.probes[i] ? named[0] ?? "" : "");

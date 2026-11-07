@@ -499,10 +499,9 @@ pub fn trace(expr: &str, scale: &str, run: u64) -> Result<Trace, String> {
     if let Some(why) = crate::schematic::whole_ic_current(shown, &SENSORS.lock().unwrap_or_else(|e| e.into_inner())) {
         return Err(why); // (`I(U1)` of a subcircuit: its pins have the currents)
     }
-    // a pin current this circuit has not (a typo, the netlist's XU1): left as it was written
-    let low = expr.to_lowercase();
-    if low.match_indices("ix(").any(|(k, _)| !low[..k].ends_with(|c: char| c.is_ascii_alphanumeric() || c == '_')) {
-        return Err(format!("{shown}: no such pin current here; the part's right-click menu lists its pins' currents while probing, e.g. Ix(U1:OUT)"));
+    // a part current this circuit has not (a typo, the netlist's XU1): left as written
+    if let Some(c) = crate::schematic::unknown_current(expr) {
+        return Err(format!("{c}: no such part current here; a part's right-click menu lists its currents while probing (Ib(Q1), Ix(U1:OUT))"));
     }
     api.command("unlet nmsp_trace"); // a failed `let` would otherwise leave the previous trace behind
     take_log(); // after unlet: it may print leftovers of the finished run ("Background thread stopped")
