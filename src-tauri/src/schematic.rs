@@ -814,6 +814,8 @@ pub struct Sensor {
     pub name: String,
     /// its 1 TΩ hold resistor, if it has one (a subcircuit pin that could float), lowercase, else ""
     pub hold: String,
+    /// the label by the netlist's name (`Ib(QT1)` for `Ib(T1)`), lowercase
+    pub alias: String,
 }
 
 impl Netlist {
@@ -1131,8 +1133,7 @@ pub fn sensor_currents(s: &str, sensors: &[Sensor]) -> (String, Option<String>) 
         let hit = close.filter(|_| !name.is_empty()).and_then(|_| {
             // an exact name first (a part's own I(T1) before another's alias), then by the netlist's
             // name, then `I(Q1)`: pin 1 of a two-pin part or transistor (a subcircuit's are per pin)
-            let by_inst = |x: &Sensor| x.label.to_ascii_lowercase().replacen(&format!("({}", x.name), &format!("({}", x.inst), 1) == key;
-            sensors.iter().find(|x| x.label.eq_ignore_ascii_case(&key)).or_else(|| sensors.iter().find(|x| by_inst(x))).or_else(|| sensors.iter().find(|x| {
+            sensors.iter().find(|x| x.label.eq_ignore_ascii_case(&key)).or_else(|| sensors.iter().find(|x| x.alias == key)).or_else(|| sensors.iter().find(|x| {
                 x.pin == 0 && !ic(x) && name.eq_ignore_ascii_case("i") && (x.inst.eq_ignore_ascii_case(arg) || x.name.eq_ignore_ascii_case(arg))
             }))
         });
@@ -1671,6 +1672,7 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool) -> Netlist {
         // already has such a name (a diode D1 beside a subcircuit drawn as D1): then the netlist's
         let shown = attrs.get("InstName").map(|n| net_name(n)).filter(|n| !n.is_empty()).unwrap_or_else(|| inst.clone());
         let pins_of = &def.pins[..npins.min(def.pins.len())];
+        let aliases = pin_labels(prefix, &inst, pins_of);
         let mut called = shown.clone();
         let mut labels = pin_labels(prefix, &shown, pins_of);
         let other = !shown.eq_ignore_ascii_case(&inst) && (taken.contains(&shown.to_uppercase()) || drawn.get(&shown.to_uppercase()).is_some_and(|&n| n > 1)); // (another part's name)
@@ -1720,7 +1722,7 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool) -> Netlist {
             } else {
                 String::new()
             };
-            nl.sensors.push(Sensor { source: src.to_lowercase(), node: node.to_lowercase(), inst: inst.to_lowercase(), pin: k, label, name: called.to_lowercase(), hold: hold.to_lowercase() });
+            nl.sensors.push(Sensor { source: src.to_lowercase(), node: node.to_lowercase(), inst: inst.to_lowercase(), pin: k, label, name: called.to_lowercase(), hold: hold.to_lowercase(), alias: aliases[k].to_lowercase() });
             if sense {
                 lines.push(format!("{src} {} {node} 0", nodes[k]));
                 if !hold.is_empty() {
@@ -2039,7 +2041,7 @@ mod tests {
 
     #[test]
     fn ltspice_meas_for_ngspice() {
-        let r1 = [Sensor { source: "vsense_r1".into(), node: "x".into(), inst: "r1".into(), pin: 0, label: "I(R1)".into(), name: "r1".into(), hold: String::new() }];
+        let r1 = [Sensor { source: "vsense_r1".into(), node: "x".into(), inst: "r1".into(), pin: 0, label: "I(R1)".into(), name: "r1".into(), hold: String::new(), alias: String::new() }];
         let m = |s: &str| meas_statement(s, &r1, "tran").unwrap_or_else(|e| e);
         assert_eq!(m(".MEAS TRAN P AVG -I(V1)*V(VDD)"), ".MEAS TRAN P AVG par('-I(V1)*V(VDD)')");
         assert_eq!(m(".meas tran t TRIG V(in) VAL=0.5*V(vdd) TD=2n RISE=1 TARG V(out) VAL=1 RISE=1"),
@@ -2057,7 +2059,7 @@ mod tests {
         assert_eq!(pin_labels('X', "U1", &[pin("IN+"), pin("IN-"), pin("OUT")]), ["Ix(U1:IN+)", "Ix(U1:IN-)", "Ix(U1:OUT)"]);
         assert_eq!(pin_labels('X', "U1", &[pin("2"), pin("GND"), pin("GND")]), ["Ix(U1:1)", "Ix(U1:2)", "Ix(U1:3)"], "never two alike");
         assert_eq!(pin_labels('Q', "Q1", &[pin("C"), pin("B"), pin("E")]), ["Ic(Q1)", "Ib(Q1)", "Ie(Q1)"]);
-        let ic = [Sensor { source: "vsense_xu1".into(), node: "y".into(), inst: "xu1".into(), pin: 0, label: "Ix(U1:IN)".into(), name: "u1".into(), hold: String::new() }];
+        let ic = [Sensor { source: "vsense_xu1".into(), node: "y".into(), inst: "xu1".into(), pin: 0, label: "Ix(U1:IN)".into(), name: "u1".into(), hold: String::new(), alias: String::new() }];
         let (text, why) = sensor_currents("I(U1)+ix(u1:in)", &ic);
         assert_eq!(text, "I(U1)+i(vsense_xu1)");
         assert!(why.is_some_and(|w| w.contains("one per pin")), "a subcircuit's I(U1)");
@@ -2221,7 +2223,7 @@ mod tests {
         let z = netlist_for_sim(&parse_asc(EXAMPLES.iter().find(|e| e.0 == "zener_prefix").unwrap().1), &mut Library::builtin());
         let d = z.insts.iter().position(|n| n == "XD1").unwrap();
         assert_eq!(z.pin_currents[d], ["I(D1)", ""], "{}", z.text);
-        let t1 = [Sensor { source: "vsense_qt1".into(), node: "y".into(), inst: "qt1".into(), pin: 0, label: "Ic(T1)".into(), name: "t1".into(), hold: String::new() }];
+        let t1 = [Sensor { source: "vsense_qt1".into(), node: "y".into(), inst: "qt1".into(), pin: 0, label: "Ic(T1)".into(), name: "t1".into(), hold: String::new(), alias: "ic(qt1)".into() }];
         assert_eq!(sensor_currents("I(T1)+I(QT1)", &t1).0, "i(vsense_qt1)+i(vsense_qt1)", "pin 1 by the drawn name too");
         assert_eq!(sensor_currents("Ic(QT1)", &t1).0, "i(vsense_qt1)", "a name by the netlist's name");
         let run = crate::ngspice::run(&prepare(&nl.text, None, &mut vec![]).with_sensors(nl.sensors.clone())).unwrap();

@@ -252,7 +252,8 @@ export const Schematic = memo(function Schematic() {
   /** The pin of part `it` near `p` (probing: its own current, Ib(Q1)); none: the part's body. */
   const pinAt = (it: Item | undefined, p: Pt) => {
     if (it?.t !== "sym") return undefined;
-    const tol = Math.max(GRID * 0.75, 8 / view.k);
+    // (8 px on screen, but at most a grid step: zoomed out, the body stays the body)
+    const tol = Math.min(GRID, Math.max(GRID * 0.5, 8 / view.k));
     let best: number | undefined, d0 = tol * tol;
     pins(it, defOf(lib, it)).forEach(([x, y], k) => {
       const d = (x - p[0]) ** 2 + (y - p[1]) ** 2;

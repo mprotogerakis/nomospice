@@ -18,7 +18,7 @@ import { Dialogs } from "./Dialogs";
 import { Boundary } from "./Boundary";
 import { analysesOf, closeTab, currentTab, dirOf, fileName, docId, viewOf, loadDoc, loadSymbols, placeSymbol, plotKind, redo, refreshGit, refreshNets, relToDoc, selectTab, simulate, undo, useS, useStatus } from "./store";
 import { History } from "./History";
-import { currentLabel, mirror, rotate } from "./geom";
+import { mirror, rotate } from "./geom";
 import { ANALYSES, si, tokens } from "./spice";
 import { deleteSelection, duplicate, newItem, placeFlag, transform } from "./actions";
 import { ContextMenu, openMenu } from "./Menu";
@@ -643,7 +643,7 @@ function BottomPanel() {
                 // ngspice's vector type gives the unit; @dev[...] and the like stay as written
                 const named = tf && tfName(n, tf);
                 const unit = named ? named[1] : unit0;
-                const name = named ? named[0] : !isOpPlot && !phasors ? n : unit === "A" && n.endsWith("#branch") ? currentLabel(((b) => nets?.insts.find((x) => x.toLowerCase() === b) ?? b)(n.replace("#branch", ""))) : unit === "V" && !/[@(]/.test(n) ? `V(${n})` : n;
+                const name = named ? named[0] : !isOpPlot && !phasors ? n : unit === "A" && n.endsWith("#branch") ? `I(${((b) => nets?.insts.find((x) => x.toLowerCase() === b) ?? b)(n.replace("#branch", ""))})` /* a source's, as drawn */ : unit === "V" && !/[@(]/.test(n) ? `V(${n})` : n;
                 return (
                   <tr key={n}>
                     <td className="pr-6 text-text-secondary">{name}</td>
