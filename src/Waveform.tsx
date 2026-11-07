@@ -13,8 +13,6 @@ import { saveSvg, withLightTheme, xmlEscape } from "./svgExport";
 
 type Series = { t: Trace; y: (number | null)[] };
 type Pane = { unit: string; series: Series[] };
-/** The real panes from the top: volts first, then by unit. */
-const paneOrder = (a: string, b: string) => (a === "V" ? -1 : b === "V" ? 1 : a.localeCompare(b));
 
 /** px a press may move and still count as a click (shared by uPlot's drag and our click rule). */
 const CLICK_DIST = 3;
@@ -121,7 +119,11 @@ export const Waveform = memo(function Waveform() {
   const xUnit = freq ? "Hz" : run?.scale === "time" ? "s" : run?.scale.startsWith("i") ? "A" : run?.scale.endsWith("sweep") && run.scale.startsWith("v") ? "V" : "";
   const ok = useMemo(() => traces.filter((t) => t.data?.x.length), [traces]);
   // .ac without an AC source: every value is exactly 0 (no dB at all, phase flat) - say so instead
-  const zero = useMemo(() => ac && ok.length > 0 && ok.every((t) => t.data!.re.every((v, i) => !v && !t.data!.im?.[i])), [ac, ok]);
+  // (reference lines, constants, do not count)
+  const zero = useMemo(() => {
+    const signals = ok.filter((t) => spiceNum(t.expr) === null);
+    return ac && signals.length > 0 && signals.every((t) => t.data!.re.every((v, i) => !v && !t.data!.im?.[i]));
+  }, [ac, ok]);
   const all = ok[0]?.data!.x ?? [];
   // nested .dc (family curves): one series per outer step over the first segment's x
   const seg = useMemo(() => segment(all), [all]);
@@ -141,7 +143,7 @@ export const Waveform = memo(function Waveform() {
     // constants (reference lines: 0.5, 500m, -3) are drawn on the top pane's axis, whatever it is
     // now: dB in a Bode plot, else volts first
     const lines = real.filter((t) => spiceNum(t.expr) !== null);
-    const units = [...new Set(real.filter((t) => !lines.includes(t)).map((t) => t.unit))].sort(paneOrder);
+    const units = [...new Set(real.filter((t) => !lines.includes(t)).map((t) => t.unit))].sort((a, b) => (a === "V" ? -1 : b === "V" ? 1 : a.localeCompare(b)));
     for (const unit of units) {
       const series = real.filter((t) => t.unit === unit).flatMap((t) => split(t, t.data!.re));
       const same = panes.find((p) => p.unit === unit); // db(...) joins the dB pane

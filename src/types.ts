@@ -106,4 +106,6 @@ export interface Trace {
   slot: number;
   data?: TraceData;
   error?: string;
+  /** a power probe's V·I: real power only in .tran/.dc, not fetched in other analyses */
+  power?: boolean;
 }

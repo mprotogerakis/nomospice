@@ -289,7 +289,7 @@ export function App() {
         if (k === "k") return run(() => useS.setState({ dialog: { k: "parts" } }));
         if (k === ",") return run(openLibraries); // macOS: the app menu's item has it
         if (k === "w" && !MAC) return run(newFile); // Ctrl+W closes the document (macOS: File → Close takes ⌘W)
-        if (k === "l") return run(() => useS.setState({ panel: useS.getState().panel ? null : "log" }));
+        if (k === "l") return run(togglePanel);
         if (k === "enter") return run(simulate);
         return;
       }
@@ -373,7 +373,7 @@ export function App() {
         <ToolbarButton label="Duplicate" hotkey="⌘D / F6" icon={<Copy />} disabled={s.selCount !== 1} onClick={duplicate} />
         <ToolbarButton label="Delete" hotkey="Del / F5" icon={<Scissors />} pressable active={tool.k === "delete"} onClick={() => (s.selCount ? deleteSelection() : useS.setState({ tool: { k: "delete" } }))} />
         <ToolbarSpacer />
-        <ToolbarButton label="Log & netlist" hotkey="⌘L" icon={<ScrollText />} pressable active={!!s.panel} onClick={() => useS.setState({ panel: s.panel ? null : "netlist" })} />
+        <ToolbarButton label="Log & netlist" hotkey="⌘L" icon={<ScrollText />} pressable active={!!s.panel} onClick={togglePanel} />
         <ToolbarButton label="Toggle theme" icon={mode === "dark" ? <Sun /> : <Moon />} onClick={() => setMode(updateThemePreference(mode === "dark" ? "light" : "dark").mode)} />
         <ToolbarButton label="About & licenses" icon={<Info />} onClick={() => useS.setState({ dialog: { k: "about" } })} />
       </Toolbar>
@@ -383,7 +383,7 @@ export function App() {
         {showWave && (
           <>
             <div style={{ height: `${split * 100}%` }} className="min-h-0">{pz ? <PoleZero run={s.sim!.run!} /> : <Waveform key={`${mode}:${plotKind(s.sim)}`} />}</div>
-            <div onPointerDown={startSplit} className="h-[5px] shrink-0 cursor-row-resize touch-none border-y border-border bg-surface-panel-head hover:bg-selection/40" />
+            <div onPointerDown={startSplit} className="h-[5px] shrink-0 cursor-row-resize touch-none select-none border-y border-border bg-surface-panel-head hover:bg-selection/40" />
           </>
         )}
         {/* the schematic keeps a share: when the panes need more (a smaller window, the plot opening
@@ -499,6 +499,15 @@ function CursorStatus() {
   );
 }
 
+/** ⌘L: the bottom panel closed, or open again on the tab it was closed on (not a run's results:
+ *  they may be gone by then). */
+let lastPanel: Exclude<ReturnType<typeof useS.getState>["panel"], null> = "log";
+function togglePanel() {
+  const p = useS.getState().panel;
+  if (p && p !== "op") lastPanel = p;
+  useS.setState({ panel: p ? null : lastPanel });
+}
+
 /** A drag on a splitter handle (left button): `move` gets the pointer (captured by the handle, so
  *  none once it is unmounted) until the button is up or the gesture cancelled; then `done`. */
 function drag(e: React.PointerEvent, move: (ev: PointerEvent) => void, done?: () => void) {
@@ -555,7 +564,7 @@ function BottomPanel() {
   return (
     <div ref={ref} data-panel style={{ height: `${share * 100}%`, minHeight: PANEL_MIN }} className="flex shrink-[1000] flex-col border-t border-border bg-surface-panel">
       <div onPointerDown={resize} onDoubleClick={() => (setShare(PANEL_SHARE), localStorage.removeItem("nomospice.panelShare"))} title="Drag to resize · double-click: default height"
-        className="relative z-10 -mt-[3px] h-[5px] shrink-0 cursor-row-resize touch-none hover:bg-selection/40" />
+        className="relative z-10 -mt-[3px] h-[5px] shrink-0 cursor-row-resize touch-none select-none hover:bg-selection/40" />
       <div className="flex h-[26px] shrink-0 items-center border-b border-border bg-surface-panel-head px-1">
         {tabs.map(([k, label]) => (
           <button key={k} onClick={() => useS.setState({ panel: k })}
@@ -563,7 +572,7 @@ function BottomPanel() {
             {label}
           </button>
         ))}
-        <button type="button" aria-label="Close the panel" title={`Close (${keys("⌘L")} opens it again)`} onClick={() => useS.setState({ panel: null })}
+        <button type="button" aria-label="Close the panel" title={`Close (${keys("⌘L")} opens it again)`} onClick={togglePanel}
           className="ml-auto flex h-5 w-5 items-center justify-center rounded-control text-text-tertiary hover:bg-surface-hover hover:text-text-strong">
           <X className="h-3.5 w-3.5" />
         </button>

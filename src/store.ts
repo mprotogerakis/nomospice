@@ -217,6 +217,7 @@ function freeSlot(traces: Trace[]) {
 async function fetchTrace(t: Trace): Promise<Trace> {
   const run = get().sim?.run;
   if (!run) return { ...t, data: undefined, error: "no simulation results: run the simulation" };
+  if (t.power && !powerMode(get().sim)) return { ...t, data: undefined, error: "power: only in .tran and .dc results" };
   try {
     return { ...t, data: await invoke<TraceData>("trace", { expr: t.expr, scale: run.scale, run: run.id }), error: undefined };
   } catch (e) {
@@ -347,9 +348,7 @@ export async function simulate() {
       // the live netlist only from a run of the schematic as it is (a tab's run swaps its analysis)
       sim, shown, stale: changed, ...(!changed && deck === items && { nets: sim.netlist, netsItems: items }),
       // another analysis: fresh zoom/cursors, and old-kind data never drawn on the new axes
-      // (a power probe's trace only where V·I is real power: not in the .ac,
-      // .noise … the tab's analysis became)
-      ...(newKind && { plot: { ...NO_PLOT, kind: plotKind(sim) }, traces: get().traces.flatMap((t) => (t.unit === "W" && t.label.startsWith("P(") && !powerMode(sim) ? [] : [{ ...t, data: undefined }])) }),
+      ...(newKind && { plot: { ...NO_PLOT, kind: plotKind(sim) }, traces: get().traces.map((t) => ({ ...t, data: undefined })) }),
       panel: !sim.run || sim.run.aborted ? "log" : op ? "op" : get().panel === "op" && !sim.run.op.length ? null : get().panel,
     });
     if (sim.run && !op) {
@@ -392,7 +391,7 @@ export async function addTrace(label: string, expr: string, unit: string) {
   await addTraceNow(label, expr, unit);
 }
 
-async function addTraceNow(label: string, expr: string, unit: string) {
+async function addTraceNow(label: string, expr: string, unit: string, power = false) {
   const { traces, sim } = get();
   if (!sim?.run || isOp(sim) || traces.some((t) => t.expr === expr)) return;
   const gen = docGen;
@@ -402,7 +401,7 @@ async function addTraceNow(label: string, expr: string, unit: string) {
   let seq: number, t: Trace;
   do {
     seq = runSeq;
-    t = await fetchTrace({ label, expr, unit, slot: 0 });
+    t = await fetchTrace({ label, expr, unit, slot: 0, ...(power && { power }) });
     if (seq !== runSeq) await idle(); // a run started meanwhile: evaluate again on its result
   } while (seq !== runSeq);
   if (gen !== docGen || !get().sim?.run || isOp(get().sim)) return;
@@ -440,7 +439,7 @@ export async function probe(target: Item, power = false) {
     // positive where it takes power (a resistor), negative where it gives it (a source)
     const pins = sim.netlist.nets[i], expr = sim.netlist.probes[i];
     const v = (n: string) => (n === "0" ? "0" : vexpr(n));
-    if (expr && pins?.length === 2) await addTraceNow(`P(${sim.netlist.insts[i]})`, `(${v(pins[0])}-${v(pins[1])})*${expr}`, "W");
+    if (expr && pins?.length === 2) await addTraceNow(`P(${sim.netlist.insts[i]})`, `(${v(pins[0])}-${v(pins[1])})*${expr}`, "W", true);
   } else if (target.t === "sym") {
     const expr = sim.netlist.probes[i];
     if (expr) await addTraceNow(currentLabel(sim.netlist.insts[i]), expr, "A");
