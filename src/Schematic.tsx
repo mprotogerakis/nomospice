@@ -546,7 +546,7 @@ export const Schematic = memo(function Schematic() {
       "-",
       { label: "Paste", hint: "⌘V", run: pasteClipboard },
       { label: "Select all", hint: "⌘A", run: () => set({ sel: items.flatMap((x, j) => (x.t === "raw" ? [] : [j])) }) },
-      { label: "Find…", hint: "⌘F", disabled: !items.length, run: () => set({ dialog: { k: "find" } }) },
+      { label: "Find…", hint: "⌘F", run: () => set({ dialog: { k: "find" } }) },
       { label: "Fit view", hint: "Space", run: fit },
       "-",
       { label: "Export schematic as SVG…", disabled: !items.some(isShape), run: () => void saveSvg(schematicSvg(items, lib), "") },
