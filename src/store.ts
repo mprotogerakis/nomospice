@@ -277,7 +277,11 @@ export async function selectTab(kind: Analysis) {
   await idle(); // a run in progress belongs to the shown tab ("+" during a live run)
   const s = get();
   if (!analysesOf(s.items).some((o) => o.kind === kind)) return; // no such tab: the shown results stay
-  if (s.shown === kind) return void (s.tab !== kind && set({ tab: kind }));
+  if (s.shown === kind) {
+    if (s.tab !== kind) set({ tab: kind });
+    if (!s.sim) void simulate(); // shown already (an edit made it so) but never run: it runs now
+    return;
+  }
   set({ tab: kind, ...swapTo(s, kind) });
   if (!get().sim) void simulate();
 }

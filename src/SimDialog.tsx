@@ -37,9 +37,8 @@ export function SimDialog({ index, kind0, of }: { index?: number; kind0?: Analys
   const unchanged = idx >= 0 && kind === init.kind && line === pristine;
   // more than the form shows (unknown options, `+` lines): OK replaces the whole statement
   const partial = idx >= 0 && !analysisEditableAt(lines, li);
-  const plus = new Set(li >= 0 ? continuation(lines, li) : []);
-  const cont = (j: number) => plus.has(j); // the analysis' own + lines
-  const edited = unchanged ? lines.join("\n") : lines.flatMap((l, j) => (j === li ? [line] : cont(j) ? [] : [l])).join("\n");
+  const plus = new Set(li >= 0 ? continuation(lines, li) : []); // the analysis' own + lines
+  const edited = unchanged ? lines.join("\n") : lines.flatMap((l, j) => (j === li ? [line] : plus.has(j) ? [] : [l])).join("\n");
 
   const submit = () => {
     if (unchanged) return closeDialog();
@@ -90,7 +89,7 @@ export function SimDialog({ index, kind0, of }: { index?: number; kind0?: Analys
     <Modal title="Edit Simulation Command" onSubmit={submit} wide>
       <CircuitLists />
       {alternate && <p className="text-2xs text-text-tertiary">Added as an alternative analysis with its own result tab. It is kept as a comment, the way LTspice keeps alternatives, so the schematic's own analysis stays as it is.</p>}
-      {partial && <p className="text-2xs text-status-warning">⚠ The form does not cover all of “{lines[li].trim()}”{lines.some((_, j) => cont(j)) ? " and its + lines" : ""}: a change here replaces it with the line below. “Edit as text” keeps it.</p>}
+      {partial && <p className="text-2xs text-status-warning">⚠ The form does not cover all of “{lines[li].trim()}”{lines.some((_, j) => plus.has(j)) ? " and its + lines" : ""}: a change here replaces it with the line below. “Edit as text” keeps it.</p>}
       <Tabs tabs={kind0 ? ANALYSES.filter(([k]) => k === kind0 || !present.some((o) => o.kind === k)) : ANALYSES} value={kind} set={setKind} />
       {kind === "tran" && (
         <>

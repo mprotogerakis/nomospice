@@ -155,11 +155,13 @@ pub struct Local {
 /// The schematic folder's own symbol files: (key, path) of each .asy (any case), not those of a
 /// built-in symbol (nomospice's win). Library::set_dir and Save As (carry them along) share it.
 pub fn folder_symbols(dir: &std::path::Path) -> Vec<(String, std::path::PathBuf)> {
-    std::fs::read_dir(dir).into_iter().flatten().flatten().map(|e| e.path())
+    let mut list: Vec<_> = std::fs::read_dir(dir).into_iter().flatten().flatten().map(|e| e.path())
         .filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("asy")))
         .filter_map(|p| Some((sym_key(p.file_stem()?.to_str()?), p.clone())))
         .filter(|(k, _)| !builtin_symbol(k))
-        .collect()
+        .collect();
+    list.sort(); // (Foo.asy and foo.asy on a case-sensitive disk: always the same one wins, the last)
+    list
 }
 
 /// (count, a sum over names, modification times and sizes) of a folder's symbol files (the list
