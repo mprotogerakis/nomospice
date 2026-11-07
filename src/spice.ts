@@ -626,6 +626,9 @@ export function exprUnit(expr: string, vector: (name: string) => string = () => 
     // (pi, e: numbers; boltz, echarge, planck, kelvin have units of their own: unknown)
     if (s[i] !== "(") return /^(pi|e)$/.test(name) ? { d: [0, 0, 0], n: true } : /^(boltz|echarge|kelvin|planck)$/.test(name) ? { d: null } : ((u) => (u ? dims(u) : { d: null }))(vector(id[0]));
     i++;
+    // a part current the run lists by this very name (Ig(M1)): its unit, whatever the letters say
+    const call = /^[^()]*\)/.exec(s.slice(i))?.[0];
+    if (call && vector(`${id[0]}(${call}`)) return (i += call.length), dims(vector(`${id[0]}(${call}`));
     if (/^v[mri]?$/.test(name)) return raw(), dims("V");
     // (not ig(): also ngspice's group delay of a source current, in seconds)
     if (/^i[cbedsx]?$/.test(name)) return raw(), dims("A");

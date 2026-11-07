@@ -192,6 +192,7 @@ assert.equal(numInfo("1Meg", "Hz")!.text, "= 1MegHz"); // not "1M", the milli tr
   assert.equal(exprUnit("I(R1)-I(R2)"), "A");
   assert.equal(exprUnit("Ib(Q1)+Ic(Q1)"), "A");
   assert.equal(exprUnit("ig(v1)"), "", "group delay or a gate current: not guessed");
+  assert.equal(exprUnit("Ig(M1)*2", (n) => (n === "Ig(M1)" ? "A" : "")), "A", "listed by the run as a current");
   assert.equal(exprUnit("V(a)*V(a)/100"), "V²");
   assert.equal(exprUnit("v(out)+1"), "V", "a number takes the other side's unit");
   assert.equal(exprUnit("v(out)+i(v1)"), "", "volts plus amperes: no unit");

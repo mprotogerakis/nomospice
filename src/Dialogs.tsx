@@ -299,7 +299,8 @@ function TraceDialog() {
     const vectorUnit = (n: string) => {
       const v = vectors.find((x) => x.toLowerCase() === n.toLowerCase());
       // (a device parameter @m1[gm] … has a unit of its own: none rather than a wrong one)
-      return !v ? "" : v === run?.scale ? xUnitOf(v) : /#branch$|^@.*\[i\]$/i.test(v) ? "A" : v.startsWith("@") ? "" : "V";
+      // (a part current by name, Ig(M1): amperes)
+      return !v ? "" : v === run?.scale ? xUnitOf(v) : /#branch$|^@.*\[i\]$|^I\w*\(.*\)$/i.test(v) ? "A" : v.startsWith("@") ? "" : "V";
     };
     const f = e.match(/^(\w+)\((.*)\)$/);
     const unit = f && /^v?db$/i.test(f[1]) ? "dB" : f && /^(c?ph|vp)$/i.test(f[1]) ? "rad"
