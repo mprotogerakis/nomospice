@@ -187,15 +187,16 @@ impl Library {
     /// component list shows them; they replace one cached from LTspice or a library folder (it
     /// comes back with another folder), not a built-in symbol. Another folder (or
     /// none) drops them again; `rescan` reloads the same folder (a symbol saved meanwhile).
-    pub fn set_dir(&mut self, dir: Option<&std::path::Path>, rescan: bool) {
+    /// Whether the folder's symbols changed (were reloaded).
+    pub fn set_dir(&mut self, dir: Option<&std::path::Path>, rescan: bool) -> bool {
         let moved = self.local.dir.as_deref() != dir;
         if !moved && !rescan {
-            return; // netlisting: no disk access
+            return false; // netlisting: no disk access
         }
         let list = dir.map(folder_symbols).unwrap_or_default(); // one listing for the stamp and the load
         let stamp = dir.and_then(|d| std::fs::metadata(d).ok()).and_then(|_| asy_stamp(&list));
         if !moved && stamp == self.local.stamp {
-            return;
+            return false;
         }
         self.local.stamp = stamp;
         for k in self.local.own.drain() {
@@ -206,13 +207,17 @@ impl Library {
         }
         self.local.dir = dir.map(std::path::Path::to_path_buf);
         for (key, p) in list {
-            if let Ok(bytes) = std::fs::read(&p) {
-                self.defs.insert(key.clone(), parse_asy(&key, &decode(&bytes)));
-                self.misses.remove(&key);
-                self.local.lent.remove(&key); // the folder's own now, no longer lent
-                self.local.own.insert(key);
+            match std::fs::read(&p) {
+                Ok(bytes) => {
+                    self.defs.insert(key.clone(), parse_asy(&key, &decode(&bytes)));
+                    self.misses.remove(&key);
+                    self.local.lent.remove(&key); // the folder's own now, no longer lent
+                    self.local.own.insert(key);
+                }
+                Err(_) => self.local.stamp = None, // (being written?) the next rescan tries again
             }
         }
+        true
     }
 
     /// Resolve a symbol; unknown names fall back to a local LTspice install and the library folders
@@ -950,6 +955,8 @@ fn meas_statement(s: &str, sensors: &[Sensor], an: &str) -> Result<String, Strin
     let par = |x: &str| format!("par('{}')", x.trim().trim_matches('\''));
     let typed = meas_name_at(&toks) == 2;
     let typ = if typed { low(&toks[1]) } else { an.to_string() };
+    // .ac and .sp are small-signal: a par() B-source there is linearized (silently wrong)
+    let linear = typ == "ac" || typ == "sp";
     // AC: par() is a B-source, linearized there: an expression would come out silently wrong.
     // LTspice's mag()/db()/ph()/re()/im() of a voltage are ngspice's vm/vdb/vp/vr/vi; anything else
     // stays as written (ngspice then reports it failed rather than a wrong number)
@@ -961,7 +968,7 @@ fn meas_statement(s: &str, sensors: &[Sensor], an: &str) -> Result<String, Strin
         let inner = x.get(o + 1..x.len().checked_sub(1)?)?.trim();
         (l.ends_with(')') && low(inner).starts_with("v(") && inner.ends_with(')') && !inner[2..inner.len() - 1].contains(['(', ')'])).then(|| format!("{f}{}", &inner[1..]))
     };
-    let measured = |x: &str| if simple(x) { x.to_string() } else if typ == "ac" { ac_vector(x).unwrap_or(x.to_string()) } else { par(x) };
+    let measured = |x: &str| if simple(x) { x.to_string() } else if linear { ac_vector(x).unwrap_or(x.to_string()) } else { par(x) };
     let keyword = |t: &str| t.contains('=') || ["trig", "targ", "when", "at", "last"].contains(&low(t).as_str());
     let when_end = |t: &str| ["td=", "rise=", "fall=", "cross=", "from=", "to=", "last", "trig", "targ"].iter().any(|k| low(t).starts_with(k));
     const OPTION: [&str; 8] = ["val", "td", "rise", "fall", "cross", "at", "from", "to"];
@@ -1016,8 +1023,8 @@ fn meas_statement(s: &str, sensors: &[Sensor], an: &str) -> Result<String, Strin
                     }
                 }
                 match level {
-                    Some(v) if !number(&v) && typ == "ac" => {
-                        return Err(format!("{}: in AC, ngspice takes only a number as the level ({v}), and would measure at its first number: left out", out.get(2).map_or(".meas", |n| n.as_str())));
+                    Some(v) if !number(&v) && linear => {
+                        return Err(format!("{}: in AC/SP, ngspice takes only a number as the level ({v}), and would measure at its first number: left out", out.get(2).map_or(".meas", |n| n.as_str())));
                     }
                     Some(v) if !x.is_empty() && !number(&v) => {
                         out.push(par(&format!("{}-({v})", unpar(&x))));
@@ -1034,6 +1041,14 @@ fn meas_statement(s: &str, sensors: &[Sensor], an: &str) -> Result<String, Strin
                     _ => out.push(measured(&x)),
                 }
             }
+            // LTspice `PARAM <expr>` (from other results): ngspice writes param='<expr>'
+            "param" => {
+                let start = i;
+                while i < toks.len() && !keyword(&toks[i]) {
+                    i += 1;
+                }
+                out.push(format!("param='{}'", toks[start..i].join("").trim_matches('\'')));
+            }
             "when" => {
                 let start = i;
                 while i < toks.len() && !when_end(&toks[i]) {
@@ -1041,14 +1056,14 @@ fn meas_statement(s: &str, sensors: &[Sensor], an: &str) -> Result<String, Strin
                 }
                 let w = toks[start..i].join("");
                 match w.split_once('=') {
-                    Some((_, b)) if typ == "ac" && !(number(b) || call(b)) => {
-                        return Err(format!("{}: in AC, ngspice takes only a number or a vector as the level ({b}), and would measure at its first number: left out", out.get(2).map_or(".meas", |n| n.as_str())));
+                    Some((_, b)) if linear && !(number(b) || call(b)) => {
+                        return Err(format!("{}: in AC/SP, ngspice takes only a number or a vector as the level ({b}), and would measure at its first number: left out", out.get(2).map_or(".meas", |n| n.as_str())));
                     }
                     Some((a, b)) => {
-                        let a = if typ == "ac" { ac_vector(a).unwrap_or(a.to_string()) } else { a.to_string() };
+                        let a = if linear { ac_vector(a).unwrap_or(a.to_string()) } else { a.to_string() };
                         // ngspice reads `vector=number` and `vector=vector` itself (and AC stays as written);
                         // a bare name on the right is a .param in LTspice: par() resolves it
-                        if simple(&a) && (number(b) || call(b)) || typ == "ac" {
+                        if simple(&a) && (number(b) || call(b)) || linear {
                             out.push(format!("WHEN {a}={b}"));
                         } else {
                             out.push(format!("WHEN {}=0", par(&format!("{}-({b})", unpar(&a)))));
@@ -1114,7 +1129,8 @@ pub fn prepare_warnings(text: &str, dir: Option<&std::path::Path>, warnings: &mu
     let mut x = Expander { warnings, out: String::new(), seen: HashSet::new(), read: false, diode: None, behavioural: vec![] };
     x.expand(text, dir, None, 0);
     x.warn_behavioural();
-    ltspice_meas(text, &[], warnings); // a .meas left out is said before a run, too
+    let expanded = std::mem::take(&mut x.out);
+    ltspice_meas(&expanded, &[], warnings); // a .meas left out is said before a run too (included files' as well)
 }
 
 /// `.lib "path with spaces.lib" section` -> (path, section)
@@ -1917,6 +1933,8 @@ mod tests {
         assert_eq!(m(".meas tran t TRIG par('v(a)') VAL=0.5 * V(vdd) RISE=1"), ".meas tran t TRIG par('v(a)-(0.5*V(vdd))') VAL=0 RISE=1", "no par() in par(), nothing cut");
         assert_eq!(m(".meas tran w WHEN par('v(a)*v(b)')=0.5*V(vdd)"), ".meas tran w WHEN par('v(a)*v(b)-(0.5*V(vdd))')=0", "WHEN too");
         assert_eq!(m(".meas tran t WHEN V(out)=vth"), ".meas tran t WHEN par('V(out)-(vth)')=0", "a .param level resolves in par()");
+        assert_eq!(m(".meas tran ratio PARAM tplh / tphl"), ".meas tran ratio param='tplh/tphl'", "LTspice's PARAM");
+        assert_eq!(m(".meas sp g MAX V(out)/V(in)"), ".meas sp g MAX V(out)/V(in)", "SP: no par() either (linearized)");
         assert_eq!(m(".meas ac p FIND ph(V(out)) AT=1k"), ".meas ac p FIND ph(V(out)) AT=1k", "degrees vs radians: not mapped");
         let mut w = vec![];
         let skipped = ltspice_meas(".ac dec 10 1 1k\n.meas ac f1 TRIG vm(out) VAL=0.5*vm(in) TARG vm(out) VAL=1\n", &[], &mut w);

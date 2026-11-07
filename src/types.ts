@@ -88,6 +88,8 @@ export interface Sim {
   log: string[];
   /** what a root locus can vary: .param names and R/C/L instances (by the sweep's own rules) */
   sweepable: string[];
+  /** the schematic folder's symbols changed (edited there): the drawing reloads them */
+  symbols?: boolean;
 }
 
 export interface TraceData {

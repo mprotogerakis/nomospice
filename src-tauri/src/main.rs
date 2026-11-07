@@ -164,6 +164,8 @@ struct Sim {
     log: Vec<String>,
     /// What a root locus can vary: the schematic's .params and R/C/L parts (`schematic::sweepable`)
     sweepable: Vec<String>,
+    /// The schematic folder's symbols changed since last asked (edited there): reload them
+    symbols: bool,
 }
 
 /// The symbol library, set to the schematic's folder (its own .asy symbols): every netlisting goes
@@ -186,9 +188,11 @@ async fn simulate(items: Vec<Item>, dir: Option<String>, lib: tauri::State<'_, L
     let op = ngspice::begin(); // a Halt pressed from here on (netlisting, include expansion) still counts
     // the UI gets the clean netlist (same nets/insts/probes); the one with current sensors runs
     // both netlists from one state of the library (the UI's nets, insts, probes match what runs)
-    let (mut netlist, sim) = {
-        let mut lib = lib_at(&lib, dir.as_deref());
-        (schematic::netlist(&items, &mut lib), schematic::netlist_for_sim(&items, &mut lib))
+    let (mut netlist, sim, symbols) = {
+        let mut lib = lib.0.lock().unwrap_or_else(|e| e.into_inner());
+        // a run looks again: a symbol edited next to the schematic counts (the UI reloads it)
+        let symbols = lib.set_dir(dir.as_deref().map(std::path::Path::new), true);
+        (schematic::netlist(&items, &mut lib), schematic::netlist_for_sim(&items, &mut lib), symbols)
     };
     // the newer request wins: a running root locus stops at its next step, then this runs
     SWEEP_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -201,8 +205,8 @@ async fn simulate(items: Vec<Item>, dir: Option<String>, lib: tauri::State<'_, L
         let pz = res.as_ref().is_ok_and(|r| r.plot.starts_with("pz"));
         let sweepable = if pz { schematic::sweepable(&netlist.text, &netlist.insts) } else { vec![] };
         match res {
-            Ok(mut run) => Sim { netlist, simulated, sweepable, log: std::mem::take(&mut run.log), run: Some(run) },
-            Err(log) => Sim { netlist, simulated, sweepable, run: None, log },
+            Ok(mut run) => Sim { netlist, simulated, sweepable, symbols, log: std::mem::take(&mut run.log), run: Some(run) },
+            Err(log) => Sim { netlist, simulated, sweepable, symbols, run: None, log },
         }
     }).await.map_err(|e| e.to_string())
 }

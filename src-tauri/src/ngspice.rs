@@ -316,7 +316,8 @@ fn measurements(log: &[String], names: &std::collections::HashMap<String, bool>)
             // a span (trig/targ) or a WHEN point lies on the x axis
             Some((n.trim().to_string(), Some(v.trim_end_matches(',').parse::<f64>().ok()?), info.trim().to_string(), x || info.contains("targ=")))
         });
-        out.extend(result);
+        // (first one wins: a later line of the same name in the log is not a second result)
+        out.extend(result.filter(|r| !out.iter().any(|o| o.0.eq_ignore_ascii_case(&r.0))));
     }
     out
 }
