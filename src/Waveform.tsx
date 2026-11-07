@@ -32,6 +32,9 @@ function spectra(d: Trace["data"] & object, lo: number, hi: number, n: number) {
   return parts;
 }
 
+/** Whether the pane's left axis has a value above 0 to draw on a log scale (reference lines aside). */
+const positive = (pane: Pane) => pane.series.some((s) => scaleOf(pane, s) === "y" && !s.t.data?.constant && s.y.some((v) => v != null && v > 0));
+
 /** Settings of a pane's y axis, by its unit (the spectrum's apart). */
 const axisKey = (unit: string, fft: boolean) => `${fft ? "fft:" : ""}${unit}`;
 
@@ -168,9 +171,12 @@ export const Waveform = memo(function Waveform() {
     if (!win) return ok;
     return ok.filter((t) => !t.data!.constant && !t.data!.im).map((t): Trace => {
       const parts = spectra(t.data!, win.lo, win.hi, win.n);
-      return { ...t, unit: "dB", right: undefined, pane: undefined, data: { ...t.data!, x: parts.flatMap((p) => p.f), re: parts.flatMap((p) => p.db) as number[], constant: undefined } };
+      // (x: the frequencies once, shared; the curves end to end in re, split by its length)
+      return { ...t, unit: "dB", right: undefined, pane: undefined, data: { ...t.data!, x: parts[0].f, re: parts.flatMap((p) => p.db) as number[], constant: undefined } };
     });
   }, [ok, win]);
+  // the table's rows: in the spectrum also the traces without one (an error: still listed, removable)
+  const listed = useMemo(() => (spec ? [...shown, ...traces.filter((t) => !t.data?.x.length)] : traces), [spec, shown, traces]);
   // constants (reference lines: 0.5, 500m) are drawn on the top pane's axis, whatever it is now:
   // volts first, the magnitude in a Bode plot
   const [lines, signals] = useMemo(() => [shown.filter((t) => t.data!.constant), shown.filter((t) => !t.data!.constant)], [shown]);
@@ -195,17 +201,17 @@ export const Waveform = memo(function Waveform() {
     const panes: Pane[] = [];
     if (cplx.length) panes.push({ unit: "dB", unit2: "", series: cplx.flatMap((t) => split(t, mag(t), "dB", !!t.right)) }, { unit: "°", unit2: "", series: cplx.flatMap((t) => split(t, phase(t, seg), "°", !!t.right)) });
     // a trace moved to another unit's pane goes there while that pane has traces of its own
-    const own = new Set(real.filter((t) => !t.pane).map((t) => t.unit));
+    const own = new Set(real.filter((t) => t.pane == null).map((t) => t.unit));
     const home = (t: Trace) => (t.pane != null && own.has(t.pane) ? t.pane : t.unit);
     const units = [...new Set(real.map(home))].sort((a, b) => (a === "V" ? -1 : b === "V" ? 1 : a.localeCompare(b)));
     for (const unit of units) {
-      const series = real.filter((t) => home(t) === unit).flatMap((t) => split(t, t.data!.re, t.unit, !!t.right || t.unit !== unit));
+      // a pane holding a trace of another unit: its right axis is that unit's (its own traces left)
+      const here = real.filter((t) => home(t) === unit), guest = here.some((t) => t.unit !== unit);
+      const series = here.flatMap((t) => split(t, t.data!.re, t.unit, guest ? t.unit !== unit : !!t.right));
       const same = panes.find((p) => p.unit === unit); // db(...) joins the dB pane
       if (same) same.series.push(...series);
       else panes.push({ unit, unit2: "", series });
     }
-    // a pane holding a trace of another unit: its right axis is that unit's (its own traces left)
-    for (const p of panes) if (p.series.some((s) => s.u !== p.unit)) for (const s of p.series) s.r = s.u !== p.unit;
     if (lines.length && !panes.length) panes.push({ unit: "", unit2: "", series: [] });
     // one series per level (not one per outer .dc step); in a Bode plot a magnitude, as in LTspice:
     // 1 at 0 dB, 0.707 at -3 dB
@@ -254,7 +260,7 @@ export const Waveform = memo(function Waveform() {
       } } : {};
       // the left axis as set: log, a fixed range
       const ax = yAxes[axisKey(pane.unit, spec)] ?? {};
-      const logY = !!ax.log && !span && pane.series.some((s) => !s.r && s.y.some((v) => v != null && v > 0)); // (nothing above 0: linear)
+      const logY = !!ax.log && !span && positive(pane); // (nothing above 0: linear)
       const fixed = ax.lo != null && ax.hi != null ? { range: (): uPlot.Range.MinMax => [ax.lo!, ax.hi!] } : {};
       const values = (unit: string) => (_u: uPlot, v: number[], _i: number, _s: number, incr: number) =>
         v.map((y) => (unit === "dB" || unit === "°" ? `${+y.toFixed(Math.max(0, Math.ceil(-Math.log10(incr))))}${unit}` : si(y, unit, 3)));
@@ -400,7 +406,7 @@ export const Waveform = memo(function Waveform() {
         const pane = panes[paneEls.current.findIndex((el) => el?.contains(e.target as Node))];
         const key = pane ? axisKey(pane.unit, spec) : "", ax = yAxes[key] ?? {};
         const db = pane?.unit === "dB" || pane?.unit === "°";
-        const positive = !!pane?.series.some((s) => !s.r && s.y.some((v) => v != null && v > 0));
+        const pos = !!pane && positive(pane);
         openMenu(e.clientX, e.clientY, [
           { label: "Reset zoom", hint: "dbl-click", disabled: !panes.length, run: () => { setPlot({ zoom: null }); plots.current[0]?.setScale("x", { min: xs[0], max: xs[xs.length - 1] }); } },
           { label: "Clear cursors", run: () => setPlot({ a: null, b: null }) },
@@ -408,8 +414,8 @@ export const Waveform = memo(function Waveform() {
           ...(tran ? [spec ? { label: "Back to the transient", run: () => showFft(null) }
             : { label: "FFT (spectrum)", hint: a != null && b != null && a !== b ? "of A–B" : zoom ? "of the shown range" : "of the whole run", disabled: !panes.length || !(range[1] > range[0]), run: () => showFft(range) }] : []),
           ...(pane ? ["-" as const,
-            { label: ax.log ? "Linear y axis" : "Log y axis", hint: db ? `${pane.unit}: no` : !positive ? "nothing above 0" : undefined, disabled: db || (!ax.log && !positive), run: () => setYAxis(key, { ...ax, log: !ax.log || undefined, ...(!ax.log && ax.lo != null && ax.lo <= 0 ? { lo: undefined, hi: undefined } : {}) }) },
-            { label: "Y range…", hint: ax.lo != null && ax.hi != null ? `${si(ax.lo, pane.unit, 3)} … ${si(ax.hi, pane.unit, 3)}` : "automatic", run: () => useS.setState({ dialog: { k: "yrange", pane: key, unit: pane.unit, log: !!ax.log && !db } }) },
+            { label: ax.log ? "Linear y axis" : "Log y axis", hint: db ? `${pane.unit}: no` : !pos ? "nothing above 0" : undefined, disabled: db || (!ax.log && !pos), run: () => setYAxis(key, { ...ax, log: !ax.log || undefined, ...(!ax.log && ax.lo != null && ax.lo <= 0 ? { lo: undefined, hi: undefined } : {}) }) },
+            { label: "Y range…", hint: ax.lo != null && ax.hi != null ? `${si(ax.lo, pane.unit, 3)} … ${si(ax.hi, pane.unit, 3)}` : "automatic", run: () => useS.setState({ dialog: { k: "yrange", pane: key, unit: pane.unit, log: !!ax.log && !db && pos } }) },
             ...(ax.lo != null ? [{ label: "Automatic y range", run: () => setYAxis(key, { ...ax, lo: undefined, hi: undefined }) }] : []),
           ] : []),
           "-",
@@ -432,7 +438,7 @@ export const Waveform = memo(function Waveform() {
             <button className="underline hover:text-text-strong" onClick={() => showFft(null)}>back to the transient</button>
           </div>
         )}
-        <Readout traces={spec ? shown : traces} panes={panes} xs={xs} xUnit={xUnit} plot={spec ? "FFT" : run?.plot ?? ""} steps={run?.steps ?? NO_STEPS} />
+        <Readout traces={listed} panes={panes} xs={xs} xUnit={xUnit} plot={spec ? "FFT" : run?.plot ?? ""} spec={spec} steps={run?.steps ?? NO_STEPS} />
         <Measurements xUnit={xUnitOf(run?.scale ?? "")} />
         <button
           className="m-2 inline-flex h-[22px] items-center justify-center gap-1 rounded-control border border-border-control text-text-secondary hover:bg-surface-hover hover:text-text-strong disabled:opacity-40"
@@ -468,7 +474,7 @@ export function Measurements({ xUnit }: { xUnit: string }) {
 /** Trace table: values under the hover crosshair and at cursors A/B. Own component + hover store,
  *  so mouse moves over the plot re-render only this table. */
 const NO_STEPS: string[] = [];
-const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot, steps }: { traces: Trace[]; panes: Pane[]; xs: number[]; xUnit: string; plot: string; steps: string[] }) {
+const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot, spec, steps }: { traces: Trace[]; panes: Pane[]; xs: number[]; xUnit: string; plot: string; spec: boolean; steps: string[] }) {
   const hover = useHover((h) => h.x);
   const { a, b } = useS(useShallow((s) => ({ a: s.plot.a, b: s.plot.b })));
   // a trace alone in its pane(s): a right axis would change nothing there
@@ -515,11 +521,11 @@ const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot, steps }:
           {rows.map(({ t, val, delta, named }) => (
             <tr key={t.expr} className="group h-[22px] border-b border-border-subtle align-middle" title={t.error ?? t.expr}
               onContextMenu={(e) => (e.preventDefault(), openMenu(e.clientX, e.clientY, [
-                ...(moved(t) || plot === "FFT" ? [] : [{ label: t.right && !guest(t) ? "Back to the left axis" : "Right axis (own scale)", hint: guest(t) ? "it holds another unit here" : !t.right && alone(t) ? "alone in its pane" : undefined, disabled: guest(t) || (!t.right && alone(t)), run: () => setTraceRight(t.expr, !t.right) }]),
+                ...(moved(t) || spec ? [] : [{ label: t.right && !guest(t) ? "Back to the left axis" : "Right axis (own scale)", hint: guest(t) ? "it holds another unit here" : !t.right && alone(t) ? "alone in its pane" : undefined, disabled: guest(t) || (!t.right && alone(t)), run: () => setTraceRight(t.expr, !t.right) }]),
                 // (into another unit's pane: on its right axis there, unless that holds a third unit
                 // already; not the Bode panes, nor in a spectrum)
-                ...(t.data?.im || plot === "FFT" ? [] : panes.filter((p) => p.unit !== "dB" && p.unit !== "°" && !p.series.some((s) => s.t === t) && p.series.every((s) => s.u === p.unit || s.u === t.unit)).map((p) => ({ label: `Into the ${p.unit || "unitless"} pane`, hint: "its right axis", run: () => setTracePane(t.expr, p.unit) }))),
-                ...(t.pane != null && plot !== "FFT" ? [{ label: `Back to its own pane (${t.unit || "unitless"})`, run: () => setTracePane(t.expr, undefined) }] : []),
+                ...(t.data?.im || spec ? [] : panes.filter((p) => p.unit !== "dB" && p.unit !== "°" && p.unit !== t.unit && !p.series.some((s) => s.t === t) && p.series.every((s) => s.u === p.unit || s.u === t.unit)).map((p) => ({ label: `Into the ${p.unit || "unitless"} pane`, hint: "its right axis", run: () => setTracePane(t.expr, p.unit) }))),
+                ...(t.pane != null && !spec ? [{ label: `Back to its own pane (${t.unit || "unitless"})`, run: () => setTracePane(t.expr, undefined) }] : []),
                 { label: "Copy expression", hint: t.expr, run: () => navigator.clipboard.writeText(t.expr) },
                 { label: `Remove ${t.label}`, danger: true, run: () => removeTrace(t.expr) },
               ]))}>

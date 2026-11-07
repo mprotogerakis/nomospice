@@ -675,6 +675,7 @@ export function exprUnit(expr: string, vector: (name: string) => string = () => 
 
 // The spectrum of a transient trace (the plot's FFT view).
 
+const TWIDDLES = new Map<number, [Float64Array, Float64Array]>();
 /** In place, radix 2: `re.length` a power of 2. */
 function fft(re: Float64Array, im: Float64Array) {
   const n = re.length;
@@ -687,9 +688,14 @@ function fft(re: Float64Array, im: Float64Array) {
       [im[i], im[j]] = [im[j], im[i]];
     }
   }
-  // (the twiddles once: e^(-2πik/n), k < n/2; a stage of length len takes every (n/len)th)
-  const wr = new Float64Array(n / 2), wi = new Float64Array(n / 2);
-  for (let k = 0; k < n / 2; k++) [wr[k], wi[k]] = [Math.cos((-2 * Math.PI * k) / n), Math.sin((-2 * Math.PI * k) / n)];
+  // (the twiddles once per size: e^(-2πik/n), k < n/2; a stage of length len takes every (n/len)th)
+  let tw = TWIDDLES.get(n);
+  if (!tw) {
+    tw = [new Float64Array(n / 2), new Float64Array(n / 2)];
+    for (let k = 0; k < n / 2; k++) [tw[0][k], tw[1][k]] = [Math.cos((-2 * Math.PI * k) / n), Math.sin((-2 * Math.PI * k) / n)];
+    TWIDDLES.set(n, tw);
+  }
+  const [wr, wi] = tw;
   for (let len = 2; len <= n; len <<= 1) {
     const step = n / len;
     for (let i = 0; i < n; i += len) {
@@ -720,18 +726,20 @@ export function fftSize(xs: number[], lo: number, hi: number) {
 export function spectrum(xs: number[], ys: (number | null)[], lo: number, hi: number, n: number): { f: number[]; db: (number | null)[] } {
   const re = new Float64Array(n), im = new Float64Array(n);
   let sum = 0;
-  for (let i = 0; i < n; i++) {
-    const w = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / n);
-    const v = at(xs, ys, lo + ((hi - lo) * i) / n);
-    re[i] = (Number.isNaN(v) ? 0 : v) * w; // (a gap: a step halted early)
+  // (one pass: the sample times only rise; xs outside lo..hi or a gap (a step halted early): 0)
+  for (let i = 0, j = 0; i < n; i++) {
+    const w = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / n), t = lo + ((hi - lo) * i) / n;
+    while (j < xs.length - 2 && xs[j + 1] <= t) j++;
+    const [a, b] = [ys[j], ys[j + 1]];
+    const v = t < xs[0] || t > xs[xs.length - 1] || a == null || b == null ? 0 : xs[j + 1] === xs[j] ? a : a + Math.min(1, Math.max(0, (t - xs[j]) / (xs[j + 1] - xs[j]))) * (b - a);
+    re[i] = (Number.isFinite(v) ? v : 0) * w;
     sum += w;
   }
   fft(re, im);
-  const f: number[] = [], db: (number | null)[] = [];
+  const db: (number | null)[] = [];
   for (let k = 1; k <= n / 2; k++) {
-    f.push(k / (hi - lo));
     const a = (2 * Math.hypot(re[k], im[k])) / sum;
     db.push(a > 0 ? 20 * Math.log10(a) : null);
   }
-  return { f, db };
+  return { f: Array.from({ length: n / 2 }, (_, k) => (k + 1) / (hi - lo)), db };
 }
