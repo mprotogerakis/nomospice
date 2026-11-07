@@ -10,7 +10,7 @@ import { closeDialog as close, Field, FIELD, Modal, numHelp, Rows, TextField } f
 import { SourceEditor } from "./SourceEditor";
 import { SimDialog } from "./SimDialog";
 import { DirectiveDialog } from "./DirectiveDialog";
-import { analysisEditable, analysisEditableAt, analysisLine, analysisLineIndex, analysisOptions, tokens } from "./spice";
+import { analysisEditable, analysisEditableAt, analysisLine, analysisLineIndex, analysisOptions, exprUnit, tokens } from "./spice";
 import { cn } from "@/lib/utils";
 import thirdParty from "./third-party.json";
 import { checkForUpdate } from "./updater";
@@ -293,12 +293,16 @@ function TraceDialog() {
   const submit = () => {
     const e = expr.trim();
     close();
-    // a unit only for a single plain quantity (or a function of one); products like i(v1)*v(in)
-    // get none rather than a wrong one. ngspice ph()/cph()/vp() are in radians.
-    const plain = (x: string) => (raw && !noise ? "" : /^v\([^()]*\)$/i.test(x) ? "V" : /^i\([^()]*\)$/i.test(x) ? "A" : noise && /^\w+$/.test(x) ? noiseUnit(x) : "");
+    // the unit by dimensional analysis (V·A = W, V/A = Ω; none rather than a wrong one); a plain
+    // vector name: a node is volts, a branch or device current amperes. ngspice ph()/cph()/vp()
+    // are in radians.
+    const vectorUnit = (n: string) => {
+      const v = vectors.find((x) => x.toLowerCase() === n.toLowerCase());
+      return !v ? "" : v === run?.scale ? { time: "s", frequency: "Hz" }[v] ?? "" : /#branch$|^@.*\[i/i.test(v) ? "A" : "V";
+    };
     const f = e.match(/^(\w+)\((.*)\)$/);
     const unit = f && /^v?db$/i.test(f[1]) ? "dB" : f && /^(c?ph|vp)$/i.test(f[1]) ? "rad"
-      : f && /^(mag|vm|real|imag|re|im|abs)$/i.test(f[1]) ? plain(f[2]) : plain(e);
+      : raw && !noise ? "" : noise && /^\w+$/.test(e) ? noiseUnit(e) : exprUnit(e, vectorUnit);
     if (e) addTrace(e, e, unit);
   };
   return (

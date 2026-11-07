@@ -50,6 +50,8 @@ static LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
 static BG_DONE: AtomicBool = AtomicBool::new(true);
 /// Counts runs: each one destroys the results of the one before (see `Run::id`, `trace`).
 static RUNS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// The latest run's current sensors: trace expressions name part currents (`I(R1)`, `Ib(Q1)`).
+static SENSORS: Mutex<Vec<crate::schematic::Sensor>> = Mutex::new(Vec::new());
 /// Counts Halt presses. An operation (a simulation, a root locus) notes the count when it begins
 /// (`begin`) and is halted once the count moves on (`halted_since`): a Halt stops what was running
 /// when it was pressed, never something started afterwards, and no later start can undo it. Only
@@ -364,6 +366,7 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
     api.command("destroy all");
     api.command("remcirc");
     let id = RUNS.fetch_add(1, Ordering::SeqCst) + 1; // the previous run's results are gone now
+    *SENSORS.lock().unwrap_or_else(|e| e.into_inner()) = sensors.clone();
     take_log();
     let lines: Vec<CString> = netlist.lines().map(|l| CString::new(l).unwrap_or_default()).collect();
     let mut ptrs: Vec<*const c_char> = lines.iter().map(|l| l.as_ptr()).collect();
@@ -409,8 +412,8 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
     let op = if scale.is_empty() {
         vectors.iter().filter_map(|v| {
             let t = read(api, v)?;
-            // a sensor's current is reported under its device (`r1#branch` -> I(r1))
-            let name = sensors.iter().find(|s| v.strip_suffix("#branch") == Some(s.source.as_str())).map_or(v.clone(), |s| format!("{}#branch", s.inst));
+            // a sensor's current is reported by its name (`I(R1)`, `Ib(Q1)`)
+            let name = sensors.iter().find(|s| v.strip_suffix("#branch") == Some(s.source.as_str())).map_or(v.clone(), |s| s.label.clone());
             // types are reliable only for .op and .ac (ngspice marks .tf/.pz/.sens/noise values as "voltage")
             let unit = match (plot.starts_with("op") || phasors, t.typ) { (true, 3) => "V", (true, 4) => "A", _ => "" }.to_string();
             Some((name, *t.re.first()?, t.im.and_then(|im| im.first().copied()).unwrap_or(0.0), unit))
@@ -428,6 +431,9 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
         l.contains("aborted") || l.contains("timestep too small") || l.contains("simulation interrupted")
     });
     let meas = if crate::schematic::contains_ci(netlist, ".meas") { measurements(&log, &meas_names(netlist)) } else { vec![] };
+    // sensor currents listed by their names, which trace expressions take (`I(R1)`, not `vsense_r1#branch`)
+    let mut vectors: Vec<String> = vectors.into_iter().map(|v| sensors.iter().find(|s| v.strip_suffix("#branch") == Some(s.source.as_str())).map_or(v, |s| s.label.clone())).collect();
+    vectors.sort();
     Ok(Run { id, plot, scale, vectors, op, aborted, meas, log })
 }
 
@@ -461,6 +467,9 @@ fn plot_vectors(api: &Api, plot: &str, sensors: &[crate::schematic::Sensor], par
 /// Evaluate an ngspice expression (e.g. `v(out)`, `i(vsense_r1)`, `v(a)-v(b)`) in the results of
 /// run `run` (an error once another run, such as a root locus step, replaced them).
 pub fn trace(expr: &str, scale: &str, run: u64) -> Result<Trace, String> {
+    // part currents by name (`I(R1)-I(R2)`, `Ib(Q1)`): the latest run's sensors
+    let named = crate::schematic::sensor_currents(expr, &SENSORS.lock().unwrap_or_else(|e| e.into_inner()));
+    let expr = named.as_str();
     // ngspice's command line is csh-like (`;` chains, backquotes run sh, `!` history, `$` vars):
     // only characters an expression needs may pass.
     let ok = |c: char| c.is_ascii_alphanumeric() || " _()[]@#+-*/^.,:\"'<>=&|%".contains(c);

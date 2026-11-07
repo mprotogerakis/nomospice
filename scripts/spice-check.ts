@@ -4,6 +4,7 @@ import { connectivity, dragPlan } from "../src/geom.ts";
 import {
   tokens, formatAnalysis, formatIc, formatInclude, formatMeas, formatModel, formatParams, formatSource, numInfo, parseAnalysis,
   parseIc, parseInclude, parseMeas, parseModel, parseParams, parseSource, sample, si, spiceNum, directiveKind, analysisRoundTrips, analysisEditable, analysisOptions, analysisLineIndex, at, integrate, stripAnalyses, portablePaths, sourceRoundTrips,
+  exprUnit, unitTimes,
 } from "../src/spice.ts";
 
 // numbers and the classic pitfalls
@@ -180,4 +181,36 @@ assert.equal(numInfo("1Meg", "Hz")!.text, "= 1MegHz"); // not "1M", the milli tr
   const selWire = dragPlan(withPin as never, lib as never, new Set([2]))(0, 20);
   assert.ok(connectivity(selWire as never, lib as never).dots.some(([x, y]) => x === 50 && y === 0), JSON.stringify(selWire));
 }
+
+// units of trace expressions: dimensional analysis
+{
+  const vec = (n: string) => (n.endsWith("#branch") ? "A" : n === "time" ? "s" : "V");
+  assert.equal(exprUnit("V(L1)*I(R1)"), "W");
+  assert.equal(exprUnit("v(\"n001\")-v(\"n002\")"), "V");
+  assert.equal(exprUnit("(v(a)-v(b))*i(vsense_r1)"), "W");
+  assert.equal(exprUnit("V(out)/I(R1)"), "Ω");
+  assert.equal(exprUnit("I(R1)-I(R2)"), "A");
+  assert.equal(exprUnit("Ib(Q1)+Ic(Q1)"), "A");
+  assert.equal(exprUnit("V(a)*V(a)/100"), "V²");
+  assert.equal(exprUnit("v(out)+1"), "V", "a number takes the other side's unit");
+  assert.equal(exprUnit("v(out)+i(v1)"), "", "volts plus amperes: no unit");
+  assert.equal(exprUnit("integ(V(a)*I(R1))"), "J");
+  assert.equal(exprUnit("deriv(v(c))"), "V/s");
+  assert.equal(exprUnit("sqrt(v(a)*v(a))"), "V");
+  assert.equal(exprUnit("abs(i(v1))"), "A");
+  assert.equal(exprUnit("2*pi"), "");
+  assert.equal(exprUnit("0.5"), "");
+  assert.equal(exprUnit("db(v(out))"), "");
+  assert.equal(exprUnit("p_ges", vec), "V", "a node by its name");
+  assert.equal(exprUnit("v1#branch*out", vec), "W");
+  assert.equal(exprUnit("v(a)^2"), "V²");
+  assert.equal(exprUnit("v(a"), "V", "an open call: what was read");
+  assert.equal(exprUnit("v(a) v(b)"), "", "not one expression");
+  assert.equal(unitTimes("W", "s"), "J");
+  assert.equal(unitTimes("A", "s"), "C");
+  assert.equal(unitTimes("V", "s"), "V·s");
+  assert.equal(unitTimes("", "s"), "s");
+  assert.equal(unitTimes("V²", "s"), "V²·s");
+}
+
 console.log("spice-check: ok");

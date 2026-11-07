@@ -5,10 +5,10 @@ import { useShallow } from "zustand/react/shallow";
 import { Maximize, Minus, Plus } from "lucide-react";
 import type { Item, Shape, SymbolDef } from "./types";
 import {
-  box, connectivity, currentLabel, defOf, dragPlan, mirror, prefixOf, rotate, dropZeroWires, dropZeroWiresKeepSel, GRID, hit, isShape, labelRect, leftLabels, matrix, snap, symBox,
+  box, connectivity, defOf, dragPlan, mirror, pins, prefixOf, rotate, dropZeroWires, dropZeroWiresKeepSel, GRID, hit, isShape, labelRect, leftLabels, matrix, snap, symBox,
   textLines, union, xform, type Box, type Lib, type Pt,
 } from "./geom";
-import { canProbe, commit, currentNets, nextInst, powerMode, probe, probeMode, simulate, useS, useStatus } from "./store";
+import { canProbe, commit, currentNets, nextInst, partCurrent, powerMode, probe, probeMode, simulate, useS, useStatus } from "./store";
 import { deleteSelection, duplicate, newItem, transform } from "./actions";
 import { openMenu, type MenuItem } from "./Menu";
 import { useSize } from "./lib/useSize";
@@ -18,7 +18,7 @@ import { inlineStyles, saveSvg, withLightTheme } from "./svgExport";
 type View = { x: number; y: number; k: number };
 type Drag =
   | { k: "pan"; sx: number; sy: number; vx: number; vy: number; moved: boolean }
-  | { k: "move"; start: Pt; plan: (dx: number, dy: number) => Item[]; moved: boolean; index: number; at: Pt; base: Item[] }
+  | { k: "move"; start: Pt; plan: (dx: number, dy: number) => Item[]; moved: boolean; index: number; at: Pt; base: Item[]; pin?: number }
   | { k: "box"; start: Pt; end: Pt };
 
 // SwiftFlow viewport constants (Models/Viewport.swift, FitViewOptions.swift)
@@ -234,6 +234,7 @@ export const Schematic = memo(function Schematic() {
   const [wireStart, setWireStart] = useState<Pt | null>(null);
   const [hFirst, setHFirst] = useState<boolean | null>(null);
   const [hover, setHover] = useState(-1);
+  const [hoverPin, setHoverPin] = useState<number>(); // probing: the part's pin under the pointer
   const [preview, setPreview] = useState<Item[] | null>(null);
   const [boxSel, setBoxSel] = useState<[Pt, Pt] | null>(null);
   const drag = useRef<Drag | null>(null);
@@ -248,6 +249,20 @@ export const Schematic = memo(function Schematic() {
 
   // net of the hovered item (for net highlight + status bar)
   const hoverNet = hover >= 0 && nets && items[hover]?.t !== "sym" ? nets.nets[hover]?.[0] ?? null : null;
+  /** The pin of part `it` near `p` (probing: its own current, Ib(Q1)); none: the part's body. */
+  const pinAt = (it: Item | undefined, p: Pt) => {
+    if (it?.t !== "sym") return undefined;
+    const tol = Math.max(GRID * 0.75, 8 / view.k);
+    let best: number | undefined, d0 = tol * tol;
+    pins(it, defOf(lib, it)).forEach(([x, y], k) => {
+      const d = (x - p[0]) ** 2 + (y - p[1]) ** 2;
+      if (d <= d0) (best = k), (d0 = d);
+    });
+    return best;
+  };
+  // probing a part: the status bar names the current a click plots
+  const hoverCurrent = probing && hover >= 0 && items[hover]?.t === "sym" && nets ? partCurrent(nets, hover, hoverPin) : "";
+  useEffect(() => useStatus.setState({ probe: hoverCurrent || null }), [hoverCurrent]);
 
   const size = useSize(svgRef);
 
@@ -363,7 +378,7 @@ export const Schematic = memo(function Schematic() {
         // the plan is built on the first move (a click or a probe never needs it)
         let built: ReturnType<typeof dragPlan> | null = null;
         const plan = (dx: number, dy: number) => (built ??= dragPlan(items, lib, new Set(next)))(dx, dy);
-        drag.current = { k: "move", start: g, plan, moved: false, index: i, at: [0, 0], base: items };
+        drag.current = { k: "move", start: g, plan, moved: false, index: i, at: [0, 0], base: items, pin: probing ? pinAt(items[i], p) : undefined };
       } else if (e.shiftKey) {
         drag.current = { k: "box", start: p, end: p };
       } else {
@@ -380,7 +395,11 @@ export const Schematic = memo(function Schematic() {
     if (wireStart && hFirst === null && (g[0] !== wireStart[0] || g[1] !== wireStart[1]))
       setHFirst(Math.abs(g[0] - wireStart[0]) >= Math.abs(g[1] - wireStart[1]));
     const d = drag.current;
-    if (!d) return setHover(tool.k === "place" || tool.k === "wire" ? -1 : hit(items, lib, p, 6 / view.k));
+    if (!d) {
+      const h = tool.k === "place" || tool.k === "wire" ? -1 : hit(items, lib, p, 6 / view.k);
+      setHover(h);
+      return setHoverPin(probing && h >= 0 ? pinAt(items[h], p) : undefined);
+    }
     if (d.k === "pan") {
       if (Math.hypot(e.clientX - d.sx, e.clientY - d.sy) > 3) d.moved = true; // SwiftFlow minimumDistance: 3
       if (d.moved) autoFit.current = false, setView((v) => ({ ...v, x: d.vx + e.clientX - d.sx, y: d.vy + e.clientY - d.sy }));
@@ -404,7 +423,7 @@ export const Schematic = memo(function Schematic() {
         commit(next.items, next.sel);
       }
       // LTspice: a plain click probes at once; modifier clicks only change the selection
-      else if (!d.moved && probing && !mods.current && useS.getState().items === d.base) probe(d.base[d.index]);
+      else if (!d.moved && probing && !mods.current && useS.getState().items === d.base) probe(d.base[d.index], false, d.pin);
     } else if (d?.k === "pan" && !d.moved) useS.setState({ sel: [] });
     else if (d?.k === "box") {
       const [a, b] = [d.start, d.end]; // from the ref: the last pointermove may not have rendered
@@ -438,9 +457,13 @@ export const Schematic = memo(function Schematic() {
     const net = i >= 0 ? nets?.nets[i]?.[0] : undefined;
     const selectNet = () => set({ sel: items.flatMap((x, j) => ((x.t === "wire" || x.t === "flag") && nets?.nets[j]?.[0] === net ? [j] : [])) });
     const edit = () => set({ sel: [i], dialog: { k: "edit", index: i } });
-    const plot: MenuItem[] = probing && it && canProbe(it) ? [{ label: it.t === "sym" ? `Plot ${currentLabel(nets?.insts[i] || "current")}` : `Plot V(${net ?? "?"})`, run: () => probe(it) }] : [];
+    // a part: its current, and each pin's where it has its own (a transistor's Ib, a subcircuit's pins)
+    const own = it?.t === "sym" && nets ? partCurrent(nets, i) : "";
+    const plot: MenuItem[] = !probing || !it ? [] : it.t !== "sym" ? (canProbe(it) ? [{ label: `Plot V(${net ?? "?"})`, run: () => probe(it) }] : [])
+      : [...(own ? [{ label: `Plot ${own}`, run: () => probe(it) }] : []),
+        ...(nets?.pin_currents[i] ?? []).flatMap((c, k) => (c && c !== own ? [{ label: `Plot ${c}`, run: () => probe(it, false, k) }] : []))];
     // two-pin parts: their power too (LTspice: alt-click)
-    if (plot.length && powerMode(sim) && it?.t === "sym" && nets?.nets[i]?.length === 2) plot.push({ label: `Plot power P(${nets.insts[i] || "?"})`, run: () => probe(it, true) });
+    if (own && powerMode(sim) && it?.t === "sym" && nets?.nets[i]?.length === 2) plot.push({ label: `Plot power P(${nets.insts[i] || "?"})`, run: () => probe(it, true) });
     const arrange: MenuItem[] = [
       { label: "Rotate", hint: "⌃R", run: () => transform(rotate) },
       { label: "Mirror", hint: "⌃E", run: () => transform(mirror) },
@@ -527,7 +550,7 @@ export const Schematic = memo(function Schematic() {
   // labels whose wire leaves to the right are drawn to the left of their anchor
   const leftward = useMemo(() => leftLabels(shown), [shown]);
   const hoverIsSym = hover >= 0 && items[hover]?.t === "sym";
-  const hoverProbe = probing && hover >= 0 && canProbe(items[hover]);
+  const hoverProbe = probing && hover >= 0 && canProbe(items[hover], hoverPin);
   const cursorStyle =
     tool.k === "delete" ? "not-allowed"
     : tool.k !== "select" ? "crosshair"

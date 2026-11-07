@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import type { GitStatus, Item, Netlist, Sim, SymbolDef, Trace, TraceData } from "./types";
 import { currentLabel, defOf, symKey, vexpr, type Lib } from "./geom";
-import { ANALYSIS, ANY_ANALYSIS, analysisOptions, stripAnalyses, type Analysis } from "./spice";
+import { ANALYSIS, ANY_ANALYSIS, analysisLineIndex, analysisOptions, continuation, stripAnalyses, type Analysis } from "./spice";
 
 export type Tool =
   | { k: "select" }
@@ -77,7 +77,7 @@ const set = useS.setState;
 const get = useS.getState;
 
 /** Cursor/hover readout: a separate store so pointer moves only re-render the status bar. */
-export const useStatus = create(() => ({ x: 0, y: 0, net: null as string | null, zoom: 1 }));
+export const useStatus = create(() => ({ x: 0, y: 0, net: null as string | null, probe: null as string | null, zoom: 1 }));
 
 // ---------------------------------------------------------------- document
 
@@ -302,6 +302,36 @@ export async function selectTab(kind: Analysis) {
   if (!get().sim) void simulate();
 }
 
+/** `items` without the analysis of `kind` (the active one, or the commented alternative), and the
+ *  index of the text it stood in; a text left empty goes. null: none such. */
+function withoutAnalysis(items: Item[], kind: Analysis, active: boolean): [Item[], number] | null {
+  const k = items.findIndex((it) => it.t === "text" && !!it.directive === active && analysisOptions([it]).some((o) => o.kind === kind));
+  const it = items[k];
+  if (it?.t !== "text") return null;
+  const lines = it.text.split("\n"), li = analysisLineIndex(lines, kind, active);
+  const drop = new Set([li, ...continuation(lines, li)]);
+  const rest = lines.filter((_, j) => !drop.has(j));
+  return [rest.some((l) => l.trim()) ? items.map((x, j) => (j === k ? { ...it, text: rest.join("\n") } : x)) : items.filter((_, j) => j !== k), k];
+}
+
+/** "×" on a result tab: its analysis leaves the schematic (⌘Z brings it back, with its results).
+ *  The schematic's own analysis closed: the first alternative left takes its place, so the file
+ *  still has one to run (also in other simulators). The last tab stays. */
+export function closeTab(kind: Analysis) {
+  const { items, running } = get();
+  const opts = analysesOf(items), o = opts.find((x) => x.kind === kind);
+  if (running || !o || opts.length < 2) return;
+  const cut = withoutAnalysis(items, kind, o.active);
+  if (!cut) return;
+  let [next] = cut;
+  const alt = analysesOf(next);
+  if (o.active && !alt.some((x) => x.active)) {
+    const at = items[cut[1]] as Extract<Item, { t: "text" }>, moved = withoutAnalysis(next, alt[0].kind, false);
+    if (moved) next = [...moved[0], { t: "text", x: at.x, y: at.y, text: alt[0].line, directive: true }];
+  }
+  commit(next);
+}
+
 /** The shown results put away under their tab (if the schematic still has it), `kind`'s back. */
 function swapTo(s: State, kind: Analysis | null): Partial<State> {
   const tabs = { ...s.tabs };
@@ -373,7 +403,7 @@ export async function simulate() {
     }
   } catch (e) {
     // stale cleared so live mode does not retry a hard failure every 350 ms
-    if (gen === docGen) set({ shown, sim: { netlist: get().nets ?? { text: "", nets: [], insts: [], probes: [], warnings: [] }, simulated: "", run: null, log: [String(e)], sweepable: [] }, panel: "log", stale: false });
+    if (gen === docGen) set({ shown, sim: { netlist: get().nets ?? { text: "", nets: [], insts: [], probes: [], pin_currents: [], warnings: [] }, simulated: "", run: null, log: [String(e)], sweepable: [] }, panel: "log", stale: false });
   } finally {
     set({ running: false });
   }
@@ -410,24 +440,35 @@ async function addTraceNow(label: string, expr: string, unit: string, power = fa
 }
 
 export const removeTrace = (expr: string) => set({ traces: get().traces.filter((t) => t.expr !== expr) });
+/** A trace onto its pane's right axis (own scale) or back to the left one. */
+export const setTraceRight = (expr: string, right: boolean) => set({ traces: get().traces.map((t) => (t.expr === expr ? { ...t, right: right || undefined } : t)) });
 
 /** Whether clicking `target` while probing can plot something (also picks the probe cursor). */
 /** Whether `target` is something a probe can plot (structure only; see `probeMode` for the results). */
-export function canProbe(target: Item | undefined) {
+export function canProbe(target: Item | undefined, pin?: number) {
   const s = get();
   if (!target) return false;
   const nets = currentNets(s), i = s.items.indexOf(target);
   const net = nets?.nets[i]?.[0];
   const ground = net === "0" || (target.t === "flag" && /^(0|gnd)$/i.test(target.name));
   // parts: the backend says which have a current probe; without a fresh netlist, any known symbol
-  const part = target.t === "sym" && (nets ? !!nets.probes[i] : !!defOf(s.lib, target));
+  const part = target.t === "sym" && (nets ? !!partCurrent(nets, i, pin) : !!defOf(s.lib, target));
   return ((target.t === "wire" || target.t === "flag") && !ground) || part;
+}
+
+/** The name of part `i`'s current, which is also its trace expression (the backend reads I(R1),
+ *  Ib(Q1) …): into `pin` where that has a sensor, else the part's own (pin 1; a source's I(V1)).
+ *  "": none (a subcircuit's current is per pin). */
+export function partCurrent(nl: Netlist, i: number, pin?: number) {
+  const named = nl.pin_currents?.[i] ?? [];
+  if (pin != null && named[pin]) return named[pin];
+  return nl.probes[i] ? named[0] || currentLabel(nl.insts[i]) : "";
 }
 
 /** LTspice probe: wire/label -> V(net), part -> current. Re-runs first if the results are stale,
  *  so net names always come from the netlist the results were computed with. */
-export async function probe(target: Item, power = false) {
-  if (!canProbe(target)) return; // only things that can be plotted are worth a re-simulation
+export async function probe(target: Item, power = false, pin?: number) {
+  if (!canProbe(target, pin)) return; // only things that can be plotted are worth a re-simulation
   await idle();
   if (get().stale) await simulate();
   const { sim, items, stale } = get();
@@ -437,11 +478,11 @@ export async function probe(target: Item, power = false) {
     if (!powerMode(sim)) return;
     // LTspice's power probe: the voltage across a two-pin part times the current into pin 1 —
     // positive where it takes power (a resistor), negative where it gives it (a source)
-    const pins = sim.netlist.nets[i], expr = sim.netlist.probes[i];
-    if (expr && pins?.length === 2) await addTraceNow(`P(${sim.netlist.insts[i]})`, `(${vexpr(pins[0])}-${vexpr(pins[1])})*${expr}`, "W", true);
+    const pins = sim.netlist.nets[i], cur = partCurrent(sim.netlist, i);
+    if (cur && pins?.length === 2) await addTraceNow(`P(${sim.netlist.insts[i]})`, `(${vexpr(pins[0])}-${vexpr(pins[1])})*${cur}`, "W", true);
   } else if (target.t === "sym") {
-    const expr = sim.netlist.probes[i];
-    if (expr) await addTraceNow(currentLabel(sim.netlist.insts[i]), expr, "A");
+    const cur = partCurrent(sim.netlist, i, pin); // (also the expression: the backend reads the name)
+    if (cur) await addTraceNow(cur, cur, "A");
   } else {
     const net = sim.netlist.nets[i]?.[0];
     if (net && net !== "0") await addTraceNow(`V(${net})`, vexpr(net), "V");

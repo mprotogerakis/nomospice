@@ -4,14 +4,17 @@ import uPlot from "uplot";
 import { create } from "zustand";
 import { Plus, X } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
-import { removeTrace, setPlot, useS } from "./store";
+import { removeTrace, setPlot, setTraceRight, useS } from "./store";
 import { openMenu } from "./Menu";
-import { at, integrate, si } from "./spice";
+import { at, integrate, si, unitTimes } from "./spice";
 import { keys } from "./lib/utils";
 import type { Trace } from "./types";
 import { saveSvg, withLightTheme, xmlEscape } from "./svgExport";
 
 type Series = { t: Trace; y: (number | null)[] };
+/** A pane's scale for a series: "y2" (right axis) for a trace moved there, while the pane also has
+ *  left ones (all on the right: the left axis serves). */
+const scaleOf = (pane: { series: Series[] }, s: Series) => (s.t.right && pane.series.some((o) => !o.t.right) ? "y2" : "y");
 type Pane = { unit: string; series: Series[] };
 
 /** px a press may move and still count as a click (shared by uPlot's drag and our click rule). */
@@ -70,13 +73,15 @@ function plotSvg(us: uPlot[], panes: Pane[], cur: { a: number | null; b: number 
     us.forEach((u, k) => {
       const L = u.bbox.left / dpr, T = y + u.bbox.top / dpr, PW = u.bbox.width / dpr, PH = u.bbox.height / dpr;
       const ax = u.axes as unknown as { _splits?: (number | null)[]; _values?: (string | number)[] }[];
-      const px = (v: number) => L + u.valToPos(v, "x"), py = (v: number) => T + u.valToPos(v, "y");
+      const px = (v: number) => L + u.valToPos(v, "x"), py = (v: number, sc = "y") => T + u.valToPos(v, sc);
       out.push(`<clipPath id="pane${k}"><rect x="${L}" y="${T}" width="${PW}" height="${PH}"/></clipPath>`);
       (ax[1]._splits ?? []).forEach((v, i) => {
         if (v == null) return;
         line(L, py(v), L + PW, py(v), grid);
         txt(L - 6, py(v), String(ax[1]._values?.[i] ?? ""), "end", "middle");
       });
+      // the right axis (a pane without one may have an empty spacer there)
+      (ax[2]?._splits ?? []).forEach((v, i) => v != null && ax[2]._values?.[i] != null && txt(L + PW + 6, py(v, "y2"), String(ax[2]._values[i]), "start", "middle"));
       (ax[0]._splits ?? []).forEach((v, i) => {
         if (v == null) return;
         line(px(v), T, px(v), T + PH, grid);
@@ -86,14 +91,14 @@ function plotSvg(us: uPlot[], panes: Pane[], cur: { a: number | null; b: number 
       out.push(`<rect x="${L}" y="${T}" width="${PW}" height="${PH}" fill="none" stroke="${grid}"/>`);
       const xs = u.data[0], { min = -Infinity, max = Infinity } = u.scales.x;
       panes[k].series.forEach((s, j) => {
-        const ys = u.data[j + 1];
+        const ys = u.data[j + 1], sc = scaleOf(panes[k], s);
         let d = "", pen = false;
         for (let i = 0; i < xs.length; i++) {
           const v = ys[i];
           // outside the zoom: skip, but keep one point beyond each edge so the clipped line reaches it
           if ((xs[i + 1] ?? Infinity) < min || (xs[i - 1] ?? -Infinity) > max) continue;
           if (v == null || !Number.isFinite(v)) { pen = false; continue; }
-          d += `${pen ? "L" : "M"}${px(xs[i]).toFixed(1)} ${py(v).toFixed(1)}`;
+          d += `${pen ? "L" : "M"}${px(xs[i]).toFixed(1)} ${py(v, sc).toFixed(1)}`;
           pen = true;
         }
         out.push(`<path d="${d}" fill="none" stroke="${color(s.t.slot)}" stroke-width="1.5" stroke-linejoin="round" clip-path="url(#pane${k})"/>`);
@@ -171,11 +176,21 @@ export const Waveform = memo(function Waveform() {
     // cursor state before the first click of a (possible) double-click; shared by all panes
     let before = { a: useS.getState().plot.a, b: useS.getState().plot.b };
     const h = Math.floor(size.h / panes.length);
+    // one pane with a right axis: the others keep the same width free, so their x axes line up
+    const anyTwin = panes.some((p) => p.series.some((s) => scaleOf(p, s) === "y2"));
     panes.forEach((pane, pi) => {
       const el = paneEls.current[pi];
       if (!el) return;
       const last = pi === panes.length - 1;
       const span = pane.unit === "dB" ? 20 : pane.unit === "°" ? 90 : 0;
+      const twin = pane.series.some((s) => scaleOf(pane, s) === "y2");
+      // dB/phase: at least `span` tall, so 0.1 dB of ripple does not fill the pane like a resonance
+      const yRange = span ? { range: (_u: uPlot, lo: number | null, hi: number | null): uPlot.Range.MinMax => {
+        if (lo == null || hi == null) return [lo, hi];
+        if (hi - lo < span) [lo, hi] = [(lo + hi - span) / 2, (lo + hi + span) / 2];
+        return uPlot.rangeNum(lo, hi, 0.05, true);
+      } } : {};
+      const yValues = (_u: uPlot, v: number[], _i: number, _s: number, incr: number) => v.map((y) => (span ? `${+y.toFixed(Math.max(0, Math.ceil(-Math.log10(incr))))}${pane.unit}` : si(y, pane.unit, 3)));
       const opts: uPlot.Options = {
         width: size.w, height: h,
         legend: { show: false },
@@ -185,24 +200,25 @@ export const Waveform = memo(function Waveform() {
         scales: {
           // exactly the data: a log axis would otherwise round up to whole decades (1 MHz data -> 10 MHz)
           x: { time: false, distr: logX ? 3 : 1, ...(logX ? { range: (_u, lo, hi): uPlot.Range.MinMax => (lo < hi ? [lo, hi] : [lo / 2, hi * 2]) } : {}) },
-          // dB/phase: at least `span` tall, so 0.1 dB of ripple does not fill the pane like a resonance
-          ...(span ? { y: { range: (_u, lo, hi): uPlot.Range.MinMax => {
-            if (lo == null || hi == null) return [lo, hi];
-            if (hi - lo < span) [lo, hi] = [(lo + hi - span) / 2, (lo + hi + span) / 2];
-            return uPlot.rangeNum(lo, hi, 0.05, true);
-          } } } : {}),
+          y: yRange,
+          ...(twin ? { y2: yRange } : {}),
         },
         axes: [
           { stroke: text, grid: { stroke: grid, width: 1 }, ticks: { stroke: grid, width: 1 }, size: last ? 36 : 8, values: last ? (_u, v) => v.map((x) => (x == null ? "" : si(x, xUnit, 3))) : () => [], font: "11px IBM Plex Mono" },
-          { stroke: text, grid: { stroke: grid, width: 1 }, ticks: { stroke: grid, width: 1 }, size: 72, values: (_u, v, _i, _s, incr) => v.map((y) => (span ? `${+y.toFixed(Math.max(0, Math.ceil(-Math.log10(incr))))}${pane.unit}` : si(y, pane.unit, 3))), font: "11px IBM Plex Mono", label: pane.unit === "" ? "expr" : undefined },
+          { stroke: text, grid: { stroke: grid, width: 1 }, ticks: { stroke: grid, width: 1 }, size: 72, values: yValues, font: "11px IBM Plex Mono", label: pane.unit === "" ? "expr" : undefined },
+          // the right axis: its traces' own scale, in the color of its trace when it has one
+          ...(!twin && anyTwin ? [{ side: 1, size: 72, values: () => [], grid: { show: false }, ticks: { show: false }, stroke: "transparent" }] : []),
+          ...(twin ? [{ scale: "y2", side: 1, stroke: (() => { const r = pane.series.filter((s) => scaleOf(pane, s) === "y2"); return new Set(r.map((s) => s.t)).size === 1 ? color(r[0].t.slot) : text; })(), grid: { show: false }, ticks: { stroke: grid, width: 1 }, size: 72, values: yValues, font: "11px IBM Plex Mono" }] : []),
         ],
-        series: [{}, ...pane.series.map((s) => ({ label: s.t.label, stroke: color(s.t.slot), width: 2, points: { show: false } }))],
+        series: [{}, ...pane.series.map((s) => ({ label: s.t.label, scale: scaleOf(pane, s), stroke: color(s.t.slot), width: 2, points: { show: false } }))],
         hooks: {
           ready: [(u) => {
             // click = cursor; a drag (zoom) also ends in a click, so compare with the press position
             let down = 0;
             u.over.addEventListener("mousedown", (e) => {
               down = e.clientX;
+              // shift-drag marks the range A–B (its statistics) instead of zooming; in every pane (synced)
+              all.forEach((o) => (o.cursor.drag!.setScale = !e.shiftKey));
               if (e.detail === 1) before = { a: useS.getState().plot.a, b: useS.getState().plot.b };
             });
             u.over.addEventListener("click", (e) => {
@@ -237,13 +253,27 @@ export const Waveform = memo(function Waveform() {
             syncing = false;
           }],
           setSelect: [(u) => {
+            if (u.select.width <= 0) return;
+            const range: [number, number] = [u.posToVal(u.select.left, "x"), u.posToVal(u.select.left + u.select.width, "x")];
             // drag-zoom (uPlot applies it after this hook): remember it as the user's zoom
-            if (u.select.width > 0) setPlot({ zoom: [u.posToVal(u.select.left, "x"), u.posToVal(u.select.left + u.select.width, "x")] });
+            if (u.cursor.drag!.setScale) return setPlot({ zoom: range });
+            // shift-drag: the cursors at its ends, the box gone (the shading between A and B stays)
+            setPlot({ a: range[0], b: range[1] });
+            all.forEach((o) => o.setSelect({ left: 0, top: 0, width: 0, height: 0 }, false));
           }],
           setCursor: [(u) => useHover.setState({ x: u.cursor.idx == null ? null : (u.data[0][u.cursor.idx] ?? null) })],
           draw: [(u) => {
             const ctx = u.ctx;
             const { a, b } = useS.getState().plot;
+            if (a != null && b != null) {
+              // the range A–B, lightly shaded (what the statistics cover)
+              const [x0, x1] = [a, b].map((v) => Math.min(Math.max(u.valToPos(v, "x", true), u.bbox.left), u.bbox.left + u.bbox.width)).sort((p, q) => p - q);
+              ctx.save();
+              ctx.globalAlpha = 0.08;
+              ctx.fillStyle = sel;
+              ctx.fillRect(x0, u.bbox.top, x1 - x0, u.bbox.height);
+              ctx.restore();
+            }
             for (const [name, xv] of [["A", a], ["B", b]] as const) {
               if (xv == null || xv < u.scales.x.min! || xv > u.scales.x.max!) continue; // off-screen: not over the axes
               const px = u.valToPos(xv, "x", true);
@@ -320,7 +350,7 @@ export const Waveform = memo(function Waveform() {
           <Plus className="h-3 w-3" /> Add trace
         </button>
         <p className="mt-auto px-2 pb-2 text-2xs leading-4 text-text-tertiary">
-          Drag: zoom · wheel: zoom · double-click: reset · click: cursor A · shift-click: cursor B
+          Drag: zoom · shift-drag: range A–B · click: A · shift-click: B · dbl-click: reset · right-click a trace: right axis
         </p>
       </div>
     </div>
@@ -379,12 +409,14 @@ const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot }: { trac
           {rows.map(({ t, val, delta }) => (
             <tr key={t.expr} className="group h-[22px] border-b border-border-subtle align-middle" title={t.error ?? t.expr}
               onContextMenu={(e) => (e.preventDefault(), openMenu(e.clientX, e.clientY, [
+                { label: t.right ? "Back to the left axis" : "Right axis (own scale)", run: () => setTraceRight(t.expr, !t.right) },
                 { label: "Copy expression", hint: t.expr, run: () => navigator.clipboard.writeText(t.expr) },
                 { label: `Remove ${t.label}`, danger: true, run: () => removeTrace(t.expr) },
               ]))}>
               <td className="truncate pl-2 text-text">
                 <span className="mr-1.5 inline-block h-2 w-2 rounded-full align-middle" style={{ background: `var(--series-${t.slot + 1})` }} />
                 <span className={t.error ? "text-status-danger" : ""}>{t.label}</span>
+                {t.right && <span className="ml-1 text-text-tertiary" title="on the right axis">⇥</span>}
                 <button className="row-actions ml-1 align-middle text-text-tertiary hover:text-text-strong" aria-label={`Remove ${t.label}`} onClick={() => removeTrace(t.expr)}>
                   <X className="inline h-3 w-3" />
                 </button>
@@ -407,7 +439,7 @@ const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot }: { trac
           <div className="text-text-tertiary">{dx != null ? "A–B" : zoom ? "shown range" : "whole run"}: average · RMS · integral</div>
           {stats.map(({ t, unit, avg, rms, area }, k) => (
             <div key={`${t.expr}${k}`} className="truncate" title={`${t.label} from ${si(lo, xUnit)} to ${si(hi, xUnit)}`}>
-              {t.label}: {num(avg, unit)} · {num(rms, unit)} · {num(area, unit && xUnit ? `${unit}·${xUnit}` : unit || xUnit)}
+              {t.label}: {num(avg, unit)} · {num(rms, unit)} · {num(area, unitTimes(unit, xUnit))}
             </div>
           ))}
         </div>

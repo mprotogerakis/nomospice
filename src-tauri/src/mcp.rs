@@ -15,7 +15,7 @@ fn tools() -> Value {
     json!([
         {
             "name": "simulate",
-            "description": "Simulate a schematic with ngspice. Returns the analysis (plot, scale), all vector names, operating-point/result values, .meas results (LTspice syntax works), netlist warnings, the ngspice log tail on failure, and the requested traces downsampled to `points` samples. Trace expressions use ngspice syntax: v(\"net\"), v(\"a\")-v(\"b\"), i(vsense_r1) for the current into R1's pin 1 (every R C L D Q M J has such a sensor), i(v1) for sources, db(v(\"out\")).",
+            "description": "Simulate a schematic with ngspice. Returns the analysis (plot, scale), all vector names, operating-point/result values, .meas results (LTspice syntax works), netlist warnings, the ngspice log tail on failure, and the requested traces downsampled to `points` samples. Trace expressions use ngspice syntax plus part currents by name: v(\"net\"), v(\"a\")-v(\"b\"), I(R1) for the current into R1's pin 1, Ic(Q1)/Ib(Q1)/Ie(Q1), Id(M1)/Ig(M1)/Is(M1), Ix(U1:OUT) for a subcircuit's pin (the netlist tool lists them per part as pin_currents), i(v1) for sources, db(v(\"out\")).",
             "inputSchema": { "type": "object", "properties": {
                 "path": path, "asc": asc,
                 "traces": { "type": "array", "items": { "type": "string" }, "description": "ngspice expressions to return as waveforms" },
@@ -24,7 +24,7 @@ fn tools() -> Value {
         },
         {
             "name": "netlist",
-            "description": "The SPICE netlist of a schematic (as shown to users; simulation adds current sensors), with warnings, per-item net names and the ngspice expression for each part's current.",
+            "description": "The SPICE netlist of a schematic (as shown to users; simulation adds current sensors), with warnings, per-item net names, the ngspice expression for each part's current and the names of its pin currents (pin_currents: I(R1), Ib(Q1), Ix(U1:OUT)).",
             "inputSchema": { "type": "object", "properties": { "path": path, "asc": asc } }
         },
         {
@@ -133,7 +133,7 @@ fn call(base: &Path, name: &str, args: &Value) -> Result<Value, String> {
         "netlist" => {
             let (items, _) = schematic_of(base, args, &mut lib)?;
             let nl = schematic::netlist(&items, &mut lib);
-            Ok(json!({ "netlist": nl.text, "warnings": nl.warnings, "nets": nl.nets, "instances": nl.insts, "current_probes": nl.probes }))
+            Ok(json!({ "netlist": nl.text, "warnings": nl.warnings, "nets": nl.nets, "instances": nl.insts, "current_probes": nl.probes, "pin_currents": nl.pin_currents }))
         }
         "read_schematic" => {
             let (items, _) = schematic_of(base, args, &mut lib)?;

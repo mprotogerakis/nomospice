@@ -16,10 +16,10 @@ import { PoleZero } from "./PoleZero";
 import { checkForUpdate, installUpdate, useUpdate } from "./updater";
 import { Dialogs } from "./Dialogs";
 import { Boundary } from "./Boundary";
-import { analysesOf, currentTab, dirOf, docId, viewOf, loadDoc, loadSymbols, placeSymbol, plotKind, redo, refreshGit, refreshNets, relToDoc, selectTab, simulate, undo, useS, useStatus } from "./store";
+import { analysesOf, closeTab, currentTab, dirOf, docId, viewOf, loadDoc, loadSymbols, placeSymbol, plotKind, redo, refreshGit, refreshNets, relToDoc, selectTab, simulate, undo, useS, useStatus } from "./store";
 import { History } from "./History";
 import { currentLabel, mirror, rotate } from "./geom";
-import { ANALYSES, si } from "./spice";
+import { ANALYSES, si, tokens } from "./spice";
 import { deleteSelection, duplicate, newItem, placeFlag, transform } from "./actions";
 import { ContextMenu, openMenu } from "./Menu";
 import { Toolbar, ToolbarButton, ToolbarSeparator, ToolbarSpacer } from "./ui/toolbar";
@@ -50,9 +50,16 @@ const FILTERS = [{ name: "LTspice schematic", extensions: ["asc"] }];
 const typing = (e: KeyboardEvent) =>
   e.target instanceof HTMLElement && e.target.closest("input:not([type=checkbox]):not([type=radio]):not([type=button]),textarea,select,dialog") !== null;
 
-/** Unsaved-changes guard for everything that replaces the document or quits. */
-const discardOk = async () =>
-  !useS.getState().dirty || (await ask("Discard unsaved changes?", { title: "nomospice", kind: "warning" }));
+/** Unsaved-changes guard for everything that closes the document (or quits): save, don't, or stay.
+ *  (custom buttons answer with their label; some platforms with Yes/No) */
+async function discardOk() {
+  const { dirty, path } = useS.getState();
+  if (!dirty) return true;
+  const name = path?.split(/[\\/]/).pop() ?? "untitled.asc";
+  const r = await message("Your changes are lost if you don't save them.", { title: `Save the changes to “${name}”?`, kind: "warning", buttons: { yes: "Save", no: "Don't Save", cancel: "Cancel" } });
+  if (r === "Save" || r === "Yes") return (await saveFile(), !useS.getState().dirty); // (the save dialog cancelled: stay)
+  return r === "Don't Save" || r === "No";
+}
 /** Recovery mirror: debounce timer and the last save in flight (a clear must come after it). */
 let mirrorTimer: ReturnType<typeof setTimeout> | undefined;
 let mirrorWrite: Promise<unknown> = Promise.resolve();
@@ -173,7 +180,7 @@ async function saveFile(as = false) {
     if (moved) void loadSymbols(useS.getState().items).catch(() => {}).finally(refreshNets); // the new folder's symbols
     refreshGit();
   } catch (e) {
-    await fail(`Cannot save ${path}`)(e);
+    await fail(`Cannot open ${path}`)(e);
   }
 }
 async function newFile() {
@@ -458,14 +465,24 @@ function AnalysisTabs() {
   return (
     <div role="tablist" className="flex shrink-0 items-end gap-0.5 border-b border-border bg-surface-panel-head px-2 pt-1 text-xs">
       {opts.map((o) => (
-        <button
-          key={o.kind} type="button" role="tab" aria-selected={o.kind === cur} disabled={running && o.kind !== cur}
-          title={`${o.line}${o.active ? "" : "\nAlternative analysis (a comment in the schematic)"}\nDouble-click to edit`}
-          onClick={() => selectTab(o.kind)} onDoubleClick={() => useS.setState({ dialog: { k: "sim" } })}
-          className={cn("-mb-px rounded-t-control border px-3 py-1 disabled:opacity-50", o.kind === cur ? "border-border border-b-surface-panel bg-surface-panel font-medium text-text-strong" : "border-transparent text-text-secondary hover:text-text-strong")}
-        >
-          {name(o.kind)}
-        </button>
+        <div key={o.kind} className={cn("group -mb-px flex items-center rounded-t-control border", o.kind === cur ? "border-border border-b-surface-panel bg-surface-panel font-medium text-text-strong" : "border-transparent text-text-secondary hover:text-text-strong")}>
+          <button
+            type="button" role="tab" aria-selected={o.kind === cur} disabled={running && o.kind !== cur}
+            title={`${o.line}${o.active ? "" : "\nAlternative analysis (a comment in the schematic)"}\nDouble-click to edit`}
+            onClick={() => selectTab(o.kind)} onDoubleClick={() => useS.setState({ dialog: { k: "sim" } })}
+            className={cn("py-1 pl-3 disabled:opacity-50", opts.length > 1 ? "pr-1" : "pr-3")}
+          >
+            {name(o.kind)}
+          </button>
+          {opts.length > 1 && (
+            // (the analysis leaves the schematic; ⌘Z brings it back)
+            <button type="button" disabled={running} aria-label={`Close ${name(o.kind)}`} title={`Remove this analysis from the schematic (${keys("⌘Z")} brings it back)`}
+              onClick={() => closeTab(o.kind)}
+              className={cn("mr-1 flex h-4 w-4 items-center justify-center rounded-control text-text-tertiary hover:bg-surface-hover hover:text-text-strong disabled:opacity-50", o.kind !== cur && "invisible group-hover:visible")}>
+              <X className="h-3 w-3" />
+            </button>
+          )}
+        </div>
       ))}
       {!!more.length && (
         <button type="button" disabled={running} title="Add an analysis (it gets its own result tab)" aria-label="Add an analysis" className="disabled:opacity-50 mb-0.5 rounded-control px-1.5 py-0.5 text-text-secondary hover:bg-surface-hover hover:text-text-strong"
@@ -489,9 +506,10 @@ function UpdateStatus() {
 }
 
 function CursorStatus() {
-  const { x, y, net, zoom } = useStatus();
+  const { x, y, net, probe, zoom } = useStatus();
   return (
     <>
+      {probe && <StatusSegment className="text-text-strong">click: plot {probe}</StatusSegment>}
       {net && <StatusSegment className="text-text-strong">net {net}</StatusSegment>}
       <StatusSegment>{x}, {y}</StatusSegment>
       <StatusSegment>{Math.round(zoom * 100)}%</StatusSegment>
@@ -541,11 +559,25 @@ const roomFor = (el: HTMLElement) => {
   return el.offsetHeight + Math.max(0, fill.offsetHeight - FILL_MIN * box.clientHeight) + (panel && panel !== el ? Math.max(0, panel.offsetHeight - PANEL_MIN) : 0);
 };
 
+/** ngspice's .tf results (Transfer_function, output_impedance_at_V(out), v1#Input_impedance) named
+ *  for what they are, with units from the statement `.tf <output> <input source>`. */
+function tfName(n: string, line: string): [string, string] | null {
+  const [out = "the output", src = "the input"] = tokens(line).slice(1);
+  const fromI = /^i/i.test(src), toI = /^i\(/i.test(out);
+  if (/^transfer_function$/i.test(n)) return [`Gain ${out}/${src}`, fromI === toI ? "" : toI ? "S" : "Ω"];
+  if (/^output_impedance/i.test(n)) return [`Output resistance at ${out}`, "Ω"];
+  if (/#input_impedance$/i.test(n)) return [`Input resistance at ${src}`, "Ω"];
+  return null;
+}
+
 function BottomPanel() {
   const { panel, sim, nets } = useS(useShallow((s) => ({ panel: s.panel, sim: s.sim, nets: s.nets })));
   const [simulated, setSimulated] = useState(false);
   const isOpPlot = !!sim?.run?.plot.startsWith("op");
   const phasors = !!sim?.run?.plot.startsWith("ac"); // a table from .ac means one frequency: phasors
+  // .tf: its statement (output, input source) names the results
+  const items = useS((s) => s.items);
+  const tf = sim?.run?.plot.startsWith("tf") ? analysesOf(items).find((o) => o.kind === "tf")?.line ?? ".tf" : null;
   const tabs: [typeof panel, string][] = [["log", "Log"], ["netlist", "Netlist"], ...(sim?.run?.op.length ? [["op", isOpPlot ? "Operating point" : phasors ? "Phasors" : "Results"] as [typeof panel, string]] : []), ["history", "History"]];
   // its share of the area (it scales with the window, like the plot's split): dragged at the top
   // edge, kept across sessions
@@ -596,12 +628,19 @@ function BottomPanel() {
           </>
         )}
         {panel === "op" && <Measurements xUnit="" />}
+        {panel === "op" && tf && (
+          <p className="mb-1 max-w-[70ch] font-sans text-2xs text-text-tertiary">
+            Small-signal DC transfer (.tf): the circuit linearised at its operating point. The gain is how much the output changes per unit change of the input source; the output resistance is what a load at the output sees, the input resistance what the input source sees. No frequency dependence (capacitors open, inductors shorted): for that, use .ac.
+          </p>
+        )}
         {panel === "op" && (
           <table className="w-auto">
             <tbody>
-              {sim?.run?.op.map(([n, v, im, unit]) => {
+              {sim?.run?.op.map(([n, v, im, unit0]) => {
                 // ngspice's vector type gives the unit; @dev[...] and the like stay as written
-                const name = !isOpPlot && !phasors ? n : unit === "A" && n.endsWith("#branch") ? currentLabel(n.replace("#branch", "")) : unit === "V" && !/[@(]/.test(n) ? `V(${n})` : n;
+                const named = tf && tfName(n, tf);
+                const unit = named ? named[1] : unit0;
+                const name = named ? named[0] : !isOpPlot && !phasors ? n : unit === "A" && n.endsWith("#branch") ? currentLabel(n.replace("#branch", "")) : unit === "V" && !/[@(]/.test(n) ? `V(${n})` : n;
                 return (
                   <tr key={n}>
                     <td className="pr-6 text-text-secondary">{name}</td>

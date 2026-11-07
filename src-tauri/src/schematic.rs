@@ -457,6 +457,9 @@ pub struct Netlist {
     /// Aligned with items: ngspice expression for the current into pin 1 ("" if none), valid for
     /// the simulated netlist (sensors, see `netlist_for_sim`).
     pub probes: Vec<String>,
+    /// Aligned with items, per pin (SpiceOrder): the name of the current into it where it has a
+    /// sensor (`I(R1)`, `Ib(Q1)`, `Ix(U1:OUT)`), else "". Trace expressions may use these names.
+    pub pin_currents: Vec<Vec<String>>,
     /// Sensors of the simulated netlist (names are reserved in both builds, so they match).
     #[serde(skip)]
     pub sensors: Vec<Sensor>,
@@ -798,13 +801,15 @@ impl Prepared {
     }
 }
 
-/// A generated 0 V current sensor: source name, its extra node, the device it measures
-/// (all lowercase, as ngspice names vectors).
+/// A generated 0 V current sensor: source name, its extra node, the device it measures (all
+/// lowercase, as ngspice names vectors), the pin (SpiceOrder) and the current's name (`Ib(Q1)`).
 #[derive(Clone, Debug, Default)]
 pub struct Sensor {
     pub source: String,
     pub node: String,
     pub inst: String,
+    pub pin: usize,
+    pub label: String,
 }
 
 impl Netlist {
@@ -1093,29 +1098,46 @@ pub fn meas_name_at<S: AsRef<str>>(tokens: &[S]) -> usize {
     if tokens.get(1).is_some_and(|t| TYPES_MEAS.contains(&t.as_ref().to_ascii_lowercase().as_str())) { 2 } else { 1 }
 }
 
-/// `I(R1)` → `i(vsense_r1)` for the parts that have a current sensor (LTspice measures part
-/// currents directly; ngspice only branch currents).
-fn sensor_currents(s: &str, sensors: &[Sensor]) -> String {
+/// Part currents by their names, `I(R1)`, `Ic(Q1)`, `Ib(Q1)`, `Ix(U1:OUT)`, → the sensor's current
+/// `i(vsense_…)` (ngspice knows only branch currents). `I(Q1)` is the pin-1 current (Ic) as before.
+pub fn sensor_currents(s: &str, sensors: &[Sensor]) -> String {
     let mut out = String::with_capacity(s.len());
-    let (mut rest, lower) = (s, s.to_ascii_lowercase()); // (same byte offsets: one copy)
-    while let Some(k) = lower[s.len() - rest.len()..].find("i(") {
-        let word = k > 0 && rest[..k].ends_with(|c: char| c.is_ascii_alphanumeric() || c == '_');
-        let close = rest[k + 2..].find(')').map(|e| k + 2 + e);
-        let sensor = close.filter(|_| !word).and_then(|e| sensors.iter().find(|x| x.inst.eq_ignore_ascii_case(rest[k + 2..e].trim())));
-        match (sensor, close) {
+    let mut rest = s;
+    while let Some(open) = rest.find('(') {
+        // the word right before "(" (whole: `II(R1)` is not `I(R1)`)
+        let head = &rest[..open];
+        let start = head.char_indices().rev().take_while(|(_, c)| c.is_ascii_alphanumeric() || *c == '_').last().map_or(open, |(k, _)| k);
+        let name = &head[start..];
+        let close = rest[open + 1..].find(')').map(|e| open + 1 + e);
+        let hit = close.filter(|_| !name.is_empty()).and_then(|e| {
+            let (key, arg) = (format!("{name}({})", rest[open + 1..e].trim()), rest[open + 1..e].trim());
+            sensors.iter().find(|x| x.label.eq_ignore_ascii_case(&key) || (x.pin == 0 && name.eq_ignore_ascii_case("i") && x.inst.eq_ignore_ascii_case(arg)))
+        });
+        match (hit, close) {
             (Some(x), Some(e)) => {
-                out.push_str(&rest[..k]);
+                out.push_str(&head[..start]);
                 out.push_str(&format!("i({})", x.source));
                 rest = &rest[e + 1..];
             }
             _ => {
-                out.push_str(&rest[..k + 2]);
-                rest = &rest[k + 2..];
+                out.push_str(&rest[..open + 1]);
+                rest = &rest[open + 1..];
             }
         }
     }
     out.push_str(rest);
     out
+}
+
+/// A pin's current by its usual name: `I(R1)`; `Ic(Q1)` `Ib(Q1)` `Ie(Q1)`; `Id(M1)` `Ig(M1)`
+/// `Is(M1)` `Ib(M1)`; `Id(J1)` …; `Ix(U1:OUT)` for a subcircuit's pins (by their names).
+fn pin_label(prefix: char, inst: &str, k: usize, npins: usize, name: &str) -> String {
+    let roles = match prefix { 'Q' => "cbes", 'M' => "dgsb", 'J' => "dgs", _ => "" };
+    match roles.chars().nth(k) {
+        Some(r) => format!("I{r}({inst})"),
+        None if prefix == 'X' && npins > 2 => format!("Ix({inst}:{})", if name.trim().is_empty() { (k + 1).to_string() } else { name.trim().to_string() }),
+        None => format!("I({inst})"),
+    }
 }
 
 /// Make a netlist safe and self-contained for ngspice. This is the single security filter:
@@ -1335,20 +1357,21 @@ pub fn netlist(items: &[Item], lib: &mut Library) -> Netlist {
     build_netlist(items, lib, false)
 }
 
-/// The netlist that is simulated: every probe-able device (R C L D Q M J) gets a 0 V current
-/// sensor `Vsense_<inst>` at pin 1, so I(device) is `i(vsense_<inst>)` in every analysis: with
-/// phase in .ac (where ngspice leaves @r[i]/@c[i] empty and reports DC currents for D/Q/M),
-/// including ESR/parasitics, and following value changes.
+/// The netlist that is simulated: every probe-able device gets 0 V current sensors: two-pin parts
+/// (R C L D) `Vsense_<inst>` at pin 1, transistors (Q M J) and subcircuits (X) one at every pin
+/// (`Vsense_<inst>_2` …), so `I(R1)`, `Ib(Q1)` … are sensor currents in every analysis: with phase
+/// in .ac (where ngspice, also with `.options savecurrents`, leaves @r[i]/@c[i]/@q[ie] empty and
+/// reports DC currents for D/Q/M), including ESR/parasitics, and following value changes.
 pub fn netlist_for_sim(items: &[Item], lib: &mut Library) -> Netlist {
     build_netlist(items, lib, true)
 }
 
-/// Prefixes that get a current sensor (see `netlist_for_sim`); mirrored by geom.ts `currentProbe`.
+/// Prefixes that get current sensors (see `netlist_for_sim`).
 /// (L too: its native branch current misses Rpar/Cpar from the LTspice database.)
-pub const SENSED: &str = "RCLDQMJ";
+pub const SENSED: &str = "RCLDQMJX";
 
 fn build_netlist(items: &[Item], lib: &mut Library, sense: bool) -> Netlist {
-    let mut nl = Netlist { nets: vec![vec![]; items.len()], insts: vec![String::new(); items.len()], probes: vec![String::new(); items.len()], ..Default::default() };
+    let mut nl = Netlist { nets: vec![vec![]; items.len()], insts: vec![String::new(); items.len()], probes: vec![String::new(); items.len()], pin_currents: vec![vec![]; items.len()], ..Default::default() };
 
     // 1. connection points
     let mut ids: HashMap<(i32, i32), usize> = HashMap::new();
@@ -1551,6 +1574,7 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool) -> Netlist {
         }
         let value = one_line(&attrs.get("Value").cloned().unwrap_or(def.value.clone())).replace("SINE(", "SIN(");
         let mut nodes = nl.nets[i].clone();
+        let npins = nodes.len(); // the symbol's (an M gets a bulk node below)
         // W (current-controlled switch): `Vcontrol model [on|off]`, the model comes last
         let model = if prefix == 'W' {
             let t: Vec<&str> = value.split_whitespace().filter(|t| !t.eq_ignore_ascii_case("on") && !t.eq_ignore_ascii_case("off")).collect();
@@ -1580,24 +1604,30 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool) -> Netlist {
         };
         // ponytail: a sensor on every device (+1 node, +1 branch each); sense only probed devices
         // if huge imported schematics get slow
-        if SENSED.contains(prefix) && !nodes.is_empty() {
+        // (two-pin parts: pin 1; transistors and subcircuits: every pin of the symbol, not an M's
+        // added bulk, which stays on the source's own net)
+        let sensed = if !SENSED.contains(prefix) || npins == 0 { 0..0 } else if npins <= 2 || !"QMJX".contains(prefix) { 0..1 } else { 0..npins };
+        nl.pin_currents[i] = vec![String::new(); npins];
+        for k in sensed {
             // reserved in both builds (identical names), never clashing with the user's own
-            let mut src = format!("Vsense_{inst}");
+            let tail = if k == 0 { String::new() } else { format!("_{}", k + 1) };
+            let mut src = format!("Vsense_{inst}{tail}");
             while !taken.insert(src.to_uppercase()) {
                 src.push('_');
             }
-            let mut node = format!("{inst}_sense");
+            let mut node = format!("{inst}_sense{tail}");
             while !used.insert(node.to_lowercase()) {
                 node.push('_');
             }
-            nl.probes[i] = format!("i({})", src.to_lowercase());
-            nl.sensors.push(Sensor { source: src.to_lowercase(), node: node.to_lowercase(), inst: inst.to_lowercase() });
+            let label = pin_label(prefix, &inst, k, npins, def.pins.get(k).map_or("", |p| p.name.as_str()));
+            if k == 0 && !(prefix == 'X' && npins > 2) {
+                nl.probes[i] = format!("i({})", src.to_lowercase()); // (a subcircuit's pins are its currents)
+            }
+            nl.pin_currents[i][k] = label.clone();
+            nl.sensors.push(Sensor { source: src.to_lowercase(), node: node.to_lowercase(), inst: inst.to_lowercase(), pin: k, label });
             if sense {
-                lines.push(format!("{src} {} {node} 0", nodes[0]));
-                if prefix == 'M' && nodes.len() == 4 && nodes[3] == nodes[0] {
-                    nodes[3] = node.clone(); // bulk tied to the drain stays tied to it
-                }
-                nodes[0] = node;
+                lines.push(format!("{src} {} {node} 0", nodes[k]));
+                nodes[k] = node;
             }
         }
         if !parasitics.is_empty() && nodes.len() == 2 {
@@ -1797,7 +1827,7 @@ mod tests {
         let get = |n: &str| run.op.iter().find(|o| o.0 == n).cloned().unwrap_or_else(|| panic!("{n} missing: {:?}", run.op));
         let out = get("out");
         assert!((out.1.hypot(out.2) - std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-4 && (out.2.atan2(out.1).to_degrees() + 45.0).abs() < 0.01, "{out:?}");
-        assert_eq!((out.3.as_str(), get("r1#branch").3.as_str()), ("V", "A"));
+        assert_eq!((out.3.as_str(), get("I(R1)").3.as_str()), ("V", "A"));
     }
 
     #[test]
@@ -1906,7 +1936,7 @@ mod tests {
 
     #[test]
     fn ltspice_meas_for_ngspice() {
-        let r1 = [Sensor { source: "vsense_r1".into(), node: "x".into(), inst: "r1".into() }];
+        let r1 = [Sensor { source: "vsense_r1".into(), node: "x".into(), inst: "r1".into(), pin: 0, label: "I(R1)".into() }];
         let m = |s: &str| meas_statement(s, &r1, "tran").unwrap_or_else(|e| e);
         assert_eq!(m(".MEAS TRAN P AVG -I(V1)*V(VDD)"), ".MEAS TRAN P AVG par('-I(V1)*V(VDD)')");
         assert_eq!(m(".meas tran t TRIG V(in) VAL=0.5*V(vdd) TD=2n RISE=1 TARG V(out) VAL=1 RISE=1"),
@@ -2049,6 +2079,27 @@ mod tests {
     }
 
     #[test]
+    fn pin_currents_by_name() {
+        let _s = SIM.lock();
+        // a transistor: a sensor at every pin, named as usual; the currents add up to zero
+        let src = EXAMPLES.iter().find(|e| e.0 == "bjt_curves").unwrap().1.replace(".dc V1 0 10 50m I1 0 50u 10u", ".op");
+        let nl = netlist_for_sim(&parse_asc(&src), &mut Library::builtin());
+        let q = nl.insts.iter().position(|n| n == "Q1").unwrap();
+        assert_eq!(nl.pin_currents[q], ["Ic(Q1)", "Ib(Q1)", "Ie(Q1)"], "{}", nl.text);
+        let run = crate::ngspice::run(&prepare(&nl.text, None, &mut vec![]).with_sensors(nl.sensors.clone())).unwrap();
+        let get = |n: &str| run.op.iter().find(|o| o.0 == n).map(|o| o.1).unwrap_or_else(|| panic!("{n}: {:?}", run.op));
+        let (ic, ib, ie) = (get("Ic(Q1)"), get("Ib(Q1)"), get("Ie(Q1)"));
+        assert!(ib > 0.0 && ic > 20.0 * ib && (ic + ib + ie).abs() < 1e-9, "{ic} {ib} {ie}");
+        // names in trace expressions, .tran: I(R1)-I(C1) is the current into the node between them
+        let nl = netlist_for_sim(&parse_asc(EXAMPLES[0].1), &mut Library::builtin());
+        let run = crate::ngspice::run(&prepare(&nl.text, None, &mut vec![]).with_sensors(nl.sensors.clone())).unwrap();
+        let d = crate::ngspice::trace("I(R1)-I(C1)", &run.scale, run.id).unwrap();
+        let r = crate::ngspice::trace("i(vsense_r1)-i(vsense_c1)", &run.scale, run.id).unwrap();
+        assert!(d.re.len() > 10 && d.re == r.re, "the names are the sensors' currents");
+        assert!(run.vectors.iter().any(|v| v == "I(R1)") && !run.vectors.iter().any(|v| v.contains("vsense")), "{:?}", run.vectors);
+    }
+
+    #[test]
     fn current_sensors_work_in_ac() {
         let _s = SIM.lock();
         let nl = netlist_for_sim(&parse_asc(EXAMPLES.iter().find(|e| e.0 == "rc_bode").unwrap().1), &mut Library::builtin());
@@ -2072,7 +2123,7 @@ mod tests {
         let nl = netlist_for_sim(&parse_asc(&EXAMPLES[0].1.replace(".tran 3m", ".op")), &mut Library::builtin());
         let op = crate::ngspice::run(&prepare(&nl.text, None, &mut vec![]).with_sensors(nl.sensors.clone())).unwrap().op;
         let unit = |n: &str| op.iter().find(|o| o.0 == n).map(|o| o.3.as_str()).unwrap_or("missing");
-        assert_eq!((unit("out"), unit("r1#branch"), unit("v1#branch")), ("V", "A", "A"), "{op:?}");
+        assert_eq!((unit("out"), unit("I(R1)"), unit("v1#branch")), ("V", "A", "A"), "{op:?}");
         assert!(!op.iter().any(|o| o.0.contains("vsense") || o.0.ends_with("_sense")), "{op:?}");
     }
 

@@ -62,6 +62,9 @@ export interface Netlist {
   insts: string[];
   /** current into pin 1 as an ngspice expression ("" if none), aligned with items */
   probes: string[];
+  /** per item, per pin: the name of the current into it where it has a sensor (I(R1), Ib(Q1),
+   *  Ix(U1:OUT)), else ""; trace expressions take these names */
+  pin_currents: string[][];
   warnings: string[];
 }
 
@@ -110,4 +113,6 @@ export interface Trace {
   error?: string;
   /** a power probe's V·I: real power only in .tran/.dc, not fetched in other analyses */
   power?: boolean;
+  /** drawn against its pane's right axis (own scale: shapes of different size compared) */
+  right?: boolean;
 }

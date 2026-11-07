@@ -538,3 +538,109 @@ export function at(xs: number[], ys: (number | null)[], x: number) {
   const [a, b] = [ys[lo], ys[hi]];
   return a == null || b == null ? NaN : a + Math.max(0, Math.min(1, f)) * (b - a);
 }
+
+// ---------------------------------------------------------------- units of trace expressions
+
+/** Named units as exponents of V, A and s. */
+const UNITS: [string, number[]][] = [
+  ["V", [1, 0, 0]], ["A", [0, 1, 0]], ["W", [1, 1, 0]], ["Ω", [1, -1, 0]], ["S", [-1, 1, 0]], ["J", [1, 1, 1]],
+  ["C", [0, 1, 1]], ["s", [0, 0, 1]], ["Hz", [0, 0, -1]], ["F", [-1, 1, 1]], ["H", [1, -1, 1]],
+];
+const SUP: Record<string, string> = { "2": "²", "3": "³" };
+const dimOf = (u: string) => (u === "" ? [0, 0, 0] : UNITS.find(([n]) => n === u)?.[1] ?? null);
+function unitName(d: number[]) {
+  const named = UNITS.find(([, e]) => e.every((x, j) => Math.abs(x - d[j]) < 1e-9));
+  if (named) return named[0];
+  const part = (j: number, k: number) => `${"VAs"[j]}${k === 1 ? "" : SUP[k] ?? `^${k}`}`;
+  const up = d.flatMap((k, j) => (k > 0 ? [part(j, k)] : [])), down = d.flatMap((k, j) => (k < 0 ? [part(j, -k)] : []));
+  return !up.length && !down.length ? "" : `${up.join("·") || "1"}${down.length ? `/${down.join("·")}` : ""}`;
+}
+
+/** The unit of a product of two units (an integral over x: W·s = J, A·s = C), "" for none. */
+export function unitTimes(a: string, b: string) {
+  const [x, y] = [dimOf(a), dimOf(b)];
+  return x && y ? unitName(x.map((k, j) => k + y[j])) : [a, b].filter(Boolean).join("·");
+}
+
+/** The unit of a trace expression by dimensional analysis: `V(…)` volts, `I(…)`/`Ic(…)`… amperes,
+ *  and sums, products, quotients and powers of them (V·A = W, V/A = Ω, a number is unitless and
+ *  takes the other side's unit in a sum). `vector` gives a plain vector name's unit ("V" for a
+ *  node). "" when it has none or it cannot tell (a sum of volts and amperes, db() inside, …). */
+export function exprUnit(expr: string, vector: (name: string) => string = () => ""): string {
+  type D = { d: number[] | null; n?: boolean }; // n: a plain number
+  const s = expr;
+  let i = 0;
+  const ws = () => { while (/\s/.test(s[i] ?? "")) i++; };
+  const dims = (u: string): D => ({ d: dimOf(u) ?? null });
+  const mul = (a: D, b: D, k: number): D => ({ d: a.d && b.d ? a.d.map((x, j) => x + k * b.d![j]) : null, n: a.n && b.n });
+  const add = (a: D, b: D): D => (a.n ? b : b.n ? a : a.d && b.d && a.d.every((x, j) => x === b.d![j]) ? a : { d: null });
+  const raw = () => { // a call's argument as written (node names): up to the matching ")"
+    let depth = 1;
+    while (i < s.length && depth) depth += s[i] === "(" ? 1 : s[i] === ")" ? -1 : 0, i++;
+  };
+  const args = (): D[] => {
+    const out = [sum()];
+    for (ws(); s[i] === ","; ws()) i++, out.push(sum());
+    if (s[i] === ")") i++;
+    return out;
+  };
+  function atom(): D {
+    ws();
+    if (s[i] === "(") {
+      i++;
+      const a = sum();
+      ws();
+      if (s[i] === ")") i++;
+      return a;
+    }
+    const num = /^(\d+\.?\d*|\.\d+)(e[-+]?\d+)?[a-zµ]*/i.exec(s.slice(i));
+    if (num) return (i += num[0].length), { d: [0, 0, 0], n: true };
+    const id = /^[a-z_@][\w@#.[\]:$]*/i.exec(s.slice(i));
+    if (!id) return (i = s.length), { d: null };
+    i += id[0].length;
+    const name = id[0].toLowerCase();
+    ws();
+    if (s[i] !== "(") return /^(pi|e|boltz|echarge|kelvin|planck)$/.test(name) ? { d: [0, 0, 0], n: true } : dims(vector(id[0]));
+    i++;
+    if (/^v[mri]?$/.test(name)) return raw(), dims("V");
+    if (/^i[cbedgsx]?$/.test(name)) return raw(), dims("A");
+    const a = args()[0];
+    if (/^(abs|mag|real|re|imag|im|mean|avg|rms|max|min|vecmax|vecmin)$/.test(name)) return a;
+    if (name === "sqrt") return { d: a.d && a.d.map((x) => x / 2), n: a.n };
+    if (name === "integ") return mul(a, dims("s"), 1);
+    if (name === "deriv") return mul(a, dims("s"), -1);
+    return { d: null }; // db(), ph(), exp() …: no unit of its own here
+  }
+  function power(): D {
+    const a = atom();
+    ws();
+    if (s[i] !== "^" && s.slice(i, i + 2) !== "**") return a;
+    i += s[i] === "^" ? 1 : 2;
+    ws();
+    const p = /^\d+(\.\d+)?/.exec(s.slice(i));
+    if (!p) return atom(), { d: null };
+    i += p[0].length;
+    return { d: a.d && a.d.map((x) => x * +p[0]), n: a.n };
+  }
+  function unary(): D {
+    ws();
+    if (s[i] === "-" || s[i] === "+") return i++, unary();
+    return power();
+  }
+  function prod(): D {
+    let a = unary();
+    for (ws(); (s[i] === "*" && s[i + 1] !== "*") || s[i] === "/"; ws()) {
+      const k = s[i++] === "*" ? 1 : -1;
+      a = mul(a, unary(), k);
+    }
+    return a;
+  }
+  function sum(): D {
+    let a = prod();
+    for (ws(); s[i] === "+" || s[i] === "-"; ws()) i++, (a = add(a, prod()));
+    return a;
+  }
+  const r = sum();
+  ws();
+  return i < s.length || !r.d || r.n ? "" : unitName(r.d);
+}
