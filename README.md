@@ -13,7 +13,7 @@ files — with a modern UI, ngspice as the engine, a Rust core and a React front
   `Ig(M1)`, `Ix(U1:OUT)`. Expressions take these names: `I(R1)-I(R2)`, `V(in)*I(R1)`.
 - **File format**: opens and saves `.asc` (Latin-1/UTF-16, every unknown line kept). 
 - **Forms instead of syntax**: sources (sine, pulse, exp, FM, PWL with a waveform preview, AC, Rser/Cpar),
-  a MOSFET's L, W and multiplier, a BJT's or diode's area,
+  a MOSFET's L, W and multiplier, a BJT's or diode's area and multiplier,
   every analysis, `.param`, `.model` (parameters explained), `.meas`, `.ic`, `.temp`, `.include` are edited
   in forms that show the SPICE text they write; number fields show how SPICE reads them and catch
   `1M` (milli, not mega) and `10F` (femto). Typing SPICE directly still works everywhere.

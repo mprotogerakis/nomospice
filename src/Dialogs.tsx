@@ -23,10 +23,11 @@ const MORE = ["Prefix", "SpiceLine2", "SpiceModel", "Description"];
 
 /** A semiconductor's common instance parameters, kept where LTspice keeps them, in Value2
  *  (`l=0.18u w=1u`): [key, label, unit, hint]. The rest stays as typed in Value2. */
+const AREA_M: [string, string, string, string][] = [["area", "Area factor", "", "relative to the model's"], ["m", "Multiplier", "", "devices in parallel"]];
 const INSTANCE: Record<string, [string, string, string, string][]> = {
   M: [["l", "Length L", "m", "channel length, e.g. 180n (not for power MOSFETs: VDMOS)"], ["w", "Width W", "m", "channel width, e.g. 1u"], ["m", "Multiplier", "", "devices in parallel"]],
-  Q: [["area", "Area factor", "", "relative to the model's"], ["m", "Multiplier", "", "devices in parallel"]],
-  D: [["area", "Area factor", "", "relative to the model's"], ["m", "Multiplier", "", "devices in parallel"]],
+  Q: AREA_M,
+  D: AREA_M,
 };
 
 /** Edits a part or a net label; `onDone` receives the result (commit in place, or start placing it).
@@ -40,7 +41,8 @@ function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: 
   // the other attributes (LTspice's attribute editor: Prefix X to call a subcircuit, SpiceModel …)
   const [extra, setExtra] = useState<string[][]>(() => (item.t === "sym" ? Object.entries(item.attrs).filter(([k]) => !SHOWN.includes(k)) : []));
   const done = () => {
-    if (Object.values(drafts).some((d) => d != null)) return; // (a field's value not written yet: said under it)
+    // (a shown field's value not written yet: said under it; one of a field no longer shown, another prefix: dropped)
+    if (Object.entries(drafts).some(([k, d]) => d != null && INSTANCE[prefix]?.some(([f]) => f === k))) return;
     // empty attributes go, except an emptied SpiceLine over a symbol default (missing = the default);
     // sorted as the .asc reader gives them, so an unchanged part compares equal
     if (it.t === "sym") {
@@ -92,19 +94,16 @@ function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: 
                 const pending = drafts[k] != null ? `${paramValue(drafts[k]!)}: not in Value2` : undefined;
                 // (the netlist line is Value Value2 SpiceLine SpiceLine2, and SPICE takes the last of a
                 // key: one in SpiceLine (or the symbol's) or SpiceLine2 wins over this field, said)
-                const has = (n: string, line: string) => {
-                  const x = getParam(line, k);
-                  return x ? [`${n} has ${k}=${x}`] : [];
-                };
+                const has = (n: string, line: string) => ((x) => (x ? `${n} has ${k}=${x}` : ""))(getParam(line, k));
                 // (the symbol's Value if the part's is empty, as the netlist does)
                 const before = has("Value", it.attrs.Value?.trim() ? it.attrs.Value : def?.value ?? "");
-                const after = [...has("SpiceLine", it.attrs.SpiceLine ?? def?.spice_line ?? ""), ...has("SpiceLine2", row("spiceline2"))];
+                const after = has("SpiceLine2", row("spiceline2")) || has("SpiceLine", it.attrs.SpiceLine ?? def?.spice_line ?? ""); // (the last wins)
                 let note = hint;
-                if (after.length) note = `${after[after.length - 1]}, which comes later on the line and wins`;
-                else if (before.length) note = v ? `${before[0]}; this one wins` : `${before[0]}, in effect`;
+                if (after) note = `${after}, which comes later on the line and wins`;
+                else if (before) note = getParam(attr("Value2"), k) ? `${before}; this one wins` : `${before}, in effect`;
                 // (not yet written: said first, over a number's own warning)
                 const help = numHelp(v, u, set);
-                return <TextField key={k} label={label} value={v} set={set} unit={u} placeholder={k === "m" || k === "area" ? "1" : "model default"} info={help.info} warn={pending ?? (help.warn || undefined)} hint={note} />;
+                return <TextField key={k} label={label} value={v} set={set} unit={u} placeholder={k === "m" || k === "area" ? "1" : "100µ (ngspice's default)"} info={help.info} warn={pending ?? (help.warn || undefined)} hint={note} />;
               })}
               <TextField label="Value2" value={attr("Value2")} set={(v) => (setDrafts({}), setAttr("Value2", v))} hint={INSTANCE[prefix] ? "the instance parameters as SPICE reads them (others too: off, temp=…)" : undefined} />
               {/* the symbol's default shows as the value: emptying it visibly removes it (an empty attribute) */}
