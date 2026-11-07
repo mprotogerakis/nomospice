@@ -270,6 +270,10 @@ impl P<'_> {
                 if mentions_s(text) {
                     return Err(format!("`{text}`: only a ratio of polynomials in s runs (no delay exp(-s*T), no sqrt(s))"));
                 }
+                if ["mc", "flat", "gauss", "unif", "aunif", "agauss"].iter().any(|f| name.eq_ignore_ascii_case(f)) {
+                    // (kept as text, it would be drawn anew in each coefficient it lands in)
+                    return Err(format!("`{text}`: a random value here is drawn once per coefficient; draw it in a .param (.param tau=mc(1m,0.1)) and use that"));
+                }
                 if probes(text) {
                     return Err(format!("`{text}`: no voltages or currents in it (an E source's input is its control nodes)"));
                 }
@@ -661,6 +665,7 @@ mod tests {
         assert!(coefficients("1/(1+2s)").unwrap_err().contains("2*s") && coefficients("1/(1+1ms)").unwrap_err().contains("1m*s"));
         assert_eq!(c("sqrt({k})/(1+s)").0, ["{sqrt((k))}"]);
         assert!(coefficients("v(ctl)/(1+s)").unwrap_err().contains("no voltages"));
+        assert!(coefficients("1/(1+s*mc(1m,0.1))").unwrap_err().contains(".param"));
         assert!(coefficients("abs(V (ctl))/(1+s)").unwrap_err().contains("no voltages") && coefficients("vdb(x)/(1+s)").is_err());
         assert!(coefficients("{vin*2}/(1+s)").is_ok() && coefficients("sqrt(iq)/(1+s)").is_ok(), "names, not calls");
         assert_eq!(c("{k*{a}}/(1+s)").0, ["{(k)*(a)}"], "nested braces");

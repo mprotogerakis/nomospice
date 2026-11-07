@@ -1414,25 +1414,36 @@ pub fn prepare(text: &str, dir: Option<&std::path::Path>, warnings: &mut Vec<Str
 /// `agauss(0,x,1)` (ngspice's own three-argument gauss stays). Only where ngspice's parameter
 /// expressions are: in `{…}` and on `.param` lines (not in comments, a B source's expression, a
 /// file name), and not where the deck has a `.func` of that name.
+/// A `.param` drawn this way is drawn once per run, shared by every part using it (write the call
+/// in each part's value for draws of their own).
 fn lt_random(text: &str) -> std::borrow::Cow<'_, str> {
-    if !RANDOM.iter().any(|f| contains_ci(text, &format!("{f}("))) {
+    let calls = |t: &str| RANDOM.iter().any(|f| contains_ci(t, &format!("{f}(")) || contains_ci(t, &format!("{f} (")));
+    if !calls(text) {
         return std::borrow::Cow::Borrowed(text);
     }
+    // (`.func gauss(x) …`: the deck's own)
     let own: Vec<String> = text.lines().filter_map(|l| {
         let t = l.trim_start();
-        t.get(..5).filter(|h| h.eq_ignore_ascii_case(".func")).map(|_| t[5..].trim_start().split(|c: char| c == '(' || c.is_whitespace()).next().unwrap_or("").to_ascii_lowercase())
+        t.get(..6).filter(|h| h[..5].eq_ignore_ascii_case(".func") && (h.ends_with(char::is_whitespace))).map(|_| t[5..].trim_start().split(|c: char| c == '(' || c.is_whitespace()).next().unwrap_or("").to_ascii_lowercase())
     }).collect();
-    let mut out = String::with_capacity(text.len() + 64);
+    let (mut out, mut param) = (String::with_capacity(text.len() + 64), false);
     for line in text.split_inclusive('\n') {
         let t = line.trim_start();
-        if t.starts_with('*') {
+        if t.starts_with('*') || t.trim().is_empty() {
             out.push_str(line);
             continue;
         }
+        // (a `.param` statement's `+` lines are of it too)
+        if !t.starts_with('+') {
+            param = t.get(..6).is_some_and(|h| h.eq_ignore_ascii_case(".param"));
+        }
         let code = uncommented(line);
-        let param = t.get(..6).is_some_and(|h| h.eq_ignore_ascii_case(".param"));
-        out.push_str(&random_calls(code, param, &own));
-        out.push_str(&line[code.len()..]);
+        if calls(code) {
+            out.push_str(&random_calls(code, param, &own));
+            out.push_str(&line[code.len()..]);
+        } else {
+            out.push_str(line);
+        }
     }
     std::borrow::Cow::Owned(out)
 }
@@ -1441,10 +1452,10 @@ const RANDOM: [&str; 3] = ["mc", "flat", "gauss"];
 
 /// `s` with LTspice's random calls translated (see `lt_random`): everywhere if `all`, else in braces.
 fn random_calls(s: &str, all: bool, own: &[String]) -> String {
-    let (b, mut out, mut k, mut braces) = (s.as_bytes(), String::with_capacity(s.len()), 0, 0i32);
+    let (b, mut out, mut k, mut braces, mut quoted) = (s.as_bytes(), String::with_capacity(s.len()), 0, 0i32, false);
     let word = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
     while k < b.len() {
-        let call = (all || braces > 0)
+        let call = (!quoted && (all || braces > 0))
             .then(|| RANDOM.into_iter().find(|f| {
                 b.len() >= k + f.len() && b[k..k + f.len()].eq_ignore_ascii_case(f.as_bytes()) && (k == 0 || !word(b[k - 1])) && s[k + f.len()..].trim_start().starts_with('(') && !own.iter().any(|o| o == f)
             }))
@@ -1460,7 +1471,8 @@ fn random_calls(s: &str, all: bool, own: &[String]) -> String {
         });
         let (Some(f), Some(open), Some(close)) = (call, open, close) else {
             let c = s[k..].chars().next().unwrap_or(' ');
-            braces += match c { '{' => 1, '}' => -1, _ => 0 };
+            braces = (braces + match c { '{' => 1, '}' => -1, _ => 0 }).max(0); // (a stray } counts for nothing)
+            quoted ^= c == '"'; // ("a file name.csv")
             out.push(c);
             k += c.len_utf8();
             continue;
@@ -2590,6 +2602,7 @@ mod tests {
         assert_eq!(lt_random("* FLAT (zero TC\nR1 a b {mc(1k,0.1)} ; gauss (see\nB1 n 0 V=gauss(1)\nV1 a 0 PWL file=\"gauss (1).csv\"\n"), "* FLAT (zero TC\nR1 a b {unif(1k,0.1)} ; gauss (see\nB1 n 0 V=gauss(1)\nV1 a 0 PWL file=\"gauss (1).csv\"\n");
         assert_eq!(lt_random(".func flat(x) {x*2}\nR1 a b {flat(1)+mc(1,1)}\n"), ".func flat(x) {x*2}\nR1 a b {flat(1)+unif(1,1)}\n");
         assert!(matches!(lt_random("XU1 a b MC33078\n"), std::borrow::Cow::Borrowed(_)), "nothing to do: no copy");
+        assert_eq!(lt_random(".param a=1\n+ b=flat(1) f=\"gauss(1).csv\"\nR1 a b } {mc (1k,0.1)}\n.function flat(x) x\n"), ".param a=1\n+ b=aunif(0,1) f=\"gauss(1).csv\"\nR1 a b } {unif(1k,0.1)}\n.function flat(x) x\n");
         // each step of `.step param run …` another sample, within the tolerance
         let _s = SIM.lock();
         let deck = prepare("* mc\nV1 a 0 1\nR1 a b {mc(1k,0.5)}\nR2 b 0 1k\n.op\n.end\n", None, &mut vec![]);
