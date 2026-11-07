@@ -33,6 +33,9 @@ function spectra(d: Trace["data"] & object, lo: number, hi: number, n: number) {
   return db;
 }
 
+/** A level in a unit as the axes show it (dB and degrees without SI prefixes). */
+const level = (v: number, unit: string) => (unit === "dB" || unit === "°" ? `${+v.toFixed(3)}${unit}` : si(v, unit, 3));
+
 /** Whether the pane's left axis has a value above 0 to draw on a log scale (reference lines aside). */
 const positive = (pane: Pane) => pane.series.some((s) => scaleOf(pane, s) === "y" && !s.t.data?.constant && s.y.some((v) => v != null && v > 0));
 
@@ -167,7 +170,9 @@ export const Waveform = memo(function Waveform() {
     const one = x.slice(0, segment(x));
     const [lo, hi] = [Math.max(fft!.lo, one[0]), Math.min(fft!.hi, one[one.length - 1])];
     const [a, b] = hi > lo ? [lo, hi] : [one[0], one[one.length - 1]];
-    return { lo: a, hi: b, n: fftSize(one, a, b) };
+    // (a .step family: at most 2^22 points in all, its curves fewer each)
+    const curves = Math.max(1, Math.floor(x.length / one.length));
+    return { lo: a, hi: b, n: Math.min(fftSize(one, a, b), Math.max(4096, 2 ** Math.floor(Math.log2(2 ** 22 / curves)))) };
   }, [spec, x0, fft]);
   const shown = useMemo(() => {
     if (!win) return ok;
@@ -270,8 +275,9 @@ export const Waveform = memo(function Waveform() {
       const ax = yAxes[axisKey(pane.unit, spec)] ?? {};
       const logY = !!ax.log && !span && positive(pane); // (nothing above 0: linear)
       const fixed = ax.lo != null && ax.hi != null && (!logY || ax.lo > 0) ? { range: (): uPlot.Range.MinMax => [ax.lo!, ax.hi!] } : {};
-      const values = (unit: string) => (_u: uPlot, v: number[], _i: number, _s: number, incr: number) =>
-        v.map((y) => (unit === "dB" || unit === "°" ? `${+y.toFixed(Math.max(0, Math.ceil(-Math.log10(incr))))}${unit}` : si(y, unit, 3)));
+      // (a log axis hands the ticks it does not label over as null)
+      const values = (unit: string) => (_u: uPlot, v: (number | null)[], _i: number, _s: number, incr: number) =>
+        v.map((y) => (y == null ? "" : unit === "dB" || unit === "°" ? `${+y.toFixed(Math.max(0, Math.ceil(-Math.log10(incr))))}${unit}` : si(y, unit, 3)));
       const opts: uPlot.Options = {
         width: size.w, height: h,
         legend: { show: false },
@@ -423,7 +429,7 @@ export const Waveform = memo(function Waveform() {
             : { label: "FFT (spectrum)", hint: a != null && b != null && a !== b ? "of A–B" : zoom ? "of the shown range" : "of the whole run", disabled: !panes.length || !(range[1] > range[0]), run: () => showFft(range) }] : []),
           ...(pane ? ["-" as const,
             { label: ax.log ? "Linear y axis" : "Log y axis", hint: db ? `${pane.unit}: no` : !pos ? "nothing above 0" : undefined, disabled: db || (!ax.log && !pos), run: () => setYAxis(key, { ...ax, log: !ax.log || undefined, ...(!ax.log && ax.lo != null && ax.lo <= 0 ? { lo: undefined, hi: undefined } : {}) }) },
-            { label: "Y range…", hint: ax.lo != null && ax.hi != null ? `${si(ax.lo, pane.unit, 3)} … ${si(ax.hi, pane.unit, 3)}` : "automatic", run: () => useS.setState({ dialog: { k: "yrange", pane: key, unit: pane.unit, log: !!ax.log && !db } }) },
+            { label: "Y range…", hint: ax.lo != null && ax.hi != null ? `${level(ax.lo, pane.unit)} … ${level(ax.hi, pane.unit)}` : "automatic", run: () => useS.setState({ dialog: { k: "yrange", pane: key, unit: pane.unit, log: !!ax.log && !db && pos } }) },
             ...(ax.lo != null ? [{ label: "Automatic y range", run: () => setYAxis(key, { ...ax, lo: undefined, hi: undefined }) }] : []),
           ] : []),
           "-",
@@ -532,8 +538,8 @@ const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot, spec, st
                 ...(moved(t) || spec ? [] : [{ label: t.right && !guest(t) ? "Back to the left axis" : "Right axis (own scale)", hint: guest(t) ? "it holds another unit here" : !t.right && alone(t) ? "alone in its pane" : undefined, disabled: guest(t) || (!t.right && alone(t)), run: () => setTraceRight(t.expr, !t.right) }]),
                 // (into another unit's pane: on its right axis there, unless that holds a third unit
                 // already; not the Bode panes, nor in a spectrum)
-                ...(t.data?.im || spec ? [] : panes.filter((p) => p.unit !== "dB" && p.unit !== "°" && p.unit !== t.unit && !p.series.some((s) => s.t === t) && p.series.every((s) => s.u === p.unit || s.u === t.unit)).map((p) => ({ label: `Into the ${p.unit || "unitless"} pane`, hint: "its right axis", run: () => setTracePane(t.expr, p.unit) }))),
-                ...(moved(t) && !spec ? [{ label: `Back to its own pane (${t.unit || "unitless"})`, run: () => setTracePane(t.expr, undefined) }] : []),
+                ...(t.data?.im || t.data?.constant || spec ? [] : panes.filter((p) => p.unit !== "dB" && p.unit !== "°" && p.unit !== t.unit && !p.series.some((s) => s.t === t) && p.series.every((s) => s.u === p.unit || s.u === t.unit)).map((p) => ({ label: `Into the ${p.unit || "unitless"} pane`, hint: "its right axis", run: () => setTracePane(t.expr, p.unit) }))),
+                ...(t.pane != null && !spec ? [{ label: moved(t) ? `Back to its own pane (${t.unit || "unitless"})` : `Not into the ${t.pane || "unitless"} pane any more`, hint: moved(t) ? undefined : "it would go there with traces of its own", run: () => setTracePane(t.expr, undefined) }] : []),
                 { label: "Copy expression", hint: t.expr, run: () => navigator.clipboard.writeText(t.expr) },
                 { label: `Remove ${t.label}`, danger: true, run: () => removeTrace(t.expr) },
               ]))}>
