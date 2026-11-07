@@ -154,10 +154,12 @@ pub fn folder_symbols(dir: &std::path::Path) -> Vec<(String, std::path::PathBuf)
         .collect()
 }
 
-/// (count, a sum over modification times and sizes) of the .asy files in `dir`.
+/// (count, a sum over names, modification times and sizes) of the folder's symbol files (the same
+/// ones `folder_symbols` gives).
 fn asy_stamp(dir: &std::path::Path) -> Option<(usize, u128)> {
-    let asy = std::fs::read_dir(dir).ok()?.flatten().filter(|e| e.path().extension().is_some_and(|x| x.eq_ignore_ascii_case("asy")));
-    let each = asy.filter_map(|e| Some((e.file_name(), e.metadata().ok()?))).map(|(name, m)| {
+    std::fs::metadata(dir).ok()?;
+    let asy = folder_symbols(dir).into_iter().map(|(_, p)| p);
+    let each = asy.filter_map(|p| Some((p.file_name()?.to_os_string(), p.metadata().ok()?))).map(|(name, m)| {
         let t = m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos());
         let n = name.as_encoded_bytes().iter().fold(0u128, |h, &b| h.wrapping_mul(131).wrapping_add(b as u128)); // a rename counts too
         t.wrapping_add((m.len() as u128).wrapping_mul(1_000_003)).wrapping_add(n)
@@ -815,7 +817,7 @@ fn ltspice_meas(text: &str, sensors: &[Sensor], warnings: &mut Vec<String>) -> S
     let an = lines.iter().find_map(|l| l.head.strip_prefix('.').filter(|h| !l.skip && TYPES_MEAS.contains(h))).unwrap_or("");
     let meas = |l: &DeckLine| l.head == ".meas" || l.head == ".measure";
     // ngspice allows 99 par() calls per deck and exits past that: rewrites stop before
-    let mut budget = 99usize.saturating_sub(par_calls(text));
+    let mut budget = 99usize.saturating_sub(statements(text, &PAR_STATEMENTS).iter().map(|s| par_calls(s)).sum());
     let mut out: Vec<String> = vec![];
     let mut i = 0;
     while i < lines.len() {
@@ -873,10 +875,15 @@ pub fn statements(text: &str, heads: &[&str]) -> Vec<String> {
     out
 }
 
-/// How many par() calls `s` makes (ngspice: at most 99 per deck; one helper vector pair each).
+/// How many par() calls `s` makes (ngspice: at most 99 per deck; one helper vector pair each):
+/// `par(` as a word (not the end of a name like `rpar(`).
 pub fn par_calls(s: &str) -> usize {
-    s.to_ascii_lowercase().matches("par(").count()
+    let l = s.to_ascii_lowercase();
+    l.match_indices("par(").filter(|(k, _)| !l[..*k].ends_with(|c: char| c.is_ascii_alphanumeric() || c == '_')).count()
 }
+
+/// The output statements whose par() calls ngspice counts (the same ones run_until counts).
+pub const PAR_STATEMENTS: [&str; 6] = [".meas", ".measure", ".print", ".plot", ".four", ".save"];
 
 /// A line without its inline comment (`;` LTspice, ` $` ngspice).
 pub fn uncommented(l: &str) -> &str {
@@ -1898,7 +1905,8 @@ mod tests {
         let mut w = vec![];
         let skipped = ltspice_meas(".ac dec 10 1 1k\n.meas ac f1 TRIG vm(out) VAL=0.5*vm(in) TARG vm(out) VAL=1\n", &[], &mut w);
         assert!(skipped.contains("* .meas ac f1") && w.len() == 1, "{skipped} {w:?}");
-        // ngspice exits past 99 par() calls: the rewrite stops there (and says so once)
+        assert_eq!(par_calls(".func rpar(a,b) {a*b}\n.meas x AVG par('v(a)') PAR( 'x')"), 2, "par( as a word only");
+        // ngspice exits past 99 par() calls: the rewrite stops there
         let many: String = (0..120).map(|k| format!(".meas tran m{k} AVG V(a)*{k}\n")).collect();
         let mut w = vec![];
         let capped = ltspice_meas(&format!(".tran 1m\n{many}"), &[], &mut w);

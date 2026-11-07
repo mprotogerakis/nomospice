@@ -34,8 +34,10 @@ function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: 
     // sorted as the .asc reader gives them, so an unchanged part compares equal
     if (it.t === "sym") {
       const own = Object.entries(it.attrs).filter(([k, v]) => SHOWN.includes(k) && (v.trim() || (k === "SpiceLine" && def?.spice_line)));
-      // a row naming one of the fields above (Value …) sets it: rows come last and win
-      const more = extra.map(([k, v]) => [k.trim(), v] as [string, string]).filter(([k, v]) => k && v.trim());
+      // a row naming one of the fields above (Value …) sets it: rows come last and win; LTspice's
+      // attribute names in their own spelling (`prefix` is Prefix), as the netlister reads them
+      const canon = (k: string) => [...SHOWN, "Prefix", "SpiceLine2", "SpiceModel", "Description"].find((n) => n.toLowerCase() === k.toLowerCase()) ?? k;
+      const more = extra.map(([k, v]) => [canon(k.trim()), v] as [string, string]).filter(([k, v]) => k && v.trim());
       onDone({ ...it, attrs: Object.fromEntries([...new Map([...own, ...more])].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) });
     }
     else if (it.t === "flag" && !it.name.trim()) close();

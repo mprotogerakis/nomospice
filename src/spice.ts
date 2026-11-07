@@ -236,7 +236,8 @@ export function sample(s: Source, n = 240): [number, number][] | null {
 // ---------------------------------------------------------------- analyses
 
 export type Analysis = "tran" | "ac" | "dc" | "noise" | "op" | "tf" | "pz" | "sens";
-export const ANALYSIS = /^\.(tran|ac|dc|op|noise|tf|pz|sens)\b/i;
+const KINDS = "tran|ac|dc|op|noise|tf|pz|sens";
+export const ANALYSIS = new RegExp(`^\\.(${KINDS})\\b`, "i");
 /** Display names, in the order of the simulation form's tabs and the result tabs. */
 export const ANALYSES: [Analysis, string][] = [
   ["tran", "Transient"], ["ac", "AC"], ["dc", "DC sweep"], ["noise", "Noise"], ["op", "DC op pnt"],
@@ -286,7 +287,7 @@ export function analysisLineIndex(lines: string[], kind: Analysis | null | undef
 }
 
 /** Every ngspice analysis, also those the form does not offer (.sp, .disto, .pss, .hb). */
-export const ANY_ANALYSIS = /^\.(tran|ac|dc|op|noise|tf|pz|sens|sp|disto|pss|hb)\b/i;
+export const ANY_ANALYSIS = new RegExp(`^\\.(${KINDS}|sp|disto|pss|hb)\\b`, "i");
 
 /** `text` without its analysis statements (and their `+` lines): a result tab runs its own instead. */
 export function stripAnalyses(text: string) {

@@ -394,7 +394,7 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
     // ngspice makes a helper source per par() in its output lines, named pa_00, pa_01 …
     let low = netlist.to_ascii_lowercase(); // (cheap checks first: most decks have neither)
     let pars = if !low.contains("par(") { 0 } else {
-        crate::schematic::statements(netlist, &[".meas", ".measure", ".print", ".plot", ".four", ".save"]).iter().map(|l| crate::schematic::par_calls(l)).sum()
+        crate::schematic::statements(netlist, &crate::schematic::PAR_STATEMENTS).iter().map(|l| crate::schematic::par_calls(l)).sum()
     };
     let (mut vectors, mut scale) = plot_vectors(api, &plot, sensors, pars);
     // one frequency (`.ac lin 1 50 50`): phasors, shown as a table like .op instead of a 1-point plot

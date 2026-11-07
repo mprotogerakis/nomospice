@@ -2,7 +2,7 @@
 import { useState } from "react";
 import type { Item } from "./types";
 import { analysesOf, analysisItem, commit, currentTab, selectTab, useS } from "./store";
-import { ANALYSES, analysisEditableAt, analysisLineIndex, analysisOptions, continuation, formatAnalysis, knownSweep, parseAnalysis, type Analysis, type Fields } from "./spice";
+import { ANALYSES, ANY_ANALYSIS, analysisEditableAt, analysisLineIndex, analysisOptions, continuation, formatAnalysis, knownSweep, parseAnalysis, type Analysis, type Fields } from "./spice";
 import { CircuitLists, Tabs, closeDialog, Field, Modal, NumField, Section, Select, SpiceLine, TextField } from "./ui/dialog";
 import { Button } from "./ui/button";
 
@@ -59,7 +59,8 @@ export function SimDialog({ index, kind0, of }: { index?: number; kind0?: Analys
   };
   // the schematic already runs an analysis: a new one is an alternative (a comment, as LTspice keeps
   // them), run in its own result tab; LTspice opens the file as before
-  const alternate = idx < 0 && analysesOf(items).some((o) => o.active);
+  // (any analysis ngspice runs counts, also one the form does not offer: .pss …)
+  const alternate = idx < 0 && items.some((it) => it.t === "text" && it.directive && it.text.split("\n").some((l) => ANY_ANALYSIS.test(l.trim())));
 
   const sweep = (pts: string) => (
     <>

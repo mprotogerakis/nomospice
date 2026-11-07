@@ -86,7 +86,8 @@ export function installGuards() {
   // menu shortcuts bypass the keydown guards: with a dialog open, ⌘W closes the dialog (as Esc),
   // ⌘, waits (it would replace the dialog and lose its edits)
   listen("open-libraries", () => !useS.getState().dialog && openLibraries());
-  listen("close-requested", () => (useS.getState().dialog ? useS.setState({ dialog: null }) : closeFile()));
+  // (⌘W: the document goes, the app stays, as an empty untitled schematic)
+  listen("close-requested", () => (useS.getState().dialog ? useS.setState({ dialog: null }) : newFile()));
   // mirror unsaved work for exits we cannot intercept (Dock > Quit, logout, crashes)
   useS.subscribe((s, prev) => {
     if (s.items === prev.items && s.dirty === prev.dirty && s.path === prev.path) return;
@@ -176,8 +177,7 @@ async function saveFile(as = false) {
 async function newFile() {
   if (await discardOk()) await loadDoc([], null);
 }
-/** ⌘W / Ctrl+W: the document goes, the app stays (an empty, untitled schematic). */
-const closeFile = newFile;
+
 
 async function openExample(items: Item[]) {
   if (await discardOk()) await loadDoc(items, null);
@@ -288,7 +288,7 @@ export function App() {
         if (k === "n") return run(newFile);
         if (k === "k") return run(() => useS.setState({ dialog: { k: "parts" } }));
         if (k === ",") return run(openLibraries); // macOS: the app menu's item has it
-        if (k === "w" && !MAC) return run(closeFile); // macOS: File → Close (the menu item takes ⌘W)
+        if (k === "w" && !MAC) return run(newFile); // Ctrl+W closes the document // macOS: File → Close (the menu item takes ⌘W)
         if (k === "l") return run(() => useS.setState({ panel: useS.getState().panel ? null : "log" }));
         if (k === "enter") return run(simulate);
         return;
