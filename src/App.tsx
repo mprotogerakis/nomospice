@@ -639,13 +639,15 @@ function BottomPanel() {
         {panel === "op" && (
           <table className="w-auto">
             <tbody>
-              {sim?.run?.op.map(([n, v, im, unit0]) => {
+              {sim?.run?.op.map(([full, v, im, unit0]) => {
                 // ngspice's vector type gives the unit; @dev[...] and the like stay as written
+                // (a .step run: `out [R=1k]`, named as without its step, the step after it)
+                const [, n, step] = /^(.*?)( \[[^\]]*\])?$/.exec(full)!;
                 const named = tf && tfName(n, tf);
                 const unit = named ? named[1] : unit0;
-                const name = named ? named[0] : !isOpPlot && !phasors ? n : unit === "A" && n.endsWith("#branch") ? `I(${((b) => nets?.insts.find((x) => x.toLowerCase() === b) ?? b)(n.replace("#branch", ""))})` /* a source's, as drawn */ : unit === "V" && !/[@(]/.test(n) ? `V(${n})` : n;
+                const name = (named ? named[0] : !isOpPlot && !phasors ? n : unit === "A" && n.endsWith("#branch") ? `I(${((b) => nets?.insts.find((x) => x.toLowerCase() === b) ?? b)(n.replace("#branch", ""))})` /* a source's, as drawn */ : unit === "V" && !/[@(]/.test(n) ? `V(${n})` : n) + (step ?? "");
                 return (
-                  <tr key={n}>
+                  <tr key={full}>
                     <td className="pr-6 text-text-secondary">{name}</td>
                     <td className="text-right text-text-strong">{phasors ? (n === "frequency" ? si(v, "Hz") : polar(v, im, unit)) : `${si(v, unit, 5)}${im ? ` ${im < 0 ? "−" : "+"} j${si(Math.abs(im), unit, 5)}` : ""}`}</td>
                   </tr>

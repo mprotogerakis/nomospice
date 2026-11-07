@@ -27,11 +27,12 @@ const css = (name: string) => getComputedStyle(document.documentElement).getProp
 const color = (slot: number) => css(`--series-${slot + 1}`);
 /** dB; an exactly-zero magnitude (AC-quiet node) is a gap, not -6000 dB squashing the pane. */
 const mag = (t: Trace) => t.data!.re.map((re, i) => { const m = Math.hypot(re, t.data!.im?.[i] ?? 0); return m ? 20 * Math.log10(m) : null; });
-function phase(t: Trace) {
+function phase(t: Trace, seg = Infinity) {
   let off = 0, prev = 0;
   return t.data!.re.map((re, i) => {
     const p = (Math.atan2(t.data!.im?.[i] ?? 0, re) * 180) / Math.PI;
-    if (i) off += p + off - prev > 180 ? -360 : p + off - prev < -180 ? 360 : 0; // unwrap
+    if (i % seg === 0) off = 0; // (a family's next curve: unwrapped on its own)
+    else off += p + off - prev > 180 ? -360 : p + off - prev < -180 ? 360 : 0; // unwrap
     prev = p + off;
     return prev;
   });
@@ -150,7 +151,7 @@ export const Waveform = memo(function Waveform() {
     const cplx = signals.filter((t) => t.data!.im);
     const real = signals.filter((t) => !t.data!.im);
     const panes: Pane[] = [];
-    if (cplx.length) panes.push({ unit: "dB", series: cplx.flatMap((t) => split(t, mag(t))) }, { unit: "°", series: cplx.flatMap((t) => split(t, phase(t))) });
+    if (cplx.length) panes.push({ unit: "dB", series: cplx.flatMap((t) => split(t, mag(t))) }, { unit: "°", series: cplx.flatMap((t) => split(t, phase(t, seg))) });
     const units = [...new Set(real.map((t) => t.unit))].sort((a, b) => (a === "V" ? -1 : b === "V" ? 1 : a.localeCompare(b)));
     for (const unit of units) {
       const series = real.filter((t) => t.unit === unit).flatMap((t) => split(t, t.data!.re));
@@ -397,7 +398,7 @@ const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot, steps }:
     const fmt = (unit: string, v: number) => (Number.isNaN(v) ? "–" : unit === "dB" ? `${v.toFixed(2)} dB` : unit === "°" ? `∠${v.toFixed(1)}°` : si(v, unit));
     const val = (x: number | null) => (x == null || !ps.length ? "–" : ps.map(({ s, unit }) => fmt(unit, at(xs, s.y, x))).join(" "));
     // (a .step family: each value with its step, in a tooltip)
-    const named = (x: number | null) => (x == null || !steps.length ? undefined : panes.flatMap((p) => p.series.filter((s) => s.t === t).map((s) => `${member(p, s, steps)}: ${fmt(p.unit, at(xs, s.y, x))}`)).join("\n"));
+    const named = (x: number | null) => (x == null || !steps.length || ps.length < 2 ? undefined : panes.flatMap((p) => p.series.filter((s) => s.t === t).map((s) => `${member(p, s, steps)}: ${fmt(p.unit, at(xs, s.y, x))}`)).join("\n"));
     const delta = a != null && b != null && ps.length ? ps.map(({ s, unit }) => fmt(unit, at(xs, s.y, b) - at(xs, s.y, a))).join(" ") : "–";
     return { t, val, delta, named };
   });

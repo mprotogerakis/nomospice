@@ -52,7 +52,7 @@ static BG_DONE: AtomicBool = AtomicBool::new(true);
 static RUNS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// The latest run: its id, its current sensors (trace expressions name part currents, `I(R1)`,
 /// `Ib(Q1)`) and, for a `.step` run, each step's plot.
-static SENSORS: Mutex<(u64, Option<std::sync::Arc<[crate::schematic::Sensor]>>, Vec<String>)> = Mutex::new((0, None, Vec::new()));
+static SENSORS: Mutex<(u64, Option<std::sync::Arc<[crate::schematic::Sensor]>>, Option<std::sync::Arc<[String]>>)> = Mutex::new((0, None, None));
 /// Counts Halt presses. An operation (a simulation, a root locus) notes the count when it begins
 /// (`begin`) and is halted once the count moves on (`halted_since`): a Halt stops what was running
 /// when it was pressed, never something started afterwards, and no later start can undo it. Only
@@ -422,7 +422,7 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
         Some(n) if n >= 2 => format!("noise{}", n - 1),
         _ => d.1.clone(),
     }).collect();
-    *SENSORS.lock().unwrap_or_else(|e| e.into_inner()) = (id, Some(sensors.clone()), if steps.is_none() { vec![] } else { plots.clone() });
+    *SENSORS.lock().unwrap_or_else(|e| e.into_inner()) = (id, Some(sensors.clone()), steps.is_some().then(|| plots.clone().into()));
     let plot0 = &done[0].1;
     let sensors = &sensors[..];
     // a sensor's current vector -> its name (`vsense_q1_2#branch` -> `Ib(Q1)`)
@@ -551,7 +551,7 @@ pub fn trace(expr: &str, scale: &str, run: u64) -> Result<Trace, String> {
     // (the sensors of the run asked about; another run's: the results are gone anyway, see below)
     let (of, sensors, steps) = SENSORS.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let sensors = sensors.filter(|_| of == run).unwrap_or_else(|| std::sync::Arc::from([]));
-    let steps = if of == run { steps } else { vec![] }; // (another run's: gone, the RUNS check below says so)
+    let steps: std::sync::Arc<[String]> = steps.filter(|_| of == run).unwrap_or_else(|| std::sync::Arc::from([])); // (another run's: gone, the RUNS check below says so)
     let (named, problem) = crate::schematic::sensor_currents(expr, &sensors);
     let (shown, expr) = (expr, named.as_str());
     let unname = |log: String| sensors.iter().fold(log, |l, s| l.replace(&format!("i({})", s.source), &s.label).replace(&format!("{}#branch", s.source), &s.label));
@@ -605,16 +605,18 @@ pub fn trace(expr: &str, scale: &str, run: u64) -> Result<Trace, String> {
 /// step interpolated onto it, so the plot shows them as a family like a nested .dc.
 fn steps_joined(each: Vec<Trace>) -> Result<Trace, String> {
     let same = each.windows(2).all(|w| w[0].x.len() == w[1].x.len() && w[0].x.iter().zip(&w[1].x).all(|(a, b)| (a - b).abs() <= 1e-12 * a.abs().max(b.abs())));
-    let rising = |x: &[f64]| x.windows(2).all(|w| w[1] >= w[0]);
+    // (a sweep down, `.dc V1 5 0 -0.1`: worked on as -x)
+    let dir = if each[0].x.len() > 1 && each[0].x[1] < each[0].x[0] { -1.0 } else { 1.0 };
+    let rising = |x: &[f64]| x.windows(2).all(|w| dir * w[1] >= dir * w[0]);
     if !same && !each.iter().all(|t| rising(&t.x)) {
-        return Err("the steps' x values differ and do not rise (a nested .dc): no shared axis".into());
+        return Err("the steps' x values differ and are no sweep in one direction (a nested .dc): no shared axis".into());
     }
     let grid: Vec<f64> = if same {
         each[0].x.clone()
     } else {
         let longest = each.iter().map(|t| &t.x).max_by_key(|x| x.len()).unwrap();
         let mut g: Vec<f64> = each.iter().flat_map(|t| t.x.iter().copied()).collect();
-        g.sort_by(|a, b| a.total_cmp(b));
+        g.sort_by(|a, b| (dir * a).total_cmp(&(dir * b)));
         g.dedup_by(|a, b| (*a - *b).abs() <= 1e-12 * a.abs().max(b.abs()));
         if g.len() > 3 * longest.len() { longest.clone() } else { g }
     };
@@ -625,14 +627,21 @@ fn steps_joined(each: Vec<Trace>) -> Result<Trace, String> {
             return y.to_vec();
         }
         if x.len() < 2 || y.len() < x.len() {
-            return grid.iter().map(|_| y.first().copied().filter(|_| x.len() == 1).unwrap_or(f64::NAN)).collect();
+            return vec![f64::NAN; grid.len()]; // (no curve: a gap; NaN reaches the UI as null)
         }
+        let (lo, hi) = (dir * x[0], dir * x[x.len() - 1]);
         let mut k = 0;
         grid.iter().map(|&g| {
-            while k + 2 < x.len() && x[k + 1] < g {
+            let g = dir * g;
+            // beyond what the step simulated (halted, aborted): a gap, not its last value held
+            if g < lo - 1e-12 * lo.abs() || g > hi + 1e-12 * hi.abs() {
+                return f64::NAN;
+            }
+            while k + 2 < x.len() && dir * x[k + 1] < g {
                 k += 1;
             }
-            let f = if x[k + 1] == x[k] { 0.0 } else { ((g - x[k]) / (x[k + 1] - x[k])).clamp(0.0, 1.0) };
+            let (x0, x1) = (dir * x[k], dir * x[k + 1]);
+            let f = if x1 == x0 { 0.0 } else { ((g - x0) / (x1 - x0)).clamp(0.0, 1.0) };
             y[k] + f * (y[k + 1] - y[k])
         }).collect()
     };

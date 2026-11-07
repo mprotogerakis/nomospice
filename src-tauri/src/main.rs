@@ -223,6 +223,12 @@ async fn root_locus(items: Vec<Item>, dir: Option<String>, target: String, value
     let stop = move || ngspice::halted_since(op) || SWEEP_GEN.load(std::sync::atomic::Ordering::SeqCst) != gen;
     tauri::async_runtime::spawn_blocking(move || {
         let deck = sim.prepared(dir.as_deref().map(std::path::Path::new), &mut vec![]);
+        // (a .step deck: its first step, so a parameter only .step defines is there; one .pz per locus step)
+        let deck = match deck.steps() {
+            Ok(Some(s)) => s.at(0)?.1,
+            Ok(None) => deck,
+            Err(e) => return Err(format!(".step: {e}")),
+        };
         match schematic::pz_statement(deck.text()) {
             None => return Err("the schematic has no .pz analysis (Simulation command → Poles/zeros)".into()),
             // the type (pz, pol, zer) is the last token (pz_statement cut inline comments)

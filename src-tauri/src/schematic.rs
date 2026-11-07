@@ -916,19 +916,22 @@ pub fn parse_step(stmt: &str) -> Result<Step, String> {
             if c == 0.0 || (b - a) * c < 0.0 {
                 return Err(format!("`{stmt}`: the step does not lead from start to stop"));
             }
-            let n = ((b - a) / c + 1e-9).floor() as usize + 1;
-            (0..n.min(MAX_STEPS + 1)).map(|k| a + k as f64 * c).collect()
+            let n = ((b - a) / c + 1e-9).floor() + 1.0; // (as f64: an absurd count must not overflow)
+            (0..n.min(MAX_STEPS as f64 + 1.0) as usize).map(|k| a + k as f64 * c).collect()
         } else {
             if a <= 0.0 || b < a || c < 1.0 {
                 return Err(format!("`{stmt}`: oct/dec need 0 < start ≤ stop and at least 1 point"));
             }
             let ratio = (if mode == "dec" { 10f64 } else { 2.0 }).powf(1.0 / c);
-            let n = ((b / a).ln() / ratio.ln() + 1e-9).floor() as usize + 1;
-            (0..n.min(MAX_STEPS + 1)).map(|k| a * ratio.powi(k as i32)).collect()
+            let n = ((b / a).ln() / ratio.ln() + 1e-9).floor() + 1.0;
+            (0..n.min(MAX_STEPS as f64 + 1.0) as usize).map(|k| a * ratio.powi(k as i32)).collect()
         }
     };
     if values.is_empty() {
         return Err(format!("`{stmt}`: no values"));
+    }
+    if values.len() > MAX_STEPS {
+        return Err(format!("`{stmt}`: more than {MAX_STEPS} steps"));
     }
     Ok(Step { what, values })
 }
@@ -955,7 +958,7 @@ fn short_num(v: f64) -> String {
     }
     const SI: [(f64, &str); 9] = [(1e12, "T"), (1e9, "G"), (1e6, "Meg"), (1e3, "k"), (1.0, ""), (1e-3, "m"), (1e-6, "u"), (1e-9, "n"), (1e-12, "p")];
     let (f, s) = SI.iter().find(|(f, _)| v.abs() >= *f * 0.9999999).copied().unwrap_or((1e-15, "f"));
-    let m = format!("{:.4}", v / f);
+    let m = format!("{:.6}", v / f); // (close values must not share a label)
     format!("{}{s}", m.trim_end_matches('0').trim_end_matches('.'))
 }
 
@@ -2397,6 +2400,8 @@ mod tests {
         assert_eq!(s.iter().map(|x| x.0.as_str()).collect::<Vec<_>>(), ["R=1k V1=1", "R=2k V1=1", "R=1k V1=2", "R=2k V1=2"]);
         assert!(s[1].1.text().contains(".param R=2e3\n.end") && s[3].1.text().contains("V1 a 0 DC 2e0"), "{}", s[3].1.text());
         assert!(parse_step(".step VDMOS IRF530(Rd) 1m 10m 1m").unwrap_err().contains("model parameter"));
+        assert!(parse_step(".step param x 0 1 1e-300").unwrap_err().contains("more than"), "no overflow");
+        assert_eq!(short_num(1000.5), "1.0005k");
     }
 
     #[test]
