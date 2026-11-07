@@ -839,10 +839,12 @@ fn ltspice_meas(text: &str, sensors: &[Sensor], warnings: &mut Vec<String>) -> S
         return text.to_string(); // nothing to rewrite: no pass over a big deck
     }
     // (only with the circuit's sensors: the warnings pass before a run has none)
-    if let Some(w) = statements(text, &[".meas", ".measure"]).iter().filter(|_| !sensors.is_empty()).find_map(|l| {
-        whole_ic_current(l, sensors).or_else(|| unknown_current(&sensor_currents(l, sensors)).map(|c| format!("no part current {c} in this circuit")))
-    }) {
-        warnings.push(format!(".meas: {w}"));
+    if !sensors.is_empty() {
+        for l in statements(text, &[".meas", ".measure"]) {
+            if let Some(w) = whole_ic_current(&l, sensors).or_else(|| unknown_current(&sensor_currents(&l, sensors)).map(|c| format!("no part current {c} in this circuit"))) {
+                warnings.push(format!(".meas: {w}"));
+            }
+        }
     }
     let lines = deck_lines(text);
     // the deck's first analysis ngspice can measure (an .op before a .tran: the .tran)
@@ -1743,7 +1745,8 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool) -> Netlist {
             if sense {
                 lines.push(format!("{src} {} {node} 0", nodes[k]));
                 if !hold.is_empty() {
-                    lines.push(format!("{hold} {} 0 1T", nodes[k])); // (the net's side: not in the measured current)
+                    // (the net's side: not in the measured current; noiseless: no .noise contribution)
+                    lines.push(format!("{hold} {} 0 1T noisy=0", nodes[k]));
                 }
                 if prefix == 'M' && k == 2 && npins == 3 && nodes.len() == 4 {
                     nodes[3] = node.clone(); // the bulk added for a 3-pin symbol is part of its source pin

@@ -333,11 +333,12 @@ export function closeTab(kind: Analysis) {
       kept = cut[0].length === next.length ? (cut[0][cut[1]] as Extract<Item, { t: "text" }>).text.split("\n").length : 0;
     }
   }
-  const alt = analysesOf(next);
+  // the first alternative as written in the file
+  const first = next.flatMap((it) => (it.t === "text" && !it.directive ? analysisOptions([it]) : []))[0];
   // (an active analysis of ngspice's own left, .pss: it runs as it is, none is added beside it)
-  if (at && alt.length && !alt.some((x) => x.active) && !activeLines(next, ANY_ANALYSIS)) {
-    const moved = withoutAnalysis(next, alt[0].kind, false);
-    if (moved) next = [...moved[0], { t: "text", x: at.x, y: at.y + 32 * kept, text: alt[0].line, directive: true }];
+  if (at && first && !analysesOf(next).some((x) => x.active) && !activeLines(next, ANY_ANALYSIS)) {
+    const moved = withoutAnalysis(next, first.kind, false);
+    if (moved) next = [...moved[0], { t: "text", x: at.x, y: at.y + 32 * kept, text: first.line, directive: true }];
   }
   commit(next, []); // (a text may have gone: indices shift)
 }

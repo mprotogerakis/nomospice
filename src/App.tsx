@@ -171,7 +171,7 @@ async function saveFile(as = false): Promise<boolean> {
     // saves are written in the order they were requested: a newer snapshot never loses to an older one
     const write = (saveQueue = saveQueue.catch(() => {}).then(() => invoke("save_asc", { path, items })));
     await write;
-    if (doc !== docId()) return true; // (written; another document was loaded meanwhile)
+    if (doc !== docId()) return false; // (written, but another document is open now: not the one asked about)
     if (carry) await invoke("folder_symbols", { from, to, names, copy: true }).catch(fail("Cannot copy all symbols"));
     const moved = path !== useS.getState().path; // relative .include paths now resolve elsewhere
     // another folder: includes and folder symbols resolve elsewhere, for every tab's results
