@@ -227,6 +227,8 @@ async function fetchTrace(t: Trace): Promise<Trace> {
 /** Clicking the schematic plots (LTspice probing): results with node voltages / device currents.
  *  Noise plots hold spectra only (traces are added by name). */
 export const probeMode = (sim: Sim | null) => !!sim?.run && !isOp(sim) && !/^(noise|sens)/.test(sim.run.plot);
+/** Power V·I is real power only in time and DC sweeps (in .ac it would be a complex product). */
+export const powerMode = (sim: Sim | null) => probeMode(sim) && /^(tran|dc)/.test(sim!.run!.plot);
 
 /** Results without a scale (.op, .tf, .noise totals, .sens): a value table, nothing to plot or probe. */
 export const isOp = (sim: Sim | null) => !!sim?.run && !sim.run.scale;
@@ -431,6 +433,7 @@ export async function probe(target: Item, power = false) {
   const i = items.indexOf(target); // edits during the await may have shifted indices
   if (!sim?.run || !probeMode(sim) || stale || i < 0) return; // e.g. the re-run turned out to be .noise
   if (target.t === "sym" && power) {
+    if (!powerMode(sim)) return;
     // LTspice's power probe: the voltage across a two-pin part times the current into pin 1 —
     // positive where it takes power (a resistor), negative where it gives it (a source)
     const [a, b] = sim.netlist.nets[i] ?? [], expr = sim.netlist.probes[i];

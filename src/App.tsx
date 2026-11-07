@@ -325,16 +325,10 @@ export function App() {
     : showWave ? "Click a wire to plot V · click a part to plot I · right-click to edit"
     : "Drag to move · shift-drag box select · double/right-click to edit · ⌘↵ run";
 
-  const startSplit = (e: React.PointerEvent) => {
-    e.currentTarget.setPointerCapture(e.pointerId);
-    const move = (ev: PointerEvent) => {
-      const r = mainRef.current!.getBoundingClientRect();
-      setSplit(Math.min(0.8, Math.max(0.15, (ev.clientY - r.top) / r.height)));
-    };
-    const up = () => (window.removeEventListener("pointermove", move), window.removeEventListener("pointerup", up));
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-  };
+  const startSplit = (e: React.PointerEvent) => drag(e, (ev) => {
+    const r = mainRef.current!.getBoundingClientRect();
+    setSplit(Math.min(0.8, Math.max(0.15, (ev.clientY - r.top) / r.height)));
+  });
 
   const run = s.sim?.run;
   const warnings = s.warnings ?? [];
@@ -387,11 +381,13 @@ export function App() {
       <div ref={mainRef} className="flex min-h-0 flex-1 flex-col">
         {showWave && (
           <>
-            <div style={{ height: `${split * 100}%` }} className="min-h-0 shrink-0">{pz ? <PoleZero run={s.sim!.run!} /> : <Waveform key={`${mode}:${plotKind(s.sim)}`} />}</div>
+            <div style={{ height: `${split * 100}%` }} className="min-h-0">{pz ? <PoleZero run={s.sim!.run!} /> : <Waveform key={`${mode}:${plotKind(s.sim)}`} />}</div>
             <div onPointerDown={startSplit} className="h-[5px] shrink-0 cursor-row-resize border-y border-border bg-surface-panel-head hover:bg-selection/40" />
           </>
         )}
-        <div className="relative min-h-0 flex-1">
+        {/* the panes give way (flex-shrink) before the schematic gets less than a strip: a split and a
+            panel height from a larger window can not push it out */}
+        <div className="relative min-h-[48px] flex-1">
           <Schematic />
           {!s.hasItems && tool.k === "select" && (
             <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
@@ -502,6 +498,17 @@ function CursorStatus() {
   );
 }
 
+/** A drag on a splitter handle (left button): `move` gets the pointer, captured, until it is up or
+ *  lost (a cancelled gesture, the handle unmounted); then `done`. */
+function drag(e: React.PointerEvent, move: (ev: PointerEvent) => void, done?: () => void) {
+  if (e.button !== 0) return;
+  const el = e.currentTarget as HTMLElement;
+  el.setPointerCapture(e.pointerId);
+  const end = () => (el.removeEventListener("pointermove", move), el.removeEventListener("lostpointercapture", end), done?.());
+  el.addEventListener("pointermove", move);
+  el.addEventListener("lostpointercapture", end);
+}
+
 function BottomPanel() {
   const { panel, sim, nets } = useS(useShallow((s) => ({ panel: s.panel, sim: s.sim, nets: s.nets })));
   const [simulated, setSimulated] = useState(false);
@@ -512,19 +519,13 @@ function BottomPanel() {
   const [height, setHeight] = useState(() => Number(localStorage.getItem("nomospice.panelHeight")) || 0);
   const ref = useRef<HTMLDivElement>(null);
   const resize = (e: React.PointerEvent) => {
-    e.currentTarget.setPointerCapture(e.pointerId);
     const room = ref.current!.parentElement!.getBoundingClientRect().height;
-    const move = (ev: PointerEvent) => {
-      const h = Math.round(Math.min(room * 0.85, Math.max(80, ref.current!.getBoundingClientRect().bottom - ev.clientY)));
-      setHeight(h);
-      localStorage.setItem("nomospice.panelHeight", String(h));
-    };
-    const up = () => (window.removeEventListener("pointermove", move), window.removeEventListener("pointerup", up));
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
+    let h = 0;
+    drag(e, (ev) => setHeight((h = Math.round(Math.min(room * 0.85, Math.max(80, ref.current!.getBoundingClientRect().bottom - ev.clientY))))),
+      () => h && localStorage.setItem("nomospice.panelHeight", String(h)));
   };
   return (
-    <div ref={ref} style={height ? { height } : undefined} className={cn("flex min-h-[80px] shrink-0 flex-col border-t border-border bg-surface-panel", !height && "h-[32%]")}>
+    <div ref={ref} style={height ? { height } : undefined} className={cn("flex min-h-[80px] flex-col border-t border-border bg-surface-panel", !height && "h-[32%]")}>
       <div onPointerDown={resize} onDoubleClick={() => (setHeight(0), localStorage.removeItem("nomospice.panelHeight"))} title="Drag to resize · double-click: default height"
         className="-mt-[3px] h-[5px] shrink-0 cursor-row-resize hover:bg-selection/40" />
       <div className="flex h-[26px] shrink-0 items-center border-b border-border bg-surface-panel-head px-1">

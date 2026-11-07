@@ -8,7 +8,7 @@ import {
   box, connectivity, currentLabel, defOf, dragPlan, mirror, prefixOf, rotate, dropZeroWires, dropZeroWiresKeepSel, GRID, hit, isShape, labelRect, leftLabels, matrix, snap, symBox,
   textLines, union, xform, type Box, type Lib, type Pt,
 } from "./geom";
-import { canProbe, commit, currentNets, nextInst, probe, probeMode, simulate, useS, useStatus } from "./store";
+import { canProbe, commit, currentNets, nextInst, powerMode, probe, probeMode, simulate, useS, useStatus } from "./store";
 import { deleteSelection, duplicate, newItem, transform } from "./actions";
 import { openMenu, type MenuItem } from "./Menu";
 import { useSize } from "./lib/useSize";
@@ -440,7 +440,7 @@ export const Schematic = memo(function Schematic() {
     const edit = () => set({ sel: [i], dialog: { k: "edit", index: i } });
     const plot: MenuItem[] = probing && it && canProbe(it) ? [{ label: it.t === "sym" ? `Plot ${currentLabel(nets?.insts[i] || "current")}` : `Plot V(${net ?? "?"})`, run: () => probe(it) }] : [];
     // two-pin parts: their power too (LTspice: alt-click)
-    if (plot.length && it?.t === "sym" && nets?.nets[i]?.length === 2) plot.push({ label: `Plot power P(${nets.insts[i] || "?"})`, run: () => probe(it, true) });
+    if (plot.length && powerMode(sim) && it?.t === "sym" && nets?.nets[i]?.length === 2) plot.push({ label: `Plot power P(${nets.insts[i] || "?"})`, run: () => probe(it, true) });
     const arrange: MenuItem[] = [
       { label: "Rotate", hint: "⌃R", run: () => transform(rotate) },
       { label: "Mirror", hint: "⌃E", run: () => transform(mirror) },

@@ -2144,7 +2144,7 @@ mod tests {
                 }
                 "rectifier_rms" => {
                     let (vrms, vavg) = (meas("vrms"), meas("vavg"));
-                    assert!((8.0..9.6).contains(&vrms) && (vrms / vavg - 1.0) < 0.01, "{name}: {:?}", run.meas);
+                    assert!((8.0..9.6).contains(&vrms) && (vrms / vavg - 1.0).abs() < 0.01, "{name}: {:?}", run.meas);
                     assert!(meas("irms") > 3.0 * meas("iavg") && meas("pd") > 0.0, "{name}: {:?}", run.meas);
                     near(meas("pr"), vrms * vrms / 1e3, 0.02);
                 }
