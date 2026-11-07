@@ -490,14 +490,33 @@ pub fn trace(expr: &str, scale: &str, run: u64) -> Result<Trace, String> {
     // a constant (`1`, a reference level) is one value: a line across the x range
     if t.re.len() == 1 && t.x.len() > 1 {
         let n = t.x.len();
-        let call = expr.contains('[') || expr.char_indices().any(|(i, c)| c == '(' && expr[..i].trim_end().ends_with(|p: char| p.is_alphanumeric() || p == '_'));
-        t.constant = t.im.is_none() && !call;
+        t.constant = t.im.is_none() && numbers_only(expr);
         t.re = vec![t.re[0]; n];
         if let Some(im) = &mut t.im {
             *im = vec![im[0]; n];
         }
     }
     Ok(t)
+}
+
+/// Only numbers (exponents, SPICE suffixes: `1e-3`, `10k`), operators and parentheses: a level the
+/// user typed, not a vector, a measurement or a function of them (`tdelay`, `mean(i(r1))`).
+fn numbers_only(expr: &str) -> bool {
+    let b = expr.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i].is_ascii_digit() || b[i] == b'.' {
+            i += 1; // the number, its exponent sign and its suffix
+            while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'.' || (b"+-".contains(&b[i]) && b"eE".contains(&b[i - 1]))) {
+                i += 1;
+            }
+        } else if b" +-*/^()".contains(&b[i]) {
+            i += 1;
+        } else {
+            return false;
+        }
+    }
+    true
 }
 
 /// The latest run's id: the one whose results ngspice holds (a trace of another fails).
@@ -530,6 +549,16 @@ mod tests {
         assert_eq!(names, ["ratio", "error_pct", "w", "p", "tplh"], "{m:?}");
         assert!(m[0].1.is_none() && m[4].3 && !m[1].3, "a failed PARAM listed; trig/targ on the x axis, AVG not");
         assert_eq!(m[4].2, "targ=  3.0e-08 trig=  3.0e-08");
+    }
+
+    #[test]
+    fn levels_are_numbers_only() {
+        for e in ["0.5", "-3", "500m", "1e-3*2", "2.5E+2", "(1+2)*0.5", "10k/2", "3.3 / 2"] {
+            assert!(numbers_only(e), "{e}");
+        }
+        for e in ["tdelay", "ratio*2", "vdd/2", "mean(v(in))", "v(out)[25]", "2*pi", "sqrt(2)"] {
+            assert!(!numbers_only(e), "{e}");
+        }
     }
 
     #[test]

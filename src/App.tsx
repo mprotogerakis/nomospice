@@ -499,11 +499,14 @@ function CursorStatus() {
   );
 }
 
-/** ⌘L: the bottom panel closed, or open again on the tab last shown (not a run's results: they
- *  may be gone by then). */
+/** ⌘L: the bottom panel closed, or open again on the tab last shown (a run's results only while
+ *  there are any). */
 let lastPanel: Exclude<ReturnType<typeof useS.getState>["panel"], null> = "netlist";
-useS.subscribe((s) => void (s.panel && s.panel !== "op" && (lastPanel = s.panel)));
-const togglePanel = () => useS.setState({ panel: useS.getState().panel ? null : lastPanel });
+useS.subscribe((s) => void (s.panel && (lastPanel = s.panel)));
+const togglePanel = () => {
+  const s = useS.getState();
+  useS.setState({ panel: s.panel ? null : lastPanel === "op" && !s.sim?.run?.op.length ? "log" : lastPanel });
+};
 
 /** A drag on a splitter handle (left button): `move` gets the pointer (captured by the handle, so
  *  none once it is unmounted) until the button is up or the gesture cancelled; then `done`. */
