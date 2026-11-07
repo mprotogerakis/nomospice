@@ -778,7 +778,8 @@ const paramTokens = (line: string) => {
   for (let i = 0; i < t.length; i++) {
     let x = t[i];
     if (!x.includes("=") && t[i + 1]?.startsWith("=")) x += t[++i];
-    if (x.endsWith("=") && t[i + 1] && !/^[A-Za-z_]\w*=/.test(t[i + 1])) x += t[++i]; // (a value, {a==1?1u:2u} too; not the next key=)
+    // (a value: a number or an expression, {a==1?1u:2u} too; not the next key, w =1u, nor a flag, off)
+    if (x.endsWith("=") && /^[-+.\d{('"]/.test(t[i + 1] ?? "")) x += t[++i];
     out.push(x);
   }
   return out;
@@ -788,7 +789,7 @@ export const getParam = (line: string, k: string) => ((t) => t?.slice(k.length +
 /** `line` with `k=v` set (in the first one's place, others of that key gone, else appended); v
  *  empty: taken out. */
 export function setParam(line: string, k: string, v: string) {
-  const val = tokens(v).join(""), t = paramTokens(line); // (blanks between items go, those in {…} stay)
+  const val = v.trim(), t = paramTokens(line); // (one item: see paramValue)
   const first = t.findIndex((x) => isParam(x, k));
   const out = t.flatMap((x, i) => (!isParam(x, k) ? [x] : i === first && val ? [`${k}=${val}`] : []));
   return (first < 0 && val ? [...out, `${k}=${val}`] : out).join(" ");
@@ -805,3 +806,7 @@ export function balanced(s: string) {
   }
   return !depth && !q;
 }
+
+/** A typed parameter value as it can go into an instance line, or why not yet: one item, every
+ *  brace and quote closed (`{2*` while typing would swallow the rest of the line). */
+export const paramValue = (v: string): string | null => (!balanced(v) ? "not closed yet" : tokens(v).length > 1 ? "one value, no blanks (or in {…})" : null);

@@ -4,7 +4,7 @@ import { connectivity, dragPlan } from "../src/geom.ts";
 import {
   tokens, formatAnalysis, formatIc, formatInclude, formatMeas, formatModel, formatParams, formatSource, numInfo, parseAnalysis,
   parseIc, parseInclude, parseMeas, parseModel, parseParams, parseSource, sample, si, spiceNum, directiveKind, analysisRoundTrips, analysisEditable, analysisOptions, analysisLineIndex, at, integrate, stripAnalyses, portablePaths, sourceRoundTrips,
-  exprUnit, unitTimes, fftSize, fftFreqs, spectrum, getParam, setParam, balanced,
+  exprUnit, unitTimes, fftSize, fftFreqs, spectrum, getParam, setParam, balanced, paramValue,
 } from "../src/spice.ts";
 
 // numbers and the classic pitfalls
@@ -264,5 +264,8 @@ assert.equal(getParam("m = 4 temp =27", "temp"), "27");
 assert.equal(setParam("l= {a==1?1u:2u} w=1u", "l", "3u"), "l=3u w=1u", "an expression after l= is its value");
 assert.equal(setParam("w=1u", "l", "{2 * Lmin}"), "w=1u l={2 * Lmin}", "blanks inside braces stay");
 assert.ok(!balanced("{2*") && !balanced("'a") && balanced("{2*(a+b)}") && balanced("1u"));
+assert.equal(setParam("l= w =1u", "l", "2u"), "l=2u w=1u", "an empty l before a spaced w");
+assert.equal(setParam("l= off", "l", "1u"), "l=1u off", "a flag is no value");
+assert.ok(paramValue("1u w=3u") && paramValue("{2*") && !paramValue("{a * b}") && !paramValue(""));
 
 console.log("spice-check: ok");

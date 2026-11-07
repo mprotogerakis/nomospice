@@ -10,7 +10,7 @@ import { closeDialog as close, Field, FIELD, Modal, numHelp, NumField, Rows, Tex
 import { SourceEditor } from "./SourceEditor";
 import { SimDialog } from "./SimDialog";
 import { DirectiveDialog } from "./DirectiveDialog";
-import { analysisEditable, analysisEditableAt, analysisLine, analysisLineIndex, analysisOptions, balanced, exprUnit, getParam, setParam, spiceNum, tokens, xUnitOf } from "./spice";
+import { analysisEditable, analysisEditableAt, analysisLine, analysisLineIndex, analysisOptions, balanced, exprUnit, getParam, paramValue, setParam, spiceNum, tokens, xUnitOf } from "./spice";
 import { cn } from "@/lib/utils";
 import thirdParty from "./third-party.json";
 import { checkForUpdate } from "./updater";
@@ -77,23 +77,33 @@ function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: 
               <TextField label="Value" value={attr("Value")} set={(v) => setAttr("Value", v)} autofocus unit={unit}
                 {...(valueHelp ?? {})} hint={unit ? "e.g. 4.7k, 100n, 1Meg; LTspice extras like Rser=0.1 may follow" : undefined} />
               {/* (D, Q, M: their common instance parameters as fields; Value2 holds them, as SPICE reads them) */}
-              {INSTANCE[prefix]?.map(([k, label, u, hint]) => {
-                // (a value being typed, `{2*` or `'a`: shown as typed, written once it is closed, so
-                // the open brace does not swallow the rest of Value2)
+              {/* (Value2 itself with an open brace or quote: its items cannot be told apart, edited there) */}
+              {INSTANCE[prefix] && !balanced(attr("Value2")) && <div className="text-2xs text-status-warning">⚠ Value2 has an unclosed brace or quote: edit it there.</div>}
+              {balanced(attr("Value2")) && INSTANCE[prefix]?.map(([k, label, u, hint]) => {
+                // (a value being typed, `{2*` or `'a`: shown as typed, written once it is one closed
+                // item, so the open brace does not swallow the rest of Value2; till then said)
                 const v = drafts[k] ?? getParam(attr("Value2"), k);
                 const set = (x: string) => {
-                  setDrafts({ ...drafts, [k]: balanced(x) ? undefined : x });
-                  if (balanced(x)) setAttr("Value2", setParam(attr("Value2"), k, x));
+                  const ok = !paramValue(x);
+                  setDrafts({ ...drafts, [k]: ok ? undefined : x });
+                  if (ok) setAttr("Value2", setParam(attr("Value2"), k, x));
                 };
+                const pending = drafts[k] != null ? `${paramValue(drafts[k]!)}: not in Value2` : undefined;
                 // (the netlist line is Value Value2 SpiceLine SpiceLine2, and SPICE takes the last of a
                 // key: one in SpiceLine (or the symbol's) or SpiceLine2 wins over this field, said)
-                const has = (n: string, line: string) => ((x) => (x ? [`${n} has ${k}=${x}`] : []))(getParam(line, k));
-                const before = has("Value", it.attrs.Value ?? def?.value ?? ""); // (the symbol's Value if the part has none, as the netlist does)
+                const has = (n: string, line: string) => {
+                  const x = getParam(line, k);
+                  return x ? [`${n} has ${k}=${x}`] : [];
+                };
+                // (the symbol's Value if the part's is empty, as the netlist does)
+                const before = has("Value", it.attrs.Value?.trim() ? it.attrs.Value : def?.value ?? "");
                 const after = [...has("SpiceLine", it.attrs.SpiceLine ?? def?.spice_line ?? ""), ...has("SpiceLine2", row("spiceline2"))];
-                const note = after.length ? `${after.join("; ")}, which comes later on the line and wins` : before.length && v ? `${before[0]}; this one wins` : before.length ? `${before[0]}, in effect` : hint;
-                return <NumField key={k} label={label} value={v} set={set} unit={u} placeholder={k === "m" || k === "area" ? "1" : "model default"} hint={note} />;
+                let note = hint;
+                if (after.length) note = `${after.join("; ")}, which comes later on the line and wins`;
+                else if (before.length) note = v ? `${before[0]}; this one wins` : `${before[0]}, in effect`;
+                return <NumField key={k} label={label} value={v} set={set} unit={u} placeholder={k === "m" || k === "area" ? "1" : "model default"} hint={pending ? `⚠ ${pending}` : note} />;
               })}
-              <TextField label="Value2" value={attr("Value2")} set={(v) => setAttr("Value2", v)} hint={INSTANCE[prefix] ? "the instance parameters as SPICE reads them (others too: off, temp=…)" : undefined} />
+              <TextField label="Value2" value={attr("Value2")} set={(v) => (setDrafts({}), setAttr("Value2", v))} hint={INSTANCE[prefix] ? "the instance parameters as SPICE reads them (others too: off, temp=…)" : undefined} />
               {/* the symbol's default shows as the value: emptying it visibly removes it (an empty attribute) */}
               <TextField label="SpiceLine" value={it.attrs.SpiceLine ?? def?.spice_line ?? ""} set={(v) => setAttr("SpiceLine", v)} hint={def?.spice_line ? `symbol default: ${def.spice_line}` : undefined} />
             </>
