@@ -307,7 +307,7 @@ pub fn internal(v: &str) -> bool {
 
 /// Whether `t` reads a voltage or current (`v(ctl)`, `abs(i(R1))`, `vdb(x)`): numparam cannot.
 fn probes(t: &str) -> bool {
-    const F: [&str; 12] = ["v", "i", "vm", "vp", "vr", "vi", "vdb", "im", "ip", "ir", "ii", "idb"];
+    const F: [&str; 14] = ["v", "i", "vm", "vp", "vr", "vi", "vdb", "vg", "im", "ip", "ir", "ii", "idb", "ig"];
     let b = t.as_bytes();
     let word = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
     (0..b.len()).any(|k| {
@@ -536,7 +536,7 @@ pub fn rewrite(text: &str, warnings: &mut Vec<String>) -> String {
             subs.pop();
         }
         // (not the title, whatever it says; B: said below)
-        if k == 0 || !lines[k].trim_start().starts_with(['E', 'e', 'G', 'g', 'B', 'b']) {
+        if k == 0 || !head.starts_with(['E', 'e', 'G', 'g', 'B', 'b']) {
             out.push_str(lines[k]);
             k += 1;
             continue;
@@ -588,7 +588,7 @@ fn device(l: &str) -> Option<Result<String, String>> {
     let t = l.trim_start();
     let low = t.to_ascii_lowercase();
     // `laplace =`, a word of its own (not a node `laplace_out`)
-    let at = low.match_indices("laplace").map(|(k, _)| k).find(|&k| (k == 0 || low.as_bytes()[k - 1].is_ascii_whitespace()) && low[k + 7..].trim_start().starts_with('='))?;
+    let at = low.match_indices("laplace").map(|(k, _)| k).find(|&k| (k == 0 || low[..k].ends_with(char::is_whitespace)) && low[k + 7..].trim_start().starts_with('='))?;
     if t.starts_with(['B', 'b']) {
         return Some(Err("a B source's Laplace= does not run here; an E source's does (E1 out 0 in 0 Laplace=…)".into()));
     }
@@ -681,6 +681,7 @@ mod tests {
         assert!(t.contains("G2 a b g2#lapy 0 1") && t.contains("{gm}") && t.contains("R1 a 0 1k") && !t.contains("pole") && !t.contains("window") && !t.contains("LTspice"), "{t}");
         assert!(t.contains("E3 laplace_out 0 in 0 2e0\nE4 o 0 i 0 3e0\n") && !t.contains("between"), "continuations: {t}");
         assert!(t.contains("E5 o 0 e5#lapy 0 1"), "a no-break space: {t}");
+        assert!(rewrite("* t\nE6 o 0 i 0\u{a0}Laplace=2\n", &mut w).contains("E6 o 0 i 0 2e0"), "before Laplace too");
         assert!(t.starts_with("G title Laplace=1/(1+s)\n"), "the title as it was: {t}");
         assert!(rewrite("* t\nE1 o 0 i 0 Laplace=1/(s*1n)\n", &mut w).contains("CE1#lapz1 e1#lapz1 0 1e-9"), "an integrator scaled at its crossover");
         let mut w = vec![];
