@@ -235,6 +235,10 @@ impl P<'_> {
             Some(c) if c.is_ascii_digit() || c == '.' => {
                 let rest = &self.s[self.i..];
                 let n = rest.char_indices().find(|&(k, c)| !(c.is_alphanumeric() || c == '.' || ((c == '+' || c == '-') && k > 0 && rest[..k].ends_with(['e', 'E']) && rest[..k].bytes().all(|b| b.is_ascii_digit() || b == b'.' || b == b'e' || b == b'E')))).map_or(rest.len(), |p| p.0);
+                if rest[..n].ends_with(['s', 'S']) {
+                    // (`2s`, `1ms`: SPICE reads a unit there and drops it; s meant, surely)
+                    return Err(format!("`{}`: write the s with a * (`{}*s`)", &rest[..n], &rest[..n - 1]));
+                }
                 let v = crate::schematic::spice_num(&rest[..n]).filter(|v| v.is_finite()).ok_or_else(|| format!("`{}` is not a number", &rest[..n]))?;
                 self.i += n;
                 Ok(R::c(C::N(v)))
@@ -295,10 +299,10 @@ fn constant(r: &R) -> Option<C> {
     (r.0.len() == 1 && r.1.len() == 1).then(|| r.0[0].div(&r.1[0]))
 }
 
-/// Whether ngspice's vector `v` is one of `realise`'s nodes (`e1#lapz1`, `x1.e1#lapy`): not
-/// listed with the results.
+/// Whether ngspice's vector `v` is one of `realise`'s nodes or elements (`e1#lapz1`,
+/// `x1.e1#lapy`, `.sens`'s `ge1#lapu_gain`): not listed with the results.
 pub fn internal(v: &str) -> bool {
-    v.ends_with("#lapy") || v.rsplit_once("#lapz").is_some_and(|(_, k)| !k.is_empty() && k.bytes().all(|b| b.is_ascii_digit()))
+    v.contains("#lap")
 }
 
 /// Whether `t` reads a voltage or current (`v(ctl)`, `abs(i(R1))`, `vdb(x)`): numparam cannot.
@@ -334,11 +338,11 @@ fn coefficients(expr: &str) -> Result<R, String> {
         num.remove(0);
         den.remove(0);
     }
-    if num.len() > den.len() {
-        return Err("more powers of s above than below (an improper transfer function): it cannot run".into());
-    }
     if den.iter().all(C::zero) {
         return Err("its denominator is 0".into());
+    }
+    if num.len() > den.len() {
+        return Err("more powers of s above than below (an improper transfer function): it cannot run".into());
     }
     if num.iter().chain(&den).any(|c| matches!(c, C::N(v) if !v.is_finite())) {
         return Err(NAN.into());
@@ -415,8 +419,9 @@ fn cancel(num: &[f64], den: &[f64]) -> Option<(Vec<f64>, Vec<f64>)> {
         }
     }
     let (n, d) = (scaled(&qn, 1.0 / w), scaled(&qd, 1.0 / w));
-    let lead = *d.last()?; // (its highest power below 1: the same function)
-    Some((n.iter().map(|v| v / lead).collect(), d.iter().map(|v| v / lead).collect()))
+    let lead = *d.last().filter(|&&v| v != 0.0)?; // (its highest power below 1: the same function)
+    let (n, d): (Vec<f64>, Vec<f64>) = (n.iter().map(|v| v / lead).collect(), d.iter().map(|v| v / lead).collect());
+    n.iter().chain(&d).all(|v| v.is_finite()).then_some((n, d))
 }
 
 /// a / b: quotient and remainder (ascending coefficients, b's highest nonzero).
@@ -476,13 +481,14 @@ fn realise(name: &str, n: &[&str], h: &R) -> String {
     let b: Vec<C> = (0..=ord).map(|k| num.get(k).map_or(C::N(0.0), |c| scaled(c, k))).collect();
     // (all linear G: node names like `in+` are no operators here, and .pz takes them)
     let low = name.to_ascii_lowercase();
-    // ('#': no net of a schematic has it, so results can leave these out by name)
+    // (`#lap` in every name, nodes and elements: no net of a schematic has a #, so results can
+    // leave these out by name, .sens entries too)
     let z = |k: usize| format!("{low}#lapz{k}");
     let y = format!("{low}#lapy");
     let mut lines = vec![];
     let mut g = |tag: String, to: &str, from: &str, c: C| {
         if !c.zero() {
-            lines.push(format!("G{name}_{tag} 0 {to} {from} {}", c.spice()));
+            lines.push(format!("G{name}#lap{tag} 0 {to} {from} {}", c.spice()));
         }
     };
     let u = format!("{} {}", n[2], n[3]);
@@ -499,15 +505,15 @@ fn realise(name: &str, n: &[&str], h: &R) -> String {
     }
     g("f".into(), &y, &u, feed);
     for k in 1..=ord {
-        lines.push(format!("C{name}_z{k} {} 0 {}", z(k), C::N(1.0).div(&w).spice()));
+        lines.push(format!("C{name}#lapz{k} {} 0 {}", z(k), C::N(1.0).div(&w).spice()));
         if k <= r {
-            lines.push(format!("G{name}_l{k} {} 0 {} 0 1e-9", z(k), z(k)));
+            lines.push(format!("G{name}#lapl{k} {} 0 {} 0 1e-9", z(k), z(k)));
         }
         if k < ord {
-            lines.push(format!("G{name}_z{k} 0 {} {} 0 1", z(k), z(k + 1)));
+            lines.push(format!("G{name}#lapz{k} 0 {} {} 0 1", z(k), z(k + 1)));
         }
     }
-    lines.push(format!("G{name}_y {y} 0 {y} 0 1"));
+    lines.push(format!("G{name}#lapy {y} 0 {y} 0 1"));
     lines.push(format!("{name} {out} {y} 0 1"));
     lines.join("\n")
 }
@@ -637,7 +643,7 @@ mod tests {
         assert!(coefficients("1/(1+s*tau/20)^20").unwrap_err().contains("20,000"));
         assert!(coefficients("1/((1+s)^64)^64").unwrap_err().contains("order"));
         assert!(!mentions_s("tau") && mentions_s("2*s+1") && !mentions_s("sigma"));
-        assert!(internal("e1#lapz1") && internal("x1.e1#lapy") && !internal("out") && !internal("clk_lapz1") && !internal("a#lapz1x"));
+        assert!(internal("e1#lapz1") && internal("x1.e1#lapy") && internal("ge1#lapu_gain") && !internal("out") && !internal("clk_lapz1") && !internal("e1#branch"));
         assert_eq!(c("(1/(s-1))/(1+10/(s-1))"), (v(&["1e0"]), v(&["9e0", "1e0"])), "G/(1+G): no hidden pole at +1");
         let near = |e: &str, n: &[f64], d: &[f64]| {
             let R(a, b) = coefficients(e).unwrap();
@@ -651,7 +657,8 @@ mod tests {
         near("(s+1)/(s+2)", &[1.0, 1.0], &[2.0, 1.0]);
         near("(s+1.1)/((s+1)*(s+1e16))", &[1.1, 1.0], &[1e16, 1e16 + 1.0, 1.0]);
         assert_eq!(c("1/(s-{a})*(s-{a})"), (v(&["1e0"]), v(&["1e0"])), "parameters: written alike");
-        assert!(coefficients("0/0").unwrap_err().contains("denominator is 0"));
+        assert!(coefficients("0/0").unwrap_err().contains("denominator is 0") && coefficients("s/0").unwrap_err().contains("denominator is 0"));
+        assert!(coefficients("1/(1+2s)").unwrap_err().contains("2*s") && coefficients("1/(1+1ms)").unwrap_err().contains("1m*s"));
         assert_eq!(c("sqrt({k})/(1+s)").0, ["{sqrt((k))}"]);
         assert!(coefficients("v(ctl)/(1+s)").unwrap_err().contains("no voltages"));
         assert!(coefficients("abs(V (ctl))/(1+s)").unwrap_err().contains("no voltages") && coefficients("vdb(x)/(1+s)").is_err());
@@ -670,12 +677,12 @@ mod tests {
         let mut w = vec![];
         let t = rewrite("G title Laplace=1/(1+s)\nE1 out 0 in 0 Laplace=1/(1+s*1µ) ; a pole\nG2 a b c d laplace = {gm}/(1+s*{tau})\twindow=1 // as LTspice\nR1 a 0 1k\nE3 laplace_out 0 in 0\n* between\n\n+ Laplace=2\nE4 o 0 i 0 Laplace=3\n+ window=1\nE5 o 0 i 0 Laplace=1/(1+\u{a0}s)\n", &mut w);
         assert!(w.is_empty(), "{w:?}");
-        assert!(t.contains("GE1_u 0 e1#lapz1 in 0 1e0\nGE1_a0 0 e1#lapz1 e1#lapz1 0 -1e0\nGE1_b0 0 e1#lapy e1#lapz1 0 1e0\nCE1_z1 e1#lapz1 0 1e-6\nGE1_y e1#lapy 0 e1#lapy 0 1\nE1 out 0 e1#lapy 0 1\n"), "{t}");
+        assert!(t.contains("GE1#lapu 0 e1#lapz1 in 0 1e0\nGE1#lapa0 0 e1#lapz1 e1#lapz1 0 -1e0\nGE1#lapb0 0 e1#lapy e1#lapz1 0 1e0\nCE1#lapz1 e1#lapz1 0 1e-6\nGE1#lapy e1#lapy 0 e1#lapy 0 1\nE1 out 0 e1#lapy 0 1\n"), "{t}");
         assert!(t.contains("G2 a b g2#lapy 0 1") && t.contains("{gm}") && t.contains("R1 a 0 1k") && !t.contains("pole") && !t.contains("window") && !t.contains("LTspice"), "{t}");
         assert!(t.contains("E3 laplace_out 0 in 0 2e0\nE4 o 0 i 0 3e0\n") && !t.contains("between"), "continuations: {t}");
         assert!(t.contains("E5 o 0 e5#lapy 0 1"), "a no-break space: {t}");
         assert!(t.starts_with("G title Laplace=1/(1+s)\n"), "the title as it was: {t}");
-        assert!(rewrite("* t\nE1 o 0 i 0 Laplace=1/(s*1n)\n", &mut w).contains("CE1_z1 e1#lapz1 0 1e-9"), "an integrator scaled at its crossover");
+        assert!(rewrite("* t\nE1 o 0 i 0 Laplace=1/(s*1n)\n", &mut w).contains("CE1#lapz1 e1#lapz1 0 1e-9"), "an integrator scaled at its crossover");
         let mut w = vec![];
         rewrite("* t\n.subckt a 1 2\nE1 1 0 2 0 Laplace=exp(-s)\nE2 1 0 2 0 Laplace=exp(-s)\n.ends\n.subckt b 1 2\nE1 1 0 2 0 Laplace=exp(-s)\n.ends\nE9 o 0 i 0 Laplace=1/(1+s)\n", &mut w);
         assert!(w.len() == 1 && w[0].contains("subcircuits a, b"), "{w:?}");

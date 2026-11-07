@@ -1518,7 +1518,6 @@ impl Expander<'_> {
             self.out.extend(line.chars().filter(|c| *c != 'Ω').map(|c| match c {
                 'µ' | 'μ' => 'u',
                 c if c.is_ascii() => c,
-                c if c.is_whitespace() => ' ', // (a no-break space pasted from a page: a blank)
                 _ => '_',
             }));
             self.out.push('\n');
