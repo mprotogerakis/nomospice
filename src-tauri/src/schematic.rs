@@ -1141,7 +1141,12 @@ fn pin_labels(prefix: char, inst: &str, pins: &[Pin]) -> Vec<String> {
         let distinct = names.iter().map(|n| n.to_lowercase()).collect::<HashSet<_>>().len() == names.len();
         return (0..pins.len()).map(|k| format!("Ix({inst}:{})", if readable && distinct { names[k].clone() } else { (k + 1).to_string() })).collect();
     }
-    (0..pins.len()).map(|k| roles.chars().nth(k).map_or_else(|| format!("I({inst})"), |r| format!("I{r}({inst})"))).collect()
+    // (a pin beyond the usual roles, a 5th of a Q: by number, never a second `I(Q1)`)
+    (0..pins.len()).map(|k| match roles.chars().nth(k) {
+        Some(r) => format!("I{r}({inst})"),
+        None if k == 0 => format!("I({inst})"),
+        None => format!("Ix({inst}:{})", k + 1),
+    }).collect()
 }
 
 /// Make a netlist safe and self-contained for ngspice. This is the single security filter:
@@ -1606,7 +1611,9 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool) -> Netlist {
             'V' | 'E' | 'H' => format!("i({})", inst.to_lowercase()),
             _ => String::new(),
         };
-        let labels = pin_labels(prefix, &inst, &def.pins[..npins.min(def.pins.len())]);
+        // named as drawn (InstName U1, not the netlist's XU1: `Ix(U1:OUT)`)
+        let shown = attrs.get("InstName").map(|n| net_name(n)).filter(|n| !n.is_empty()).unwrap_or_else(|| inst.clone());
+        let labels = pin_labels(prefix, &shown, &def.pins[..npins.min(def.pins.len())]);
         // ponytail: a sensor on every device (+1 node, +1 branch each); sense only probed devices
         // if huge imported schematics get slow
         // (two-pin parts: pin 1; transistors and subcircuits: every pin of the symbol, not an M's
@@ -1614,7 +1621,7 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool) -> Netlist {
         let sensed = if !SENSED.contains(prefix) || npins == 0 { 0..0 } else if npins <= 2 || !"QMJX".contains(prefix) { 0..1 } else { 0..npins };
         nl.pin_currents[i] = vec![String::new(); npins];
         if !nl.probes[i].is_empty() && npins > 0 {
-            nl.pin_currents[i][0] = format!("I({inst})"); // a source's own branch current (ngspice: i(v1))
+            nl.pin_currents[i][0] = format!("I({inst})"); // a source's own branch current (ngspice: i(v1), by the netlist's name)
         }
         for k in sensed {
             // reserved in both builds (identical names), never clashing with the user's own
@@ -1627,7 +1634,7 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool) -> Netlist {
             while !used.insert(node.to_lowercase()) {
                 node.push('_');
             }
-            let label = labels.get(k).cloned().unwrap_or_else(|| format!("I({inst})"));
+            let label = labels[k].clone();
             if k == 0 && !(prefix == 'X' && npins > 2) {
                 nl.probes[i] = format!("i({})", src.to_lowercase()); // (a subcircuit's pins are its currents)
             }
@@ -2106,6 +2113,10 @@ mod tests {
         let nl = netlist_for_sim(&parse_asc(&src), &mut Library::builtin());
         let q = nl.insts.iter().position(|n| n == "Q1").unwrap();
         assert_eq!(nl.pin_currents[q], ["Ic(Q1)", "Ib(Q1)", "Ie(Q1)"], "{}", nl.text);
+        // a part drawn as D1 that calls a subcircuit (netlist XD1): named as drawn
+        let z = netlist_for_sim(&parse_asc(EXAMPLES.iter().find(|e| e.0 == "zener_prefix").unwrap().1), &mut Library::builtin());
+        let d = z.insts.iter().position(|n| n == "XD1").unwrap();
+        assert_eq!(z.pin_currents[d], ["I(D1)", ""], "{}", z.text);
         let run = crate::ngspice::run(&prepare(&nl.text, None, &mut vec![]).with_sensors(nl.sensors.clone())).unwrap();
         let get = |n: &str| run.op.iter().find(|o| o.0 == n).map(|o| o.1).unwrap_or_else(|| panic!("{n}: {:?}", run.op));
         let (ic, ib, ie) = (get("Ic(Q1)"), get("Ib(Q1)"), get("Ie(Q1)"));

@@ -480,14 +480,17 @@ fn plot_vectors(api: &Api, plot: &str, sensors: &[crate::schematic::Sensor], par
 /// Evaluate an ngspice expression (e.g. `v(out)`, `i(vsense_r1)`, `v(a)-v(b)`) in the results of
 /// run `run` (an error once another run, such as a root locus step, replaced them).
 pub fn trace(expr: &str, scale: &str, run: u64) -> Result<Trace, String> {
-    // part currents by name (`I(R1)-I(R2)`, `Ib(Q1)`): the latest run's sensors
-    let named = crate::schematic::sensor_currents(expr, &SENSORS.lock().unwrap_or_else(|e| e.into_inner()));
-    let expr = named.as_str();
+    // part currents by name (`I(R1)-I(R2)`, `Ib(Q1)`): the latest run's sensors; messages show the
+    // expression as written, ngspice's with the names (not the hidden sensor sources)
+    let sensors = SENSORS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let named = crate::schematic::sensor_currents(expr, &sensors);
+    let (shown, expr) = (expr, named.as_str());
+    let unname = |log: String| sensors.iter().fold(log, |l, s| l.replace(&format!("i({})", s.source), &s.label).replace(&format!("{}#branch", s.source), &s.label));
     // ngspice's command line is csh-like (`;` chains, backquotes run sh, `!` history, `$` vars):
     // only characters an expression needs may pass.
     let ok = |c: char| c.is_ascii_alphanumeric() || " _()[]@#+-*/^.,:\"'<>=&|%".contains(c);
     if !expr.chars().all(ok) || expr.trim().is_empty() {
-        return Err(format!("invalid expression: {expr}"));
+        return Err(format!("invalid expression: {shown}"));
     }
     let g = engine().map_err(|e| e.join("\n"))?;
     let api = g.as_ref().unwrap();
@@ -499,7 +502,7 @@ pub fn trace(expr: &str, scale: &str, run: u64) -> Result<Trace, String> {
     api.command(&format!("let nmsp_trace = {expr}"));
     let mut t = read(api, "nmsp_trace").ok_or_else(|| {
         let log = take_log().join("\n");
-        if log.is_empty() { format!("cannot evaluate {expr}") } else { log }
+        if log.is_empty() { format!("cannot evaluate {shown}") } else { unname(log) }
     })?;
     if !scale.is_empty() {
         t.x = read(api, scale).map(|s| s.re).unwrap_or_default();
