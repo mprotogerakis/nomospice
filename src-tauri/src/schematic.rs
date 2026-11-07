@@ -790,8 +790,8 @@ impl Prepared {
             if !l.skip && OTHER.contains(&l.head.as_str()) { format!("* {}", l.line) } else { l.line.to_string() }
         }).collect::<Vec<_>>().join("\n") + "\n";
         // (random values, mc(): one sample for all the sweep's steps, not a draw per step)
-        let random = ["unif", "aunif", "agauss", "gauss", "limit"].iter().any(|f| contains_ci(&text, &format!("{f}(")));
-        let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.subsec_nanos() % 1_000_000 + 1);
+        let random = crate::laplace::calls(&text, &NG_RANDOM);
+        let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_micros() % 2_000_000_000 + 1);
         let text = if random { after_title(&text, &format!(".options seed={seed}")) } else { text };
         Prepared(text, self.1.clone(), vec![]) // (one .pz per sweep step: no .step)
     }
@@ -1420,25 +1420,20 @@ pub fn prepare(text: &str, dir: Option<&std::path::Path>, warnings: &mut Vec<Str
 /// `agauss(0,x,1)` (ngspice's own three-argument gauss stays). Only where ngspice's parameter
 /// expressions are: in `{…}` and on `.param` lines (not in comments, a B source's expression, a
 /// file name), and not where the deck has a `.func` of that name.
-/// A `.param` drawn this way is drawn once per run, shared by every part using it (write the call
-/// in each part's value for draws of their own).
+/// A `.param` holding one draws anew wherever it is used (ngspice makes it a `.func`), as LTspice
+/// does: no value shared by several parts.
 fn lt_random<'a>(text: &'a str, warnings: &mut Vec<String>) -> std::borrow::Cow<'a, str> {
-    // (a name with `(` after it, blanks between too)
-    let calls = |t: &str| {
-        let b = t.as_bytes();
-        RANDOM.iter().any(|f| (0..b.len().saturating_sub(f.len() - 1)).any(|k| b[k..k + f.len()].eq_ignore_ascii_case(f.as_bytes()) && t.get(k + f.len()..).is_some_and(|r| r.trim_start().starts_with('('))))
-    };
+    let calls = |t: &str| crate::laplace::calls(t, &RANDOM); // (a name with `(` after it, blanks between too)
     if !calls(text) {
         return std::borrow::Cow::Borrowed(text);
     }
     // (`.func gauss(x) …`: the deck's own)
     let own: Vec<String> = text.lines().filter_map(|l| {
         let t = l.trim_start().as_bytes();
-        // (bytes: a comment's ö at byte 5 is no place to cut a str)
-        (t.len() > 5 && t[..5].eq_ignore_ascii_case(b".func") && t[5].is_ascii_whitespace()).then(|| {
-            let rest = l.trim_start()[5..].trim_start();
-            rest.split(|c: char| c == '(' || c.is_whitespace()).next().unwrap_or("").to_ascii_lowercase()
-        })
+        // (bytes: a comment's ö at byte 5 is no place to cut a str; LTspice also spells it .function)
+        let head = [&b".function"[..], b".func"].into_iter().find(|h| t.len() > h.len() && t[..h.len()].eq_ignore_ascii_case(h) && t[h.len()].is_ascii_whitespace())?;
+        let rest = l.trim_start()[head.len()..].trim_start();
+        Some(rest.split(|c: char| c == '(' || c.is_whitespace()).next().unwrap_or("").to_ascii_lowercase())
     }).collect();
     let (mut out, mut param) = (String::with_capacity(text.len() + 64), false);
     for line in text.split_inclusive('\n') {
@@ -1451,7 +1446,7 @@ fn lt_random<'a>(text: &'a str, warnings: &mut Vec<String>) -> std::borrow::Cow<
         // ponytail: line by line, so a brace or a call's parentheses open across a `+` line are
         // not seen; join the lines if that occurs)
         if !t.starts_with('+') {
-            param = [".param", ".func"].iter().any(|h| t.get(..h.len()).is_some_and(|x| x.eq_ignore_ascii_case(h)) && t[h.len()..].starts_with(char::is_whitespace));
+            param = [".param", ".func", ".function"].iter().any(|h| t.get(..h.len()).is_some_and(|x| x.eq_ignore_ascii_case(h)) && t[h.len()..].starts_with(char::is_whitespace));
         }
         let code = uncommented(line);
         if calls(code) {
@@ -1465,6 +1460,8 @@ fn lt_random<'a>(text: &'a str, warnings: &mut Vec<String>) -> std::borrow::Cow<
 }
 
 const RANDOM: [&str; 3] = ["mc", "flat", "gauss"];
+/// ngspice's random functions (what `RANDOM` becomes, and its own).
+pub const NG_RANDOM: [&str; 5] = ["agauss", "gauss", "aunif", "unif", "limit"];
 
 /// `s` with LTspice's random calls translated (see `lt_random`): everywhere if `all`, else in braces.
 fn random_calls(s: &str, all: bool, own: &[String], warnings: &mut Vec<String>) -> String {
@@ -1529,6 +1526,7 @@ pub fn prepare_warnings(text: &str, dir: Option<&std::path::Path>, warnings: &mu
     x.expand(text, dir, None, 0);
     x.warn_behavioural();
     let expanded = crate::laplace::rewrite(&std::mem::take(&mut x.out), x.warnings);
+    let expanded = lt_random(&expanded, x.warnings).into_owned(); // (mc(1k): said while editing too)
     ltspice_meas(&expanded, &[], warnings); // a .meas left out is said before a run too (the schematic's own: included files are read only by a run)
 }
 
@@ -2635,7 +2633,7 @@ mod tests {
         let mut w = vec![];
         assert_eq!(lt_random("R1 a b {mc(1k)} 'flat(1)'\n.func f(x) gauss(x)\n", &mut w), "R1 a b {mc(1k)} 'aunif(0,1)'\n.func f(x) agauss(0,x,1)\n");
         assert!(w.len() == 1 && w[0].contains("two arguments"), "{w:?}");
-        assert_eq!(lt_random_t(".param a=1\n+ b=flat(1) f=\"gauss(1).csv\"\nR1 a b } {mc (1k,0.1)}\n.function flat(x) x\n"), ".param a=1\n+ b=aunif(0,1) f=\"gauss(1).csv\"\nR1 a b } {unif(1k,0.1)}\n.function flat(x) x\n");
+        assert_eq!(lt_random_t(".param a=1\n+ b=flat(1) f=\"gauss(1).csv\"\nR1 a b } {mc (1k,0.1)}\n.function flat(x) x\nR2 a b {flat(2)}\n"), ".param a=1\n+ b=flat(1) f=\"gauss(1).csv\"\nR1 a b } {unif(1k,0.1)}\n.function flat(x) x\nR2 a b {flat(2)}\n", "the deck's own .function flat");
         assert_eq!(lt_random_t("* Größe\nR1 a b {mc\t(1k,0.1)}\nV1 a 0 PWL file=\"r{a.csv\" flat(1)\n"), "* Größe\nR1 a b {unif(1k,0.1)}\nV1 a 0 PWL file=\"r{a.csv\" flat(1)\n", "no panic at a ö; a tab; a quoted {{");
         // each step of `.step param run …` another sample, within the tolerance
         let _s = SIM.lock();

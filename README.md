@@ -22,8 +22,8 @@ files — with a modern UI, ngspice as the engine, a Rust core and a React front
 - **Parameter sweeps**: `.step param C list 47n 100n 220n` (also lin/oct/dec, a source's DC value,
   `temp`, up to three nested) runs the analysis once per value; every trace becomes a family of
   curves, one per step, and `.meas` is measured per step. **Monte Carlo**: `{mc(1k,0.05)}`,
-  `flat(x)`, `gauss(x)` draw anew in each run of `.step param run 1 100 1` (in a `.param`: one
-  draw per run, shared by the parts using it).
+  `flat(x)`, `gauss(x)` draw anew in each run of `.step param run 1 100 1` (a `.param` of one
+  draws anew wherever it is used).
 - **Laplace sources**: an E or G source with `Laplace=1/(1+s*tau)` (any ratio of polynomials in s,
   `.param`s inside) works in `.op`, `.ac` and `.tran`.
 - **Measurements**: `.meas` results are listed with the plot.
