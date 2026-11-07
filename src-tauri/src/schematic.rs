@@ -810,6 +810,10 @@ fn ltspice_meas(text: &str, sensors: &[Sensor], warnings: &mut Vec<String>) -> S
     let lines = deck_lines(text);
     let an = lines.iter().find_map(|l| l.head.strip_prefix('.').filter(|h| !l.skip && TYPES_MEAS.contains(h))).unwrap_or("");
     let meas = |l: &DeckLine| l.head == ".meas" || l.head == ".measure";
+    // ngspice allows 99 par() calls per deck and exits past that: rewrites stop before
+    let mut budget = 99usize.saturating_sub(text.to_ascii_lowercase().matches("par(").count());
+    let pars = |s: &str| s.to_ascii_lowercase().matches("par(").count();
+    let mut warned = false;
     let mut out: Vec<String> = vec![];
     let mut i = 0;
     while i < lines.len() {
@@ -828,7 +832,15 @@ fn ltspice_meas(text: &str, sensors: &[Sensor], warnings: &mut Vec<String>) -> S
         let joined = stmt.iter().filter(|l| !l.skip).map(|l| uncommented(l.line).trim().trim_start_matches('+').trim().to_string()).collect::<Vec<_>>().join(" ");
         match meas_statement(&joined, sensors, an) {
             Ok(new) if spice_tokens(&new) == spice_tokens(&joined) => out.extend(stmt.iter().map(|l| l.line.to_string())), // as written
+            Ok(new) if pars(&new).saturating_sub(pars(&joined)) > budget => {
+                if !warned {
+                    warnings.push("more than 99 .meas expressions for ngspice's par(): the rest are passed as written".into());
+                    warned = true;
+                }
+                out.extend(stmt.iter().map(|l| l.line.to_string()));
+            }
             Ok(new) => {
+                budget -= pars(&new).saturating_sub(pars(&joined));
                 out.push(new);
                 out.extend(stmt.iter().filter(|l| l.skip).map(|l| l.line.to_string())); // comments stay
             }
@@ -1848,6 +1860,11 @@ mod tests {
         let mut w = vec![];
         let skipped = ltspice_meas(".ac dec 10 1 1k\n.meas ac f1 TRIG vm(out) VAL=0.5*vm(in) TARG vm(out) VAL=1\n", &[], &mut w);
         assert!(skipped.contains("* .meas ac f1") && w.len() == 1, "{skipped} {w:?}");
+        // ngspice exits past 99 par() calls: the rewrite stops there (and says so once)
+        let many: String = (0..120).map(|k| format!(".meas tran m{k} AVG V(a)*{k}\n")).collect();
+        let mut w = vec![];
+        let capped = ltspice_meas(&format!(".tran 1m\n{many}"), &[], &mut w);
+        assert!(capped.matches("par(").count() == 99 && w.len() == 1, "{} {w:?}", capped.matches("par(").count());
         let cont = ltspice_meas(".tran 1m\n.meas tran p AVG -I(V1)*V(in) ; power\n+ FROM=1m TO=2m\n.meas tran q AVG V(a)*2 $ note\n", &[], &mut vec![]);
         assert!(cont.contains(".meas tran p AVG par('-I(V1)*V(in)') FROM=1m TO=2m") && cont.contains(".meas tran q AVG par('V(a)*2')\n"), "comments cut per line: {cont}");
         // the manual's delay and power measurements, end to end

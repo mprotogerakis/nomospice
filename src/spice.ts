@@ -501,11 +501,14 @@ export function formatMeas(m: Meas): string {
 // ---------------------------------------------------------------- sampled results
 
 /** Trapezoid integral of y over [lo, hi] (samples inside, ends interpolated), its average and RMS. */
-export function integrate(xs: number[], ys: (number | null)[], lo: number, hi: number) {
+export function integrate(xs: number[], ys: (number | null)[], lo: number, hi: number): { area: number; avg: number; rms: number } {
+  const n = xs.length;
+  if (n > 1 && xs[n - 1] < xs[0]) return integrate([...xs].reverse(), [...ys].reverse(), lo, hi); // a sweep running downwards
+  // the samples strictly inside (lo, hi): found by bisection, not a scan (stats follow every zoom)
+  const first = (x: number, strict: boolean) => { let a = 0, b = n; while (a < b) { const m = (a + b) >> 1; if (strict ? xs[m] <= x : xs[m] < x) a = m + 1; else b = m; } return a; };
   const pts: [number, number][] = [[lo, at(xs, ys, lo)]];
-  xs.forEach((x, i) => x > lo && x < hi && pts.push([x, ys[i] ?? NaN])); // a gap's segments are left out
+  for (let i = first(lo, true), end = first(hi, false); i < end; i++) pts.push([xs[i], ys[i] ?? NaN]); // a gap's segments are left out
   pts.push([hi, at(xs, ys, hi)]);
-  pts.sort((p, q) => p[0] - q[0]); // a sweep may run downwards
   // average and RMS over the part with data (a gap, or a range beyond the run, does not count as 0)
   let area = 0, sq = 0, span = 0;
   for (let i = 1; i < pts.length; i++) {

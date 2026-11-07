@@ -5,7 +5,7 @@ import { useShallow } from "zustand/react/shallow";
 import { Maximize, Minus, Plus } from "lucide-react";
 import type { Item, Shape, SymbolDef } from "./types";
 import {
-  box, connectivity, currentLabel, defOf, dragPlan, mirror, rotate, dropZeroWires, dropZeroWiresKeepSel, GRID, hit, isShape, labelRect, leftLabels, matrix, snap, symBox,
+  box, connectivity, currentLabel, defOf, dragPlan, mirror, prefixOf, rotate, dropZeroWires, dropZeroWiresKeepSel, GRID, hit, isShape, labelRect, leftLabels, matrix, snap, symBox,
   textLines, union, xform, type Box, type Lib, type Pt,
 } from "./geom";
 import { canProbe, commit, currentNets, nextInst, probe, probeMode, simulate, useS, useStatus } from "./store";
@@ -318,7 +318,7 @@ export const Schematic = memo(function Schematic() {
     if (it.t === "wire" || it.t === "raw") return it;
     if (it.t === "sym" && !it.attrs.InstName) {
       const def = defOf(lib, it);
-      return { ...it, x, y, attrs: { InstName: nextInst(items, def?.prefix[0] ?? "X"), ...it.attrs } };
+      return { ...it, x, y, attrs: { InstName: nextInst(items, prefixOf(it, def) || "X"), ...it.attrs } };
     }
     return { ...it, x, y };
   };
@@ -460,7 +460,7 @@ export const Schematic = memo(function Schematic() {
     if (count > 1) return [...arrange, "-", del];
     switch (it.t) {
       case "sym": {
-        const prefix = (it.attrs.Prefix?.trim() || defOf(lib, it)?.prefix || "")[0]?.toUpperCase() ?? ""; // the part's own Prefix wins, as in the netlist
+        const prefix = prefixOf(it, defOf(lib, it)); // the part's own Prefix wins, as in the netlist
         const kind = ({ D: "D", Q: "NPN|PNP", M: "NMOS|PMOS|VDMOS", J: "NJF|PJF", X: "SUBCKT" } as Record<string, string>)[prefix];
         return [
           { label: "Edit…", hint: probing ? undefined : "dbl-click", run: edit },

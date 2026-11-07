@@ -284,7 +284,7 @@ function swapTo(s: State, kind: Analysis | null): Partial<State> {
   const sim = next?.sim ?? null, view = viewOf(sim);
   return {
     tabs, shown: kind, sim, traces: next?.traces ?? [], plot: next?.plot ?? NO_PLOT,
-    stale: !!sim && (next!.stale || next!.at !== s.items),
+    stale: !sim || next!.stale || next!.at !== s.items, // no results yet: a run is due (live mode runs it)
     panel: view === "table" ? "op" : s.panel === "op" ? null : s.panel,
   };
 }

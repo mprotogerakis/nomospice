@@ -370,8 +370,8 @@ export function App() {
         <ToolbarButton label="About & licenses" icon={<Info />} onClick={() => useS.setState({ dialog: { k: "about" } })} />
       </Toolbar>
 
+      <AnalysisTabs />{/* outside mainRef: the splitter measures from the waveform pane's top */}
       <div ref={mainRef} className="flex min-h-0 flex-1 flex-col">
-        <AnalysisTabs />
         {showWave && (
           <>
             <div style={{ height: `${split * 100}%` }} className="min-h-0 shrink-0">{pz ? <PoleZero run={s.sim!.run!} /> : <Waveform key={`${mode}:${plotKind(s.sim)}`} />}</div>

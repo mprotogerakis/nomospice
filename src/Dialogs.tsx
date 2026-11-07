@@ -4,7 +4,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { open } from "@tauri-apps/plugin-dialog";
 import type { Item, LibEntry, LibSource } from "./types";
 import { addTrace, analysisItem, commit, currentTab, loadSymbols, placePart, placeSymbol, refreshLibrarySymbols, useS } from "./store";
-import { defOf, vexpr } from "./geom";
+import { defOf, prefixOf, vexpr } from "./geom";
 import { Button } from "./ui/button";
 import { closeDialog as close, Field, FIELD, Modal, numHelp, Rows, TextField } from "./ui/dialog";
 import { SourceEditor } from "./SourceEditor";
@@ -42,9 +42,10 @@ function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: 
     else onDone(it);
   };
   // independent sources (V, I; not the controlled E/G/F/H) get the waveform form
-  const source = it.t === "sym" && /^[VI]$/i.test(def?.prefix ?? "");
+  const prefix = it.t === "sym" ? prefixOf(it, def) : ""; // the part's own Prefix wins, as in the netlist
+  const source = prefix === "V" || prefix === "I";
   // R, C, L: show how SPICE reads a single value (1M is a milliohm, 10F ten femtofarad)
-  const unit = ({ R: "Ω", C: "F", L: "H" } as Record<string, string>)[def?.prefix?.[0]?.toUpperCase() ?? ""];
+  const unit = ({ R: "Ω", C: "F", L: "H" } as Record<string, string>)[prefix];
   // a plain value only: not `10µ Rser=0.1`, not LTspice's behavioural `R=V(a)*1k`
   const valueHelp = unit && !/[\s=(]/.test(attr("Value").trim()) ? numHelp(attr("Value"), unit, (v) => setAttr("Value", v)) : null;
   return (
@@ -53,7 +54,7 @@ function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: 
         <>
           <div className="text-2xs text-text-tertiary">{def?.desc ?? it.sym} · {it.sym}</div>
           <TextField label="Instance name" value={attr("InstName")} set={(v) => setAttr("InstName", v)} />
-          {source ? <SourceEditor attrs={it.attrs} setAttrs={(attrs) => setIt({ ...it, attrs })} current={def?.prefix?.[0]?.toUpperCase() === "I"} spiceLine={def?.spice_line} /> : (
+          {source ? <SourceEditor attrs={it.attrs} setAttrs={(attrs) => setIt({ ...it, attrs })} current={prefix === "I"} spiceLine={def?.spice_line} /> : (
             <>
               <TextField label="Value" value={attr("Value")} set={(v) => setAttr("Value", v)} autofocus unit={unit}
                 {...(valueHelp ?? {})} hint={unit ? "e.g. 4.7k, 100n, 1Meg; LTspice extras like Rser=0.1 may follow" : undefined} />

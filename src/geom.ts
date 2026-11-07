@@ -256,6 +256,10 @@ export function rotateInPlace(it: Sym, lib: Lib, f: (r: string) => string): Sym 
   return { ...next, x: it.x + snap((a + c - e - h) / 2), y: it.y + snap((b + d - g - k) / 2) };
 }
 
+/** A part's SPICE prefix letter: its own Prefix attribute (LTspice: X calls a subcircuit) over the
+ *  symbol's, as the netlister has it. */
+export const prefixOf = (it: Sym, def?: SymbolDef) => ((it.attrs.Prefix?.trim() || def?.prefix || "")[0] ?? "").toUpperCase();
+
 /** ngspice voltage expression. Always quoted: ngspice misparses 3V3/5V and reads gt/and/not as operators. */
 export const vexpr = (net: string) => `v("${net}")`;
 
