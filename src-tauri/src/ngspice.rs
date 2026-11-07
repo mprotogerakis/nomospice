@@ -463,7 +463,7 @@ fn plot_vectors(api: &Api, plot: &str, sensors: &[crate::schematic::Sensor], par
     // inductor's native branch (it misses parallel parasitics) are not listed
     const SENS: [&str; 7] = ["", "_freq", "_phase", "_pwr", "_z0", "_acmag", "_acphase"];
     vectors.retain(|v| !sensors.iter().any(|s| {
-        &s.node == v || SENS.iter().any(|x| *v == format!("{}{x}", s.source)) || *v == format!("{}#branch", s.inst)
+        &s.node == v || SENS.iter().any(|x| *v == format!("{}{x}", s.source)) || *v == format!("{}#branch", s.inst) || (!s.hold.is_empty() && *v == s.hold)
     }));
     // the helper sources ngspice makes for `.meas … par('…')`: pa_00, bpa_00#branch … one per par()
     let helpers: std::collections::HashSet<String> = (0..pars).flat_map(|k| [format!("pa_{k:02}"), format!("bpa_{k:02}#branch")]).collect();
@@ -498,6 +498,11 @@ pub fn trace(expr: &str, scale: &str, run: u64) -> Result<Trace, String> {
     }
     if let Some(why) = crate::schematic::whole_ic_current(shown, &SENSORS.lock().unwrap_or_else(|e| e.into_inner())) {
         return Err(why); // (`I(U1)` of a subcircuit: its pins have the currents)
+    }
+    // a pin current this circuit has not (a typo, the netlist's XU1): left as it was written
+    let low = expr.to_lowercase();
+    if low.match_indices("ix(").any(|(k, _)| !low[..k].ends_with(|c: char| c.is_ascii_alphanumeric() || c == '_')) {
+        return Err(format!("{shown}: no such pin current here; the part's right-click menu lists its pins' currents while probing, e.g. Ix(U1:OUT)"));
     }
     api.command("unlet nmsp_trace"); // a failed `let` would otherwise leave the previous trace behind
     take_log(); // after unlet: it may print leftovers of the finished run ("Background thread stopped")

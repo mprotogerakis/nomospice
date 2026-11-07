@@ -472,6 +472,9 @@ export function canProbe(target: Item | undefined, pin?: number) {
 /** The name of part `i`'s current, which is also its trace expression (the backend reads I(R1),
  *  Ib(Q1) …): into `pin` where that has a sensor, else the part's own (pin 1; a source's I(V1)).
  *  "": none (a subcircuit's current is per pin). */
+/** A two-pin part's power by the name of its current: I(D1) -> P(D1). */
+export const powerName = (current: string) => current.replace(/^I/, "P");
+
 export function partCurrent(nl: Netlist, i: number, pin?: number) {
   const named = nl.pin_currents?.[i] ?? [];
   return (pin != null && named[pin]) || (nl.probes[i] ? named[0] ?? "" : "");
@@ -491,7 +494,7 @@ export async function probe(target: Item, power = false, pin?: number) {
     // LTspice's power probe: the voltage across a two-pin part times the current into pin 1 —
     // positive where it takes power (a resistor), negative where it gives it (a source)
     const pins = sim.netlist.nets[i], cur = partCurrent(sim.netlist, i);
-    if (cur && pins?.length === 2) await addTraceNow(cur.replace(/^I/, "P"), `(${vexpr(pins[0])}-${vexpr(pins[1])})*${cur}`, "W", true); // P(D1), named as drawn
+    if (cur && pins?.length === 2) await addTraceNow(powerName(cur), `(${vexpr(pins[0])}-${vexpr(pins[1])})*${cur}`, "W", true);
   } else if (target.t === "sym") {
     const cur = partCurrent(sim.netlist, i, pin); // (also the expression: the backend reads the name)
     if (cur) await addTraceNow(cur, cur, "A");

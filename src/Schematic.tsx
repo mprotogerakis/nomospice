@@ -8,7 +8,7 @@ import {
   box, connectivity, defOf, dragPlan, mirror, pins, prefixOf, rotate, dropZeroWires, dropZeroWiresKeepSel, GRID, hit, isShape, labelRect, leftLabels, matrix, snap, symBox,
   textLines, union, xform, type Box, type Lib, type Pt,
 } from "./geom";
-import { canProbe, commit, currentNets, nextInst, partCurrent, powerMode, probe, probeMode, simulate, useS, useStatus } from "./store";
+import { canProbe, commit, currentNets, nextInst, partCurrent, powerMode, powerName, probe, probeMode, simulate, useS, useStatus } from "./store";
 import { deleteSelection, duplicate, newItem, transform } from "./actions";
 import { openMenu, type MenuItem } from "./Menu";
 import { useSize } from "./lib/useSize";
@@ -468,7 +468,7 @@ export const Schematic = memo(function Schematic() {
         // (a big IC: its first pins; any pin by clicking near it)
         ...(nets?.pin_currents?.[i] ?? []).flatMap((c, k) => (c && c !== own ? [{ label: `Plot ${c}`, run: () => probe(it, false, k) }] : [])).slice(0, 8)];
     // two-pin parts: their power too (LTspice: alt-click)
-    if (own && powerMode(sim) && it?.t === "sym" && nets?.nets[i]?.length === 2) plot.push({ label: `Plot power ${own.replace(/^I/, "P")}`, run: () => probe(it, true) });
+    if (own && powerMode(sim) && it?.t === "sym" && nets?.nets[i]?.length === 2) plot.push({ label: `Plot power ${powerName(own)}`, run: () => probe(it, true) });
     const arrange: MenuItem[] = [
       { label: "Rotate", hint: "⌃R", run: () => transform(rotate) },
       { label: "Mirror", hint: "⌃E", run: () => transform(mirror) },

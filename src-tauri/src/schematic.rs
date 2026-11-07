@@ -812,6 +812,8 @@ pub struct Sensor {
     pub label: String,
     /// the part's name as its labels use it (drawn, or the netlist's where that clashed), lowercase
     pub name: String,
+    /// its 1 TΩ hold resistor, if it has one (a subcircuit pin that could float), lowercase, else ""
+    pub hold: String,
 }
 
 impl Netlist {
@@ -833,11 +835,11 @@ impl Netlist {
 /// - `I(R1)` of a part with a current sensor becomes the sensor's current;
 /// - no analysis type (LTspice measures the simulation's) gets the deck's.
 fn ltspice_meas(text: &str, sensors: &[Sensor], warnings: &mut Vec<String>) -> String {
-    if let Some(w) = statements(text, &[".meas", ".measure"]).iter().find_map(|l| whole_ic_current(l, sensors)) {
-        warnings.push(format!(".meas: {w}"));
-    }
     if !contains_ci(text, ".meas") {
         return text.to_string(); // nothing to rewrite: no pass over a big deck
+    }
+    if let Some(w) = statements(text, &[".meas", ".measure"]).iter().find_map(|l| whole_ic_current(l, sensors)) {
+        warnings.push(format!(".meas: {w}"));
     }
     let lines = deck_lines(text);
     // the deck's first analysis ngspice can measure (an .op before a .tran: the .tran)
@@ -1592,20 +1594,13 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool) -> Netlist {
     }).collect();
     let mut seen = HashSet::new();
     let mut named: HashSet<String> = HashSet::new(); // current names given so far (lowercase)
-    // which parts each net reaches, and which nets have a label: a subcircuit pin on a net of its own
-    // part only, without a label a directive could use (open NC pins, two tied together) gets no
-    // sensor, which would float with ports the subcircuit may not use (singular matrix)
-    let mut owners: HashMap<&str, HashSet<usize>> = HashMap::new();
-    let mut labelled: HashSet<&str> = HashSet::new();
-    for (k, (it, nets)) in items.iter().zip(&nl.nets).enumerate() {
-        match it {
-            Item::Sym { .. } => nets.iter().for_each(|n| _ = owners.entry(n.as_str()).or_default().insert(k)),
-            Item::Flag { .. } => labelled.extend(nets.iter().map(String::as_str)),
-            _ => {}
-        }
-    }
-    let open = |k: usize, net: &str| net != "0" && !labelled.contains(net) && owners.get(net).is_none_or(|o| o.iter().all(|&j| j == k));
-    let open_pins: Vec<Vec<bool>> = nl.nets.iter().enumerate().map(|(k, nets)| nets.iter().map(|n| open(k, n)).collect()).collect();
+    // nets that reach a part other than a subcircuit: there a subcircuit pin's sensor node is held by
+    // the outside; elsewhere (an open NC pin, ports of ICs only) it could float with a port the
+    // subcircuit leaves unused (singular matrix) and gets a 1 TΩ hold to ground
+    let held: HashSet<&str> = items.iter().zip(&nl.nets).filter(|(it, _)| match it {
+        Item::Sym { sym, attrs, .. } => lib.get(sym).is_some_and(|d| prefix_of(d, attrs) != 'X'),
+        _ => false,
+    }).flat_map(|(_, nets)| nets.iter().map(String::as_str)).collect();
     // drawn names more than one part has (T1 a diode and T1 a resistor): those parts go by their netlist names
     let mut drawn: HashMap<String, usize> = HashMap::new();
     for it in items {
@@ -1701,9 +1696,6 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool) -> Netlist {
             nl.pin_currents[i][0] = format!("I({inst})"); // a source's own branch current (ngspice: i(v1), by the netlist's name)
         }
         for k in sensed {
-            if prefix == 'X' && open_pins[i][k] {
-                continue; // (open: no current to measure)
-            }
             // reserved in both builds (identical names), never clashing with the user's own
             let tail = if k == 0 { String::new() } else { format!("_{}", k + 1) };
             let mut src = format!("Vsense_{inst}{tail}");
@@ -1720,17 +1712,21 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool) -> Netlist {
             }
             nl.pin_currents[i][k] = label.clone();
             named.insert(label.to_lowercase());
-            nl.sensors.push(Sensor { source: src.to_lowercase(), node: node.to_lowercase(), inst: inst.to_lowercase(), pin: k, label, name: called.to_lowercase() });
+            // (1 TΩ, ngspice's own gmin: pA at 1 V, only where nothing else holds the net)
+            let hold = if prefix == 'X' && nl.nets[i][k] != "0" && !held.contains(nl.nets[i][k].as_str()) {
+                let mut r = format!("Rsense_{inst}{tail}");
+                while !taken.insert(r.to_uppercase()) {
+                    r.push('_');
+                }
+                r
+            } else {
+                String::new()
+            };
+            nl.sensors.push(Sensor { source: src.to_lowercase(), node: node.to_lowercase(), inst: inst.to_lowercase(), pin: k, label, name: called.to_lowercase(), hold: hold.to_lowercase() });
             if sense {
                 lines.push(format!("{src} {} {node} 0", nodes[k]));
-                if prefix == 'X' {
-                    // a port the subcircuit leaves unused would float behind the sensor (singular
-                    // matrix): 1 TΩ to ground, ngspice's own gmin, keeps it defined (pA at 1 V)
-                    let mut r = format!("Rsense_{inst}{tail}");
-                    while !taken.insert(r.to_uppercase()) {
-                        r.push('_');
-                    }
-                    lines.push(format!("{r} {node} 0 1T"));
+                if !hold.is_empty() {
+                    lines.push(format!("{hold} {node} 0 1T"));
                 }
                 if prefix == 'M' && k == 2 && npins == 3 && nodes.len() == 4 {
                     nodes[3] = node.clone(); // the bulk added for a 3-pin symbol is part of its source pin
@@ -2044,7 +2040,7 @@ mod tests {
 
     #[test]
     fn ltspice_meas_for_ngspice() {
-        let r1 = [Sensor { source: "vsense_r1".into(), node: "x".into(), inst: "r1".into(), pin: 0, label: "I(R1)".into(), name: "r1".into() }];
+        let r1 = [Sensor { source: "vsense_r1".into(), node: "x".into(), inst: "r1".into(), pin: 0, label: "I(R1)".into(), name: "r1".into(), hold: String::new() }];
         let m = |s: &str| meas_statement(s, &r1, "tran").unwrap_or_else(|e| e);
         assert_eq!(m(".MEAS TRAN P AVG -I(V1)*V(VDD)"), ".MEAS TRAN P AVG par('-I(V1)*V(VDD)')");
         assert_eq!(m(".meas tran t TRIG V(in) VAL=0.5*V(vdd) TD=2n RISE=1 TARG V(out) VAL=1 RISE=1"),
@@ -2062,7 +2058,7 @@ mod tests {
         assert_eq!(pin_labels('X', "U1", &[pin("IN+"), pin("IN-"), pin("OUT")]), ["Ix(U1:IN+)", "Ix(U1:IN-)", "Ix(U1:OUT)"]);
         assert_eq!(pin_labels('X', "U1", &[pin("2"), pin("GND"), pin("GND")]), ["Ix(U1:1)", "Ix(U1:2)", "Ix(U1:3)"], "never two alike");
         assert_eq!(pin_labels('Q', "Q1", &[pin("C"), pin("B"), pin("E")]), ["Ic(Q1)", "Ib(Q1)", "Ie(Q1)"]);
-        let u1 = [Sensor { source: "vsense_u1".into(), node: "y".into(), inst: "u1".into(), pin: 0, label: "Ix(U1:IN)".into(), name: "u1".into() }];
+        let u1 = [Sensor { source: "vsense_u1".into(), node: "y".into(), inst: "u1".into(), pin: 0, label: "Ix(U1:IN)".into(), name: "u1".into(), hold: String::new() }];
         assert_eq!(sensor_currents("I(U1)+ix(u1:in)", &u1), "I(U1)+i(vsense_u1)");
         assert_eq!(m(".meas tran p AVG 1µ*I(R1)"), ".meas tran p AVG par('1µ*i(vsense_r1)')", "multi-byte text: no panic");
         assert_eq!(m(".meas tran a AVG V(out) FROM = 1m TO =2m"), ".meas tran a AVG V(out) FROM=1m TO=2m", "blanks around =");
@@ -2208,8 +2204,9 @@ mod tests {
         let f = netlist_for_sim(&parse_asc(follower), &mut Library::builtin());
         let u = f.insts.iter().position(|n| n == "XU1").unwrap();
         assert_eq!(f.pin_currents[u], ["Ix(U1:In-)", "Ix(U1:In+)", "Ix(U1:Out)"], "{}", f.text);
+        assert!(!f.text.contains("Rsense_XU1_2") && f.text.contains("Rsense_XU1 "), "In+ is held by V1, out only by U1 itself: {}", f.text);
         let lone = netlist_for_sim(&parse_asc("SYMBOL Opamps\\opamp 0 0 R0\nSYMATTR InstName U1\nTEXT 0 200 Left 2 !.op\n"), &mut Library::builtin());
-        assert!(!lone.text.contains("Vsense") && lone.pin_currents[0].iter().all(String::is_empty), "{}", lone.text);
+        assert_eq!(lone.text.matches(" 0 1T").count(), 3, "open pins: held, so nothing floats: {}", lone.text);
         let fr = crate::ngspice::run(&prepare(&f.text, None, &mut vec![]).with_sensors(f.sensors.clone())).unwrap();
         let out = fr.op.iter().find(|o| o.0 == "Ix(U1:Out)").map(|o| o.1);
         assert!(out.is_some_and(|i| i.abs() < 1e-6), "a follower without load: {:?}", fr.op);
@@ -2218,7 +2215,7 @@ mod tests {
         let z = netlist_for_sim(&parse_asc(EXAMPLES.iter().find(|e| e.0 == "zener_prefix").unwrap().1), &mut Library::builtin());
         let d = z.insts.iter().position(|n| n == "XD1").unwrap();
         assert_eq!(z.pin_currents[d], ["I(D1)", ""], "{}", z.text);
-        let t1 = [Sensor { source: "vsense_qt1".into(), node: "y".into(), inst: "qt1".into(), pin: 0, label: "Ic(T1)".into(), name: "t1".into() }];
+        let t1 = [Sensor { source: "vsense_qt1".into(), node: "y".into(), inst: "qt1".into(), pin: 0, label: "Ic(T1)".into(), name: "t1".into(), hold: String::new() }];
         assert_eq!(sensor_currents("I(T1)+I(QT1)", &t1), "i(vsense_qt1)+i(vsense_qt1)", "pin 1 by the drawn name too");
         let run = crate::ngspice::run(&prepare(&nl.text, None, &mut vec![]).with_sensors(nl.sensors.clone())).unwrap();
         let get = |n: &str| run.op.iter().find(|o| o.0 == n).map(|o| o.1).unwrap_or_else(|| panic!("{n}: {:?}", run.op));
