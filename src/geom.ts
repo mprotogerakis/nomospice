@@ -163,14 +163,15 @@ export function dragPlan(items: Item[], lib: Lib, sel: Set<number>) {
   const conn: Pt[] = [];
   const moving = new Set<string>(), movingPts: Pt[] = [];
   const move = (p: Pt) => moving.has(key(...p)) || (moving.add(key(...p)), movingPts.push(p));
+  // pins of parts that stay: a wire must not take a connection away from them (a selected wire's
+  // end on one stays there: the wire stretches)
+  const fixed = new Set(items.flatMap((it, i) => (it.t === "sym" && !sel.has(i) ? pins(it, defOf(lib, it)).map((p) => key(...p)) : [])));
   items.forEach((it, i) => {
     const ps: Pt[] = it.t === "wire" ? [[it.x1, it.y1], [it.x2, it.y2]] : it.t === "flag" ? [[it.x, it.y]] : it.t === "sym" ? pins(it, defOf(lib, it)) : [];
     conn.push(...ps);
-    if (sel.has(i)) ps.forEach(move);
+    if (sel.has(i)) ps.forEach((p) => (it.t === "sym" || !fixed.has(key(...p))) && move(p));
   });
   const ends = (w: Wire): Pt[] => [[w.x1, w.y1], [w.x2, w.y2]];
-  // pins of parts that stay: a wire must not take a connection away from them
-  const fixed = new Set(items.flatMap((it, i) => (it.t === "sym" && !sel.has(i) ? pins(it, defOf(lib, it)).map((p) => key(...p)) : [])));
   const pinned = (w: Wire) => conn.some((p) => inside(p, w) && fixed.has(key(...p))); // (cheap test first)
   // wires that move whole, and what hangs on them: a worklist, each wire once. A wire whose ends
   // both move joins (one with a resting part's pin on it stretches instead: the pin keeps its wires)
@@ -179,8 +180,9 @@ export function dragPlan(items: Item[], lib: Lib, sel: Set<number>) {
   items.forEach((it, i) => it.t === "wire" && ends(it).forEach((p) => atEnd.set(key(...p), [...(atEnd.get(key(...p)) ?? []), i])));
   const join = (i: number) => {
     const it = items[i];
-    // (selected or not: a wire with a resting part's pin on it stretches around the pin)
-    if (whole.has(i) || it.t !== "wire" || pinned(it) || !(sel.has(i) || ends(it).every((p) => moving.has(key(...p))))) return;
+    // both ends moving (selected or not; cheap test first), and no resting part's pin on it: else
+    // it stretches around the pin
+    if (whole.has(i) || it.t !== "wire" || !ends(it).every((p) => moving.has(key(...p))) || pinned(it)) return;
     whole.add(i), work.push(i);
   };
   items.forEach((_, i) => join(i));

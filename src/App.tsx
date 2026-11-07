@@ -143,12 +143,20 @@ async function saveFile(as = false) {
   // another folder: symbols from next to the old file go along on request (else its parts lose
   // them). Asked before the path changes, so no run (live mode) meanwhile looks in the new folder.
   const [from, to] = [dirOf(prev), dirOf(path)], names = items.flatMap((it) => (it.t === "sym" ? [it.sym] : []));
-  const found = prev && from && to && from !== to ? await invoke<[string, boolean][]>("folder_symbols", { from, to, names, copy: false }).catch(() => []) : [];
+  const found = prev && from && to && from !== to
+    ? await invoke<[string, boolean][]>("folder_symbols", { from, to, names, copy: false }).catch(async (e) => (await fail("Cannot check the old folder's symbols")(e), []))
+    : [];
   const [own, clash] = [found.filter(([, c]) => !c).map(([f]) => f), found.filter(([, c]) => c).map(([f]) => f)];
   // a different file of the same name over there: it would be used instead (and is not overwritten)
   const differ = clash.length ? `\n\nThe new folder has its own, different ${clash.join(", ")}: the schematic will use ${clash.length > 1 ? "those" : "that one"} there.` : "";
-  // decided now, copied once the schematic is written (a failed save leaves no copies behind)
-  const carry = !!own.length && (await ask(`The schematic uses symbols from its old folder: ${own.join(", ")}. Copy them to the new folder?${differ}`, { title: "nomospice" }));
+  // decided now (Cancel stops the Save As), copied once the schematic is written (a failed save
+  // leaves no copies behind); custom buttons answer with their label
+  let carry = false;
+  if (own.length) {
+    const r = await message(`The schematic uses symbols from its old folder: ${own.join(", ")}. Copy them to the new folder?${differ}`, { title: "nomospice", buttons: { yes: "Copy", no: "Don't copy", cancel: "Cancel" } });
+    if (r === "Cancel") return;
+    carry = r === "Copy" || r === "Yes";
+  }
   if (!own.length && clash.length) await message(differ.trim(), { title: "nomospice" });
   if (doc !== docId()) return;
   try {
