@@ -458,7 +458,7 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
     // no scale (.op, .tf, .pz, .noise totals ...): single values, shown as a table (per step, named)
     let mut op = vec![];
     if scale.is_empty() {
-        for (label, plot, _) in &done {
+        'steps: for (label, plot, _) in &done {
             api.command(&format!("setplot {plot}"));
             let (vs, sc) = plot_vectors(api, plot, sensors, pars);
             if !sc.is_empty() && !phasors {
@@ -473,6 +473,9 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
                 let unit = match (plot.starts_with("op") || phasors, t.typ) { (true, 3) => "V", (true, 4) => "A", _ => "" }.to_string();
                 if let Some(&re) = t.re.first() {
                     op.push((name, re, t.im.and_then(|im| im.first().copied()).unwrap_or(0.0), unit));
+                }
+                if op.len() >= MAX_ROWS {
+                    break 'steps;
                 }
             }
         }
@@ -499,7 +502,11 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
     // sensor currents listed by their names, which trace expressions take (`I(R1)`, not `vsense_r1#branch`)
     let mut vectors: Vec<String> = vectors.into_iter().map(|v| named.get(&v).map_or(v, |l| l.to_string())).collect();
     vectors.sort();
-    let notes = log.iter().filter(|l| l.starts_with("Warning: .step") || l.starts_with("--- .step") && l.ends_with("failed")).cloned().collect();
+    let mut notes: Vec<String> = vec![];
+    if op.len() >= MAX_ROWS {
+        notes.push(format!("the results table shows its first {MAX_ROWS} values"));
+    }
+    notes.extend(log.iter().filter(|l| l.starts_with("Warning: .step") || l.starts_with("--- .step") && l.ends_with("failed")).cloned());
     Ok(Run { id, plot, scale, vectors, op, aborted, meas, log, steps: if steps.is_none() { vec![] } else { done.iter().map(|d| d.0.clone()).collect() }, notes })
 }
 
@@ -615,9 +622,26 @@ pub fn trace(expr: &str, scale: &str, run: u64) -> Result<Trace, String> {
                 *im = vec![im[0]; n];
             }
         }
+        if !steps.is_empty() {
+            api.command("unlet nmsp_trace"); // (not a copy left in every step's plot)
+            // each step thinned as it is read (its own samples, evenly): steps × points stays bounded
+            let cap = 4 * (STEP_VALUES / steps.len()).clamp(200, 200_000);
+            let sweep = t.x.windows(2).all(|w| w[1] >= w[0]) || t.x.windows(2).all(|w| w[1] <= w[0]); // (not a nested .dc)
+            if t.x.len() > cap && t.re.len() == t.x.len() && sweep {
+                let keep: Vec<usize> = (0..cap).map(|k| k * (t.x.len() - 1) / (cap - 1)).collect();
+                let pick = |v: &[f64]| keep.iter().map(|&k| v[k]).collect::<Vec<f64>>();
+                (t.x, t.re, t.im) = (pick(&t.x), pick(&t.re), t.im.as_deref().map(pick));
+            }
+        }
         each.push((each.len(), t));
     }
-    if each.len() == 1 { Ok(each.pop().unwrap().1) } else { steps_joined(each) }
+    if each.len() == 1 {
+        let (k, mut t) = each.pop().unwrap();
+        t.steps = (!steps.is_empty()).then(|| vec![k]); // (a .step run of one step: named like the others)
+        Ok(t)
+    } else {
+        steps_joined(each)
+    }
 }
 
 /// The steps' curves of one trace as one, end to end over a shared x (each step's own where they
@@ -625,6 +649,8 @@ pub fn trace(expr: &str, scale: &str, run: u64) -> Result<Trace, String> {
 /// interpolated onto it), so the plot shows them as a family like a nested .dc. At most
 /// `STEP_VALUES` values in all: many steps thin their curves (each keeps a share of its own samples).
 const STEP_VALUES: usize = 2_000_000;
+/// The results table's rows at most (a stepped .op of a big circuit: a value per node per step).
+const MAX_ROWS: usize = 20_000;
 fn steps_joined(each: Vec<(usize, Trace)>) -> Result<Trace, String> {
     let (index, each): (Vec<usize>, Vec<Trace>) = each.into_iter().unzip();
     let same = each.windows(2).all(|w| w[0].x.len() == w[1].x.len() && w[0].x.iter().zip(&w[1].x).all(|(a, b)| (a - b).abs() <= 1e-12 * a.abs().max(b.abs())));
@@ -647,8 +673,17 @@ fn steps_joined(each: Vec<(usize, Trace)>) -> Result<Trace, String> {
     if same {
         // the same x for all (.ac, .dc): every curve at the same thinned indices, exact; a table
         // (.op: no x, a value per step) or a nested .dc (thinning would cut across its segments) whole
-        let keep = if each[0].x.is_empty() || !rising(&each[0].x) { (0..each[0].re.len()).collect() } else { thin(&each[0].x, cap) };
-        let pick = |v: &[f64]| if v.is_empty() { vec![] } else { keep.iter().map(|&k| v[k]).collect::<Vec<f64>>() };
+        let len = each[0].x.len().max(each[0].re.len());
+        // (a nested .dc, not thinned: as many whole steps as the budget holds)
+        let (index, each) = if !each[0].x.is_empty() && !rising(&each[0].x) && len * each.len() > STEP_VALUES {
+            let n = (STEP_VALUES / len.max(1)).max(1);
+            (index.into_iter().take(n).collect::<Vec<_>>(), each.into_iter().take(n).collect::<Vec<_>>())
+        } else {
+            (index, each)
+        };
+        let keep: Vec<usize> = if each[0].x.is_empty() || !rising(&each[0].x) { (0..len).collect() } else { thin(&each[0].x, cap) };
+        // (missing values, a curve shorter than its x, `v(out)[0,9]`: gaps, not a panic)
+        let pick = |v: &[f64]| if v.is_empty() { vec![] } else { keep.iter().map(|&k| v.get(k).copied().unwrap_or(f64::NAN)).collect::<Vec<f64>>() };
         let complex = each.iter().all(|t| t.im.is_some());
         return Ok(Trace {
             x: each.iter().flat_map(|t| pick(&t.x)).collect(),
@@ -659,11 +694,15 @@ fn steps_joined(each: Vec<(usize, Trace)>) -> Result<Trace, String> {
             steps: Some(index),
         });
     }
-    // the union of the steps' x, each thinned to its share first: every curve keeps samples of its own
-    let per = (cap / each.len()).max(2);
-    let mut grid: Vec<f64> = each.iter().flat_map(|t| thin(&t.x, per).into_iter().map(|k| t.x[k])).collect();
+    // the union of the steps' x, each thinned to its share first: every curve keeps samples of its
+    // own; very many steps (a share under 20): the whole union thinned evenly instead
+    let per = cap / each.len();
+    let mut grid: Vec<f64> = each.iter().flat_map(|t| thin(&t.x, if per >= 20 { per } else { usize::MAX }).into_iter().map(|k| t.x[k])).collect();
     grid.sort_by(|a, b| (dir * a).total_cmp(&(dir * b)));
     grid.dedup_by(|a, b| (*a - *b).abs() <= 1e-12 * a.abs().max(b.abs()));
+    if grid.len() > cap {
+        grid = thin(&grid, cap).into_iter().map(|k| grid[k]).collect();
+    }
     // linear between samples, the end value beyond (a step that stopped early), none where a step
     // has no data (a gap)
     let onto = |x: &[f64], y: &[f64]| -> Vec<f64> {

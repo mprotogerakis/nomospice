@@ -140,7 +140,8 @@ fn call(base: &Path, name: &str, args: &Value) -> Result<Value, String> {
                 "values": run.op.iter().map(|(n, re, im, unit)| json!({ "name": n, "re": re, "im": im, "unit": unit })).collect::<Vec<_>>(),
                 // .meas results (value null: ngspice could not evaluate it)
                 "measurements": run.meas.iter().map(|(n, v, info, _)| json!({ "name": n, "value": v, "info": info })).collect::<Vec<_>>(),
-                "warnings": warnings.iter().chain(&run.notes).collect::<Vec<_>>(), "traces": traces,
+                // (a note not already among the warnings: a bad .step is said once)
+                "warnings": warnings.iter().chain(run.notes.iter().filter(|n| !warnings.iter().any(|w| n.contains(w.as_str())))).collect::<Vec<_>>(), "traces": traces,
             }))
         }
         "netlist" => {

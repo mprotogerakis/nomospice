@@ -403,13 +403,10 @@ const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot, steps }:
     const val = (x: number | null) => (x == null || !ps.length ? "–" : ps.map(({ s, unit }) => fmt(unit, at(xs, s.y, x))).join(" "));
     // (a .step family: each value with its step, in a tooltip; each pane's series of this trace once)
     // (not for hundreds of steps: a tooltip that long helps no one, and it is built per hover move)
-    const curves = Math.max(0, ...panes.map((p) => p.series.filter((s) => s.t === t).length));
+    const curves = ps[0]?.s.n ?? 0;
     const named = (x: number | null) => {
       if (x == null || !steps.length || curves < 2 || curves > 50) return undefined;
-      return panes.flatMap((p) => {
-        const mine = p.series.filter((s) => s.t === t);
-        return mine.map((s, k) => `${curveName(t, k, mine.length, steps)}: ${fmt(p.unit, at(xs, s.y, x))}`);
-      }).join("\n");
+      return ps.map(({ s, unit }) => `${member(s, steps)}: ${fmt(unit, at(xs, s.y, x))}`).join("\n");
     };
     const delta = a != null && b != null && ps.length ? ps.map(({ s, unit }) => fmt(unit, at(xs, s.y, b) - at(xs, s.y, a))).join(" ") : "–";
     return { t, val, delta, named };
