@@ -482,11 +482,6 @@ fn plot_vectors(api: &Api, plot: &str, sensors: &[crate::schematic::Sensor], par
 pub fn trace(expr: &str, scale: &str, run: u64) -> Result<Trace, String> {
     // part currents by name (`I(R1)-I(R2)`, `Ib(Q1)`): the latest run's sensors; messages show the
     // expression as written, ngspice's with the names (not the hidden sensor sources)
-    // `I(U1)` of a subcircuit (LTspice allows it): no single current, its pins have one each
-    let low = expr.to_lowercase();
-    if let Some(s) = SENSORS.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|s| s.label.starts_with("Ix(") && low.match_indices(&format!("i({})", s.name)).any(|(k, _)| !low[..k].ends_with(|c: char| c.is_ascii_alphanumeric() || c == '_'))) {
-        return Err(format!("I({0}) is no single current: {0} has one per pin, e.g. {1}", s.name.to_uppercase(), s.label));
-    }
     let named = crate::schematic::sensor_currents(expr, &SENSORS.lock().unwrap_or_else(|e| e.into_inner()));
     let (shown, expr) = (expr, named.as_str());
     let unname = |log: String| SENSORS.lock().unwrap_or_else(|e| e.into_inner()).iter().fold(log, |l, s| l.replace(&format!("i({})", s.source), &s.label).replace(&format!("{}#branch", s.source), &s.label));
@@ -500,6 +495,9 @@ pub fn trace(expr: &str, scale: &str, run: u64) -> Result<Trace, String> {
     let api = g.as_ref().unwrap();
     if RUNS.load(Ordering::SeqCst) != run {
         return Err("the results were replaced by a later run (a root locus or another simulation): run the simulation again".into());
+    }
+    if let Some(why) = crate::schematic::whole_ic_current(shown, &SENSORS.lock().unwrap_or_else(|e| e.into_inner())) {
+        return Err(why); // (`I(U1)` of a subcircuit: its pins have the currents)
     }
     api.command("unlet nmsp_trace"); // a failed `let` would otherwise leave the previous trace behind
     take_log(); // after unlet: it may print leftovers of the finished run ("Background thread stopped")

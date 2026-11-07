@@ -833,6 +833,9 @@ impl Netlist {
 /// - `I(R1)` of a part with a current sensor becomes the sensor's current;
 /// - no analysis type (LTspice measures the simulation's) gets the deck's.
 fn ltspice_meas(text: &str, sensors: &[Sensor], warnings: &mut Vec<String>) -> String {
+    if let Some(w) = statements(text, &[".meas", ".measure"]).iter().find_map(|l| whole_ic_current(l, sensors)) {
+        warnings.push(format!(".meas: {w}"));
+    }
     if !contains_ci(text, ".meas") {
         return text.to_string(); // nothing to rewrite: no pass over a big deck
     }
@@ -1134,6 +1137,27 @@ pub fn sensor_currents(s: &str, sensors: &[Sensor]) -> String {
     }
     out.push_str(rest);
     out
+}
+
+/// `I(U1)` of a subcircuit (as LTspice allows): no single current, its pins have one each. The
+/// explanation, if `s` asks for one.
+pub fn whole_ic_current(s: &str, sensors: &[Sensor]) -> Option<String> {
+    let ics: HashSet<&str> = sensors.iter().filter(|x| x.inst.starts_with('x') && x.label.starts_with("Ix(")).map(|x| x.name.as_str()).collect();
+    if ics.is_empty() {
+        return None;
+    }
+    let low = s.to_lowercase();
+    let mut rest = low.as_str();
+    while let Some(k) = rest.find("i(") {
+        let word = rest[..k].ends_with(|c: char| c.is_ascii_alphanumeric() || c == '_');
+        let arg = rest[k + 2..].split(')').next().unwrap_or("").trim();
+        if let Some(n) = (!word).then_some(arg).filter(|a| ics.contains(a)) {
+            let pin = sensors.iter().find(|x| x.name == n && x.label.starts_with("Ix(")).map_or(String::new(), |x| x.label.clone());
+            return Some(format!("I({0}) is no single current: {0} has one per pin, e.g. {pin}", n.to_uppercase()));
+        }
+        rest = &rest[k + 2..];
+    }
+    None
 }
 
 /// The pins' currents by their usual names: `I(R1)`; `Ic(Q1)` `Ib(Q1)` `Ie(Q1)`; `Id(M1)` `Ig(M1)`
@@ -1557,6 +1581,15 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool) -> Netlist {
         }
         _ => None,
     }).collect();
+    // parts without a name get theirs now (R1, R2 … not yet taken), so every name is known before
+    // current names are given (a part drawn as V1 next to an unnamed source that becomes V1)
+    let auto: HashMap<usize, String> = items.iter().enumerate().filter_map(|(i, it)| match it {
+        Item::Sym { sym, attrs, .. } if attrs.get("InstName").is_none_or(|n| n.is_empty()) => {
+            let p = prefix_of(lib.get(sym)?, attrs);
+            Some((i, (1..).map(|n| format!("{p}{n}")).find(|n| taken.insert(n.to_uppercase())).unwrap()))
+        }
+        _ => None,
+    }).collect();
     let mut seen = HashSet::new();
     let mut named: HashSet<String> = HashSet::new(); // current names given so far (lowercase)
     // which parts each net reaches, and which nets have a label: a subcircuit pin on a net of its own
@@ -1591,7 +1624,7 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool) -> Netlist {
         let prefix = prefix_of(&def, attrs);
         let inst = match attrs.get("InstName").filter(|n| !n.is_empty()) {
             Some(n) => spice_inst(n, prefix),
-            None => (1..).map(|n| format!("{prefix}{n}")).find(|n| taken.insert(n.to_uppercase())).unwrap(),
+            None => auto.get(&i).cloned().unwrap_or_else(|| (1..).map(|n| format!("{prefix}{n}")).find(|n| taken.insert(n.to_uppercase())).unwrap()),
         };
         if !seen.insert(inst.to_uppercase()) {
             nl.warnings.push(format!("duplicate instance name {inst}"));
@@ -1690,6 +1723,15 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool) -> Netlist {
             nl.sensors.push(Sensor { source: src.to_lowercase(), node: node.to_lowercase(), inst: inst.to_lowercase(), pin: k, label, name: called.to_lowercase() });
             if sense {
                 lines.push(format!("{src} {} {node} 0", nodes[k]));
+                if prefix == 'X' {
+                    // a port the subcircuit leaves unused would float behind the sensor (singular
+                    // matrix): 1 TΩ to ground, ngspice's own gmin, keeps it defined (pA at 1 V)
+                    let mut r = format!("Rsense_{inst}{tail}");
+                    while !taken.insert(r.to_uppercase()) {
+                        r.push('_');
+                    }
+                    lines.push(format!("{r} {node} 0 1T"));
+                }
                 if prefix == 'M' && k == 2 && npins == 3 && nodes.len() == 4 {
                     nodes[3] = node.clone(); // the bulk added for a 3-pin symbol is part of its source pin
                 }

@@ -199,6 +199,7 @@ assert.equal(numInfo("1Meg", "Hz")!.text, "= 1MegHz"); // not "1M", the milli tr
   assert.equal(exprUnit("sqrt(v(a)*v(a))"), "V");
   assert.equal(exprUnit("abs(i(v1))"), "A");
   assert.equal(exprUnit("2*pi"), "");
+  assert.equal(exprUnit("i(v1)/echarge"), "", "a constant with a unit of its own");
   assert.equal(exprUnit("0.5"), "");
   assert.equal(exprUnit("db(v(out))"), "");
   assert.equal(exprUnit("p_ges", vec), "V", "a node by its name");
