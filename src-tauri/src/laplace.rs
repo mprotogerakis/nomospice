@@ -278,9 +278,12 @@ impl P<'_> {
     }
 }
 
-/// `r`, unless its coefficients' expressions have grown past use (powers and products of
+/// `r`, unless its order or its coefficients' expressions have grown past use (powers and products of
 /// parameter polynomials grow like binomial coefficients: `(1+s*tau/20)^20`).
 fn sized(r: R) -> Result<R, String> {
+    if r.0.len().max(r.1.len()) > 65 {
+        return Err("its order is above 64".into());
+    }
     let len: usize = r.0.iter().chain(&r.1).map(|c| if let C::E(e) = c { e.len() } else { 0 }).sum();
     if len > 20_000 {
         return Err("it expands too far with parameters in it (multiplied out, its coefficients run past 20,000 characters): write it with numbers".into());
@@ -413,7 +416,8 @@ pub fn rewrite(text: &str, warnings: &mut Vec<String>) -> String {
     let mut out = String::with_capacity(text.len());
     let mut k = 0;
     while k < lines.len() {
-        if !lines[k].trim_start().starts_with(['E', 'e', 'G', 'g']) {
+        // (not the title, whatever it says)
+        if k == 0 || !lines[k].trim_start().starts_with(['E', 'e', 'G', 'g']) {
             out.push_str(lines[k]);
             k += 1;
             continue;
@@ -424,7 +428,7 @@ pub fn rewrite(text: &str, warnings: &mut Vec<String>) -> String {
         while let Some(l) = lines.get(j).map(|l| l.trim_start()) {
             match l.chars().next() {
                 Some('+') => end = j + 1,
-                Some('*') | None | Some('\r' | '\n') => {}
+                Some('*') | None => {}
                 _ => break,
             }
             j += 1;
@@ -451,13 +455,9 @@ pub fn rewrite(text: &str, warnings: &mut Vec<String>) -> String {
     out
 }
 
-/// A Laplace E/G line as plain elements; None: not one.
+/// An E/G line (with its continuations) as plain elements, if it has `Laplace=`; None: not.
 fn device(l: &str) -> Option<Result<String, String>> {
     let t = l.trim_start();
-    let kind = t.chars().next()?.to_ascii_uppercase();
-    if kind != 'E' && kind != 'G' {
-        return None;
-    }
     let low = t.to_ascii_lowercase();
     // `laplace =`, a word of its own (not a node `laplace_out`)
     let at = low.match_indices("laplace").map(|(k, _)| k).find(|&k| (k == 0 || low.as_bytes()[k - 1].is_ascii_whitespace()) && low[k + 7..].trim_start().starts_with('='))?;
@@ -474,7 +474,7 @@ fn device(l: &str) -> Option<Result<String, String>> {
         Ok(h) => h,
         Err(e) => return Some(Err(e)),
     };
-    Some(Ok(realise(toks[0], &toks[1..], &h)))
+    Some(Some(realise(toks[0], &toks[1..], &h)).filter(|t| t.len() < 200_000).ok_or_else(|| "with its parameters it would write more than 200 kB of netlist: write it with numbers".into()))
 }
 
 #[cfg(test)]
@@ -509,6 +509,7 @@ mod tests {
         assert!(coefficients("1/s^1.5").unwrap_err().contains("whole number"));
         assert!(coefficients("2^s").unwrap_err().contains("exponent"));
         assert!(coefficients("1/(1+s*tau/20)^20").unwrap_err().contains("20,000"));
+        assert!(coefficients("1/((1+s)^64)^64").unwrap_err().contains("order"));
         assert!(!mentions_s("tau") && mentions_s("2*s+1") && !mentions_s("sigma"));
         assert!(internal("e1#lapz1") && internal("x1.e1#lapy") && !internal("out") && !internal("clk_lapz1") && !internal("a#lapz1x"));
         assert_eq!(c("(1/(s-1))/(1+10/(s-1))"), (v(&["1e0"]), v(&["9e0", "1e0"])), "G/(1+G): no hidden pole at +1");
@@ -519,13 +520,14 @@ mod tests {
     #[test]
     fn lines() {
         let mut w = vec![];
-        let t = rewrite("E1 out 0 in 0 Laplace=1/(1+s*1µ) ; a pole\nG2 a b c d laplace = {gm}/(1+s*{tau})\twindow=1 // as LTspice\nR1 a 0 1k\nE3 laplace_out 0 in 0\n* between\n\n+ Laplace=2\nE4 o 0 i 0 Laplace=3\n+ window=1\nE5 o 0 i 0 Laplace=1/(1+\u{a0}s)\n", &mut w);
+        let t = rewrite("G title Laplace=1/(1+s)\nE1 out 0 in 0 Laplace=1/(1+s*1µ) ; a pole\nG2 a b c d laplace = {gm}/(1+s*{tau})\twindow=1 // as LTspice\nR1 a 0 1k\nE3 laplace_out 0 in 0\n* between\n\n+ Laplace=2\nE4 o 0 i 0 Laplace=3\n+ window=1\nE5 o 0 i 0 Laplace=1/(1+\u{a0}s)\n", &mut w);
         assert!(w.is_empty(), "{w:?}");
         assert!(t.contains("GE1_u 0 e1#lapz1 in 0 1e0\nGE1_a0 0 e1#lapz1 e1#lapz1 0 -1e0\nGE1_b0 0 e1#lapy e1#lapz1 0 1e0\nCE1_z1 e1#lapz1 0 1e-6\nGE1_y e1#lapy 0 e1#lapy 0 1\nE1 out 0 e1#lapy 0 1\n"), "{t}");
         assert!(t.contains("G2 a b g2#lapy 0 1") && t.contains("{gm}") && t.contains("R1 a 0 1k") && !t.contains("pole") && !t.contains("window") && !t.contains("LTspice"), "{t}");
         assert!(t.contains("E3 laplace_out 0 in 0 2e0\nE4 o 0 i 0 3e0\n") && !t.contains("between"), "continuations: {t}");
         assert!(t.contains("E5 o 0 e5#lapy 0 1"), "a no-break space: {t}");
-        let t = rewrite("E1 out 0 Laplace=1/s\n", &mut w);
+        assert!(t.starts_with("G title Laplace=1/(1+s)\n"), "the title as it was: {t}");
+        let t = rewrite("* t\nE1 out 0 Laplace=1/s\n", &mut w);
         assert!(w[0].contains("two output and two input") && t.contains("Laplace"), "left as it was, said");
     }
 
