@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { message, save } from "@tauri-apps/plugin-dialog";
-import { dirOf, useS } from "./store";
+import { dirOf, fileName, useS } from "./store";
 
 /** Run `fn` with the light theme's CSS variables: exports are for slides and paper. The class is
  *  restored in the same task, so nothing is painted in between. */
@@ -47,7 +47,7 @@ export function inlineStyles(svg: SVGSVGElement) {
 /** Ask for a file name next to the document and write the SVG. */
 export async function saveSvg(svg: string, suffix: string) {
   const { path } = useS.getState();
-  const base = (path?.split(/[\\/]/).pop() ?? "untitled.asc").replace(/\.asc$/i, "");
+  const base = fileName(path).replace(/\.asc$/i, "");
   const dir = path ? dirOf(path) : undefined;
   const name = `${base}${suffix}.svg`;
   const target = await save({ defaultPath: dir ? `${dir}/${name}` : name, filters: [{ name: "SVG image", extensions: ["svg"] }] });

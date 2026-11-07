@@ -458,11 +458,12 @@ export const Schematic = memo(function Schematic() {
     const selectNet = () => set({ sel: items.flatMap((x, j) => ((x.t === "wire" || x.t === "flag") && nets?.nets[j]?.[0] === net ? [j] : [])) });
     const edit = () => set({ sel: [i], dialog: { k: "edit", index: i } });
     // a part: its current, and each pin's where it has its own (a transistor's Ib, a subcircuit's pins)
-    const own = it?.t === "sym" && nets ? partCurrent(nets, i) : "";
+    const own = probing && it?.t === "sym" && nets ? partCurrent(nets, i) : "";
     const plot: MenuItem[] = !probing || !it ? [] : it.t !== "sym" ? (canProbe(it) ? [{ label: `Plot V(${net ?? "?"})`, run: () => probe(it) }] : [])
       : !nets ? (canProbe(it) ? [{ label: "Plot its current", run: () => probe(it) }] : []) // (no fresh netlist yet: the probe re-runs first)
       : [...(own ? [{ label: `Plot ${own}`, run: () => probe(it) }] : []),
-        ...(nets?.pin_currents?.[i] ?? []).flatMap((c, k) => (c && c !== own ? [{ label: `Plot ${c}`, run: () => probe(it, false, k) }] : []))];
+        // (a big IC: its first pins; any pin by clicking near it)
+        ...(nets?.pin_currents?.[i] ?? []).flatMap((c, k) => (c && c !== own ? [{ label: `Plot ${c}`, run: () => probe(it, false, k) }] : [])).slice(0, 8)];
     // two-pin parts: their power too (LTspice: alt-click)
     if (own && powerMode(sim) && it?.t === "sym" && nets?.nets[i]?.length === 2) plot.push({ label: `Plot power ${own.replace(/^I/, "P")}`, run: () => probe(it, true) });
     const arrange: MenuItem[] = [

@@ -16,7 +16,7 @@ import { PoleZero } from "./PoleZero";
 import { checkForUpdate, installUpdate, useUpdate } from "./updater";
 import { Dialogs } from "./Dialogs";
 import { Boundary } from "./Boundary";
-import { analysesOf, closeTab, currentTab, dirOf, docId, viewOf, loadDoc, loadSymbols, placeSymbol, plotKind, redo, refreshGit, refreshNets, relToDoc, selectTab, simulate, undo, useS, useStatus } from "./store";
+import { analysesOf, closeTab, currentTab, dirOf, fileName, docId, viewOf, loadDoc, loadSymbols, placeSymbol, plotKind, redo, refreshGit, refreshNets, relToDoc, selectTab, simulate, undo, useS, useStatus } from "./store";
 import { History } from "./History";
 import { currentLabel, mirror, rotate } from "./geom";
 import { ANALYSES, si, tokens } from "./spice";
@@ -55,7 +55,7 @@ const typing = (e: KeyboardEvent) =>
 async function discardOk() {
   const { dirty, path } = useS.getState();
   if (!dirty) return true;
-  const name = path?.split(/[\\/]/).pop() ?? "untitled.asc";
+  const name = fileName(path);
   const r = await message("Your changes are lost if you don't save them.", { title: `Save the changes to “${name}”?`, kind: "warning", buttons: { yes: "Save", no: "Don't Save", cancel: "Cancel" } });
   if (r === "Save" || r === "Yes") return (await saveFile(), !useS.getState().dirty); // (the save dialog cancelled: stay)
   return r === "Don't Save" || r === "No";
@@ -256,7 +256,7 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    const name = s.path?.split(/[\\/]/).pop() ?? "untitled.asc";
+    const name = fileName(s.path);
     getCurrentWindow().setTitle(`${s.dirty ? "● " : ""}${name} — nomospice`).catch(() => {});
   }, [s.path, s.dirty]);
 

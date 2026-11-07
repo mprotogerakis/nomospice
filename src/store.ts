@@ -81,6 +81,8 @@ export const useStatus = create(() => ({ x: 0, y: 0, net: null as string | null,
 
 // ---------------------------------------------------------------- document
 
+/** The document's file name ("untitled.asc" before its first save). */
+export const fileName = (path: string | null | undefined) => path?.split(/[\\/]/).pop() || "untitled.asc";
 export const dirOf = (path: string | null) => {
   if (!path) return null;
   const d = path.replace(/[\\/][^\\/]*$/, "");
