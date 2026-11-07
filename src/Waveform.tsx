@@ -20,6 +20,18 @@ type Series = { t: Trace; y: (number | null)[]; k: number; n: number; u: string;
 const scaleOf = (pane: { series: Series[] }, s: Series) => (s.r && pane.series.some((o) => !o.r) ? "y2" : "y");
 /** `unit2`: its right axis's unit (one for all its series there, else none). */
 type Pane = { unit: string; unit2: string; series: Series[] };
+/** The spectra of a trace's curves (each .step's), kept while its data and the window are the same
+ *  (another trace added, an axis moved: not all transformed again). */
+const SPECTRA = new WeakMap<object, { key: string; parts: { f: number[]; db: (number | null)[] }[] }>();
+function spectra(d: Trace["data"] & object, lo: number, hi: number, n: number) {
+  const key = `${lo} ${hi} ${n}`, got = SPECTRA.get(d);
+  if (got?.key === key) return got.parts;
+  const sg = segment(d.x);
+  const parts = Array.from({ length: Math.max(1, Math.floor(d.x.length / sg)) }, (_, k) => spectrum(d.x.slice(k * sg, (k + 1) * sg), d.re.slice(k * sg, (k + 1) * sg), lo, hi, n));
+  SPECTRA.set(d, { key, parts });
+  return parts;
+}
+
 /** Settings of a pane's y axis, by its unit (the spectrum's apart). */
 const axisKey = (unit: string, fft: boolean) => `${fft ? "fft:" : ""}${unit}`;
 
@@ -142,16 +154,23 @@ export const Waveform = memo(function Waveform() {
   const freq = run?.scale === "frequency" || spec;
   const xUnit = spec ? "Hz" : xUnitOf(run?.scale ?? "");
   const ok = useMemo(() => traces.filter((t) => t.data?.x.length), [traces]);
-  // the spectrum view: each trace (each .step curve) as its spectrum over fft.lo..hi, in dB
-  const points = useMemo(() => (spec && ok[0] ? fftSize(ok[0].data!.x.slice(0, segment(ok[0].data!.x)), fft!.lo, fft!.hi) : 0), [spec, ok, fft]);
+  // the spectrum view: each trace (each .step curve) as its spectrum over lo..hi, in dB; the range
+  // as asked, within what this run has (a shorter re-run: no window past its end)
+  const win = useMemo(() => {
+    const x = ok[0]?.data!.x;
+    if (!spec || !x) return null;
+    const one = x.slice(0, segment(x));
+    const [lo, hi] = [Math.max(fft!.lo, one[0]), Math.min(fft!.hi, one[one.length - 1])];
+    const [a, b] = hi > lo ? [lo, hi] : [one[0], one[one.length - 1]];
+    return { lo: a, hi: b, n: fftSize(one, a, b) };
+  }, [spec, ok, fft]);
   const shown = useMemo(() => {
-    if (!spec || !points) return ok;
+    if (!win) return ok;
     return ok.filter((t) => !t.data!.constant && !t.data!.im).map((t): Trace => {
-      const { x, re } = t.data!, sg = segment(x);
-      const parts = Array.from({ length: Math.max(1, Math.floor(x.length / sg)) }, (_, k) => spectrum(x.slice(k * sg, (k + 1) * sg), re.slice(k * sg, (k + 1) * sg), fft!.lo, fft!.hi, points));
+      const parts = spectra(t.data!, win.lo, win.hi, win.n);
       return { ...t, unit: "dB", right: undefined, pane: undefined, data: { ...t.data!, x: parts.flatMap((p) => p.f), re: parts.flatMap((p) => p.db) as number[], constant: undefined } };
     });
-  }, [ok, spec, fft, points]);
+  }, [ok, win]);
   // constants (reference lines: 0.5, 500m) are drawn on the top pane's axis, whatever it is now:
   // volts first, the magnitude in a Bode plot
   const [lines, signals] = useMemo(() => [shown.filter((t) => t.data!.constant), shown.filter((t) => !t.data!.constant)], [shown]);
@@ -185,6 +204,8 @@ export const Waveform = memo(function Waveform() {
       if (same) same.series.push(...series);
       else panes.push({ unit, unit2: "", series });
     }
+    // a pane holding a trace of another unit: its right axis is that unit's (its own traces left)
+    for (const p of panes) if (p.series.some((s) => s.u !== p.unit)) for (const s of p.series) s.r = s.u !== p.unit;
     if (lines.length && !panes.length) panes.push({ unit: "", unit2: "", series: [] });
     // one series per level (not one per outer .dc step); in a Bode plot a magnitude, as in LTspice:
     // 1 at 0 dB, 0.707 at -3 dB
@@ -233,7 +254,7 @@ export const Waveform = memo(function Waveform() {
       } } : {};
       // the left axis as set: log, a fixed range
       const ax = yAxes[axisKey(pane.unit, spec)] ?? {};
-      const logY = !!ax.log && !span;
+      const logY = !!ax.log && !span && pane.series.some((s) => !s.r && s.y.some((v) => v != null && v > 0)); // (nothing above 0: linear)
       const fixed = ax.lo != null && ax.hi != null ? { range: (): uPlot.Range.MinMax => [ax.lo!, ax.hi!] } : {};
       const values = (unit: string) => (_u: uPlot, v: number[], _i: number, _s: number, incr: number) =>
         v.map((y) => (unit === "dB" || unit === "°" ? `${+y.toFixed(Math.max(0, Math.ceil(-Math.log10(incr))))}${unit}` : si(y, unit, 3)));
@@ -379,6 +400,7 @@ export const Waveform = memo(function Waveform() {
         const pane = panes[paneEls.current.findIndex((el) => el?.contains(e.target as Node))];
         const key = pane ? axisKey(pane.unit, spec) : "", ax = yAxes[key] ?? {};
         const db = pane?.unit === "dB" || pane?.unit === "°";
+        const positive = !!pane?.series.some((s) => !s.r && s.y.some((v) => v != null && v > 0));
         openMenu(e.clientX, e.clientY, [
           { label: "Reset zoom", hint: "dbl-click", disabled: !panes.length, run: () => { setPlot({ zoom: null }); plots.current[0]?.setScale("x", { min: xs[0], max: xs[xs.length - 1] }); } },
           { label: "Clear cursors", run: () => setPlot({ a: null, b: null }) },
@@ -386,7 +408,7 @@ export const Waveform = memo(function Waveform() {
           ...(tran ? [spec ? { label: "Back to the transient", run: () => showFft(null) }
             : { label: "FFT (spectrum)", hint: a != null && b != null && a !== b ? "of A–B" : zoom ? "of the shown range" : "of the whole run", disabled: !panes.length || !(range[1] > range[0]), run: () => showFft(range) }] : []),
           ...(pane ? ["-" as const,
-            { label: ax.log ? "Linear y axis" : "Log y axis", hint: db ? `${pane.unit}: no` : undefined, disabled: db, run: () => setYAxis(key, { ...ax, log: !ax.log || undefined, ...(!ax.log && ax.lo != null && ax.lo <= 0 ? { lo: undefined, hi: undefined } : {}) }) },
+            { label: ax.log ? "Linear y axis" : "Log y axis", hint: db ? `${pane.unit}: no` : !positive ? "nothing above 0" : undefined, disabled: db || (!ax.log && !positive), run: () => setYAxis(key, { ...ax, log: !ax.log || undefined, ...(!ax.log && ax.lo != null && ax.lo <= 0 ? { lo: undefined, hi: undefined } : {}) }) },
             { label: "Y range…", hint: ax.lo != null && ax.hi != null ? `${si(ax.lo, pane.unit, 3)} … ${si(ax.hi, pane.unit, 3)}` : "automatic", run: () => useS.setState({ dialog: { k: "yrange", pane: key, unit: pane.unit, log: !!ax.log && !db } }) },
             ...(ax.lo != null ? [{ label: "Automatic y range", run: () => setYAxis(key, { ...ax, lo: undefined, hi: undefined }) }] : []),
           ] : []),
@@ -404,14 +426,14 @@ export const Waveform = memo(function Waveform() {
         )}
       </div>
       <div className="flex w-[340px] shrink-0 flex-col border-l border-border bg-surface-panel text-xs">
-        {spec && (
+        {win && (
           <div className="border-b border-border px-2 py-1 font-mono text-2xs text-text-secondary">
-            Spectrum of {si(fft!.lo, "s")} … {si(fft!.hi, "s")}: {points} points, Hann window, dB of the amplitude (a sine of 1 V: 0 dB) ·{" "}
+            Spectrum of {si(win!.lo, "s")} … {si(win!.hi, "s")}: {win!.n} points, Hann window, dB of the amplitude (a sine of 1 V: 0 dB) ·{" "}
             <button className="underline hover:text-text-strong" onClick={() => showFft(null)}>back to the transient</button>
           </div>
         )}
         <Readout traces={spec ? shown : traces} panes={panes} xs={xs} xUnit={xUnit} plot={spec ? "FFT" : run?.plot ?? ""} steps={run?.steps ?? NO_STEPS} />
-        <Measurements xUnit={xUnit} />
+        <Measurements xUnit={xUnitOf(run?.scale ?? "")} />
         <button
           className="m-2 inline-flex h-[22px] items-center justify-center gap-1 rounded-control border border-border-control text-text-secondary hover:bg-surface-hover hover:text-text-strong disabled:opacity-40"
           disabled={!run}
@@ -453,6 +475,8 @@ const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot, steps }:
   const alone = (t: Trace) => !panes.some((p) => p.series.some((s) => s.t === t) && p.series.some((s) => s.t !== t));
   // in another unit's pane (there on the right axis anyway)
   const moved = (t: Trace) => panes.some((p) => p.series.some((s) => s.t === t && s.u !== p.unit));
+  // in a pane whose right axis holds a trace of another unit
+  const guest = (t: Trace) => panes.some((p) => p.series.some((s) => s.t === t) && p.series.some((s) => s.u !== p.unit));
   const rows = traces.map((t) => {
     const ps = panes.flatMap((p) => p.series.filter((s) => s.t === t).map((s) => ({ s, unit: s.u })));
     const fmt = (unit: string, v: number) => (Number.isNaN(v) ? "–" : unit === "dB" ? `${v.toFixed(2)} dB` : unit === "°" ? `∠${v.toFixed(1)}°` : si(v, unit));
@@ -474,7 +498,7 @@ const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot, steps }:
   // (time and DC sweeps: over a frequency axis an average or integral of a magnitude means little.
   // xs is one sweep segment, rising or falling: nested .dc families are separate series of it)
   const num = (v: number, u: string) => (Number.isNaN(v) ? "–" : si(v, u)); // (no data in the range)
-  const stats = useMemo(() => xUnit === "Hz" ? [] : traces.filter((t) => !t.data?.constant).flatMap((t) => panes.flatMap((p) => p.series.filter((s) => s.t === t && p.unit !== "dB" && p.unit !== "°").map((s) => ({ t, unit: s.u, of: member(s, steps), ...integrate(xs, s.y, lo, hi) })))),
+  const stats = useMemo(() => xUnit === "Hz" ? [] : traces.filter((t) => !t.data?.constant).flatMap((t) => panes.flatMap((p) => p.series.filter((s) => s.t === t && s.u !== "dB" && s.u !== "°").map((s) => ({ t, unit: s.u, of: member(s, steps), ...integrate(xs, s.y, lo, hi) })))),
     [traces, panes, xs, lo, hi, xUnit, steps]); // not per hover move
   return (
     <>
@@ -491,9 +515,10 @@ const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot, steps }:
           {rows.map(({ t, val, delta, named }) => (
             <tr key={t.expr} className="group h-[22px] border-b border-border-subtle align-middle" title={t.error ?? t.expr}
               onContextMenu={(e) => (e.preventDefault(), openMenu(e.clientX, e.clientY, [
-                ...(moved(t) ? [] : [{ label: t.right ? "Back to the left axis" : "Right axis (own scale)", hint: !t.right && alone(t) ? "alone in its pane" : undefined, disabled: !t.right && alone(t), run: () => setTraceRight(t.expr, !t.right) }]),
-                // (into another unit's pane: on its right axis there; not the Bode panes, nor in a spectrum)
-                ...(t.data?.im || plot === "FFT" ? [] : panes.filter((p) => p.unit !== "dB" && p.unit !== "°" && !p.series.some((s) => s.t === t)).map((p) => ({ label: `Into the ${p.unit || "unitless"} pane`, hint: "its right axis", run: () => setTracePane(t.expr, p.unit) }))),
+                ...(moved(t) || plot === "FFT" ? [] : [{ label: t.right && !guest(t) ? "Back to the left axis" : "Right axis (own scale)", hint: guest(t) ? "it holds another unit here" : !t.right && alone(t) ? "alone in its pane" : undefined, disabled: guest(t) || (!t.right && alone(t)), run: () => setTraceRight(t.expr, !t.right) }]),
+                // (into another unit's pane: on its right axis there, unless that holds a third unit
+                // already; not the Bode panes, nor in a spectrum)
+                ...(t.data?.im || plot === "FFT" ? [] : panes.filter((p) => p.unit !== "dB" && p.unit !== "°" && !p.series.some((s) => s.t === t) && p.series.every((s) => s.u === p.unit || s.u === t.unit)).map((p) => ({ label: `Into the ${p.unit || "unitless"} pane`, hint: "its right axis", run: () => setTracePane(t.expr, p.unit) }))),
                 ...(t.pane != null && plot !== "FFT" ? [{ label: `Back to its own pane (${t.unit || "unitless"})`, run: () => setTracePane(t.expr, undefined) }] : []),
                 { label: "Copy expression", hint: t.expr, run: () => navigator.clipboard.writeText(t.expr) },
                 { label: `Remove ${t.label}`, danger: true, run: () => removeTrace(t.expr) },

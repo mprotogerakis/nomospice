@@ -687,11 +687,14 @@ function fft(re: Float64Array, im: Float64Array) {
       [im[i], im[j]] = [im[j], im[i]];
     }
   }
+  // (the twiddles once: e^(-2πik/n), k < n/2; a stage of length len takes every (n/len)th)
+  const wr = new Float64Array(n / 2), wi = new Float64Array(n / 2);
+  for (let k = 0; k < n / 2; k++) [wr[k], wi[k]] = [Math.cos((-2 * Math.PI * k) / n), Math.sin((-2 * Math.PI * k) / n)];
   for (let len = 2; len <= n; len <<= 1) {
-    const a = (-2 * Math.PI) / len;
+    const step = n / len;
     for (let i = 0; i < n; i += len) {
       for (let k = 0; k < len / 2; k++) {
-        const [cr, ci] = [Math.cos(a * k), Math.sin(a * k)];
+        const [cr, ci] = [wr[k * step], wi[k * step]];
         const p = i + k, q = p + len / 2;
         const tr = re[q] * cr - im[q] * ci, ti = re[q] * ci + im[q] * cr;
         re[q] = re[p] - tr;
@@ -704,10 +707,11 @@ function fft(re: Float64Array, im: Float64Array) {
 }
 
 /** Points of a spectrum of lo..hi: a power of 2, at least the samples there (the simulator's
- *  time steps), 4096 to 65536. */
+ *  time steps: fewer would fold what lies above the new Nyquist frequency back in), 4096 to 2^20.
+ *  ponytail: past 2^20 samples in the range it folds; average down first if such runs matter. */
 export function fftSize(xs: number[], lo: number, hi: number) {
   const m = xs.reduce((n, x) => n + (x >= lo && x <= hi ? 1 : 0), 0);
-  return Math.min(65536, Math.max(4096, 2 ** Math.ceil(Math.log2(Math.max(m, 2)))));
+  return Math.min(2 ** 20, Math.max(4096, 2 ** Math.ceil(Math.log2(Math.max(m, 2)))));
 }
 
 /** The amplitude spectrum of ys(xs) over lo..hi in dB (a sine of amplitude 1: 0 dB): resampled
