@@ -125,9 +125,8 @@ struct P<'a> {
 
 impl P<'_> {
     fn ws(&mut self) {
-        while self.s[self.i..].starts_with(char::is_whitespace) {
-            self.i += 1;
-        }
+        let r = &self.s[self.i..];
+        self.i += r.len() - r.trim_start().len();
     }
     fn peek(&mut self) -> Option<char> {
         self.ws();
@@ -137,7 +136,7 @@ impl P<'_> {
         let mut a = self.prod()?;
         while let Some(c @ ('+' | '-')) = self.peek() {
             self.i += 1;
-            a = a.add(&self.prod()?, c == '-');
+            a = sized(a.add(&self.prod()?, c == '-'))?;
         }
         Ok(a)
     }
@@ -147,11 +146,11 @@ impl P<'_> {
             match self.peek() {
                 Some('*') if !self.s[self.i..].starts_with("**") => {
                     self.i += 1;
-                    a = a.mul(&self.unary()?);
+                    a = sized(a.mul(&self.unary()?))?;
                 }
                 Some('/') => {
                     self.i += 1;
-                    a = a.div(&self.unary()?);
+                    a = sized(a.div(&self.unary()?))?;
                 }
                 _ => return Ok(a),
             }
@@ -192,7 +191,7 @@ impl P<'_> {
         };
         let mut out = R::c(C::N(1.0));
         for _ in 0..k.unsigned_abs() {
-            out = out.mul(&a);
+            out = sized(out.mul(&a))?;
         }
         Ok(if k < 0 { R::c(C::N(1.0)).div(&out) } else { out })
     }
@@ -221,7 +220,7 @@ impl P<'_> {
             }
             Some(c) if c.is_ascii_digit() || c == '.' => {
                 let rest = &self.s[self.i..];
-                let n = rest.char_indices().find(|&(k, c)| !(c.is_ascii_alphanumeric() || c == '.' || ((c == '+' || c == '-') && k > 0 && rest[..k].ends_with(['e', 'E']) && rest[..k].bytes().all(|b| b.is_ascii_digit() || b == b'.' || b == b'e' || b == b'E')))).map_or(rest.len(), |p| p.0);
+                let n = rest.char_indices().find(|&(k, c)| !(c.is_alphanumeric() || c == '.' || ((c == '+' || c == '-') && k > 0 && rest[..k].ends_with(['e', 'E']) && rest[..k].bytes().all(|b| b.is_ascii_digit() || b == b'.' || b == b'e' || b == b'E')))).map_or(rest.len(), |p| p.0);
                 let v = crate::schematic::spice_num(&rest[..n]).ok_or_else(|| format!("`{}` is not a number", &rest[..n]))?;
                 self.i += n;
                 Ok(R::c(C::N(v)))
@@ -260,9 +259,26 @@ impl P<'_> {
     }
 }
 
+/// `r`, unless its coefficients' expressions have grown past use (powers and products of
+/// parameter polynomials grow like binomial coefficients: `(1+s*tau/20)^20`).
+fn sized(r: R) -> Result<R, String> {
+    let len: usize = r.0.iter().chain(&r.1).map(|c| if let C::E(e) = c { e.len() } else { 0 }).sum();
+    if len > 20_000 {
+        return Err("it expands too far with parameters in it (multiplied out, its coefficients run past 20,000 characters): write it with numbers".into());
+    }
+    Ok(r)
+}
+
 /// The value of an R without s; None: s is in it.
 fn constant(r: &R) -> Option<C> {
     (r.0.len() == 1 && r.1.len() == 1).then(|| r.0[0].div(&r.1[0]))
+}
+
+/// Whether ngspice's vector `v` is one of `realise`'s nodes (`e1_lapz1`, `x1.e1_lapy`): not
+/// listed with the results.
+pub fn internal(v: &str) -> bool {
+    let last = v.rsplit('.').next().unwrap_or(v);
+    last.ends_with("_lapy") || last.rsplit_once("_lapz").is_some_and(|(a, k)| !a.is_empty() && !k.is_empty() && k.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// Whether `s` occurs in `t` as a word of its own.
@@ -295,18 +311,20 @@ fn coefficients(expr: &str) -> Result<R, String> {
 }
 
 /// H(s) = num/den as plain elements, in the controllable canonical form: a state per power of s
-/// below, each a capacitor's voltage `<name>_zk` fed by a B source; the output an E (or G) of
-/// their sum (`i(E1)` still a current). Time is scaled by w (s = w·p, capacitors of 1/w) and
+/// below, each a capacitor's voltage `<name>_lapzk` fed by G sources; the output an E (or G) of
+/// their sum, `<name>_lapy` (`i(E1)` still a current; results do not list these nodes). Time is scaled by w (s = w·p, capacitors of 1/w) and
 /// the states by the lowest power below, so they stay near the input's size (ngspice's voltage
 /// tolerance is 1 µV: unscaled, a 1 MHz pole's state would be ~1e-13 V). Integrators (no s⁰
 /// below) leak through 1 GΩ, so the operating point exists without a loop around them too.
 fn realise(name: &str, n: &[&str], h: &R) -> String {
     let R(num, den) = h;
     let ord = den.len() - 1;
-    let (out, inp) = (format!("{} {}", n[0], n[1]), format!("V({},{})", n[2], n[3]));
+    let out = format!("{} {}", n[0], n[1]);
     if ord == 0 {
         return format!("{name} {out} {} {} {}", n[2], n[3], num[0].div(&den[0]).spice());
     }
+    // ponytail: r skips only coefficients written as 0; a parameter that is 0 at run time
+    // (`1/(s+a)`, `.param a=0`) divides by 0 there: test it ahead (ngspice's ternary) if needed
     let r = den.iter().position(|c| !c.zero()).unwrap_or(0);
     // w: where the poles are, roughly (the zeros' if all poles sit at 0)
     let scale = |lo: &C, hi: &C, k: usize| match lo.div(hi) {
@@ -326,13 +344,28 @@ fn realise(name: &str, n: &[&str], h: &R) -> String {
     let scaled = |c: &C, k: usize| c.mul(&w.powi(k as i32 - r as i32)).div(&den[r]);
     let a: Vec<C> = (0..=ord).map(|j| scaled(&den[j], j)).collect();
     let b: Vec<C> = (0..=ord).map(|k| num.get(k).map_or(C::N(0.0), |c| scaled(c, k))).collect();
+    // (all linear G: node names like `in+` are no operators here, and .pz takes them)
     let low = name.to_ascii_lowercase();
-    let z = |k: usize| format!("{low}_z{k}");
-    let sum = |terms: Vec<(C, String)>| {
-        let t: String = terms.into_iter().filter(|(c, _)| !c.zero()).map(|(c, v)| format!("+({})*{v}", c.spice())).collect();
-        if t.is_empty() { "0".to_string() } else { t[1..].to_string() }
-    };
+    let z = |k: usize| format!("{low}_lapz{k}");
+    let y = format!("{low}_lapy");
     let mut lines = vec![];
+    let mut g = |tag: String, to: &str, from: &str, c: C| {
+        if !c.zero() {
+            lines.push(format!("G{name}_{tag} 0 {to} {from} {}", c.spice()));
+        }
+    };
+    let u = format!("{} {}", n[2], n[3]);
+    // p·z_ord = (u - Σ a_j z_(j+1)) / a_ord
+    g("u".into(), &z(ord), &u, C::N(1.0).div(&a[ord]));
+    for j in 0..ord {
+        g(format!("a{j}"), &z(ord), &format!("{} 0", z(j + 1)), a[j].div(&a[ord]).neg());
+    }
+    // y = Σ (b_k - b_ord a_k / a_ord) z_(k+1) + b_ord / a_ord u, as a current through 1 Ω
+    let feed = b[ord].div(&a[ord]);
+    for k in 0..ord {
+        g(format!("b{k}"), &y, &format!("{} 0", z(k + 1)), b[k].add(&feed.mul(&a[k]).neg()));
+    }
+    g("f".into(), &y, &u, feed);
     for k in 1..=ord {
         lines.push(format!("C{name}_z{k} {} 0 {}", z(k), C::N(1.0).div(&w).spice()));
         if k <= r {
@@ -342,21 +375,13 @@ fn realise(name: &str, n: &[&str], h: &R) -> String {
             lines.push(format!("G{name}_z{k} 0 {} {} 0 1", z(k), z(k + 1)));
         }
     }
-    // p·z_ord = (u - Σ a_j z_(j+1)) / a_ord
-    let mut t = vec![(C::N(1.0).div(&a[ord]), inp.clone())];
-    t.extend((0..ord).map(|j| (a[j].div(&a[ord]).neg(), format!("V({})", z(j + 1)))));
-    lines.push(format!("B{name}_z{ord} 0 {} I={}", z(ord), sum(t)));
-    // y = Σ (b_k - b_ord a_k / a_ord) z_(k+1) + b_ord / a_ord u
-    let feed = b[ord].div(&a[ord]);
-    let mut t: Vec<(C, String)> = (0..ord).map(|k| (b[k].add(&feed.mul(&a[k]).neg()), format!("V({})", z(k + 1)))).collect();
-    t.push((feed, inp));
-    lines.push(format!("B{name}_y {low}_y 0 V={}", sum(t)));
-    lines.push(format!("{name} {out} {low}_y 0 1"));
+    lines.push(format!("R{name}_y {y} 0 1"));
+    lines.push(format!("{name} {out} {y} 0 1"));
     lines.join("\n")
 }
 
-/// Every E or G line of `text` with `Laplace=` (in subcircuits too) as an s_xfer device and its
-/// model; what cannot run is said in `warnings` and left as it was.
+/// Every E or G line of `text` with `Laplace=` (in subcircuits too) as plain elements (see
+/// `realise`); what cannot run is said in `warnings` and left as it was.
 pub fn rewrite(text: &str, warnings: &mut Vec<String>) -> String {
     if !crate::schematic::contains_ci(text, "laplace") {
         return text.to_string(); // (most decks: no pass over them)
@@ -365,14 +390,21 @@ pub fn rewrite(text: &str, warnings: &mut Vec<String>) -> String {
     let mut out = String::with_capacity(text.len());
     let mut k = 0;
     while k < lines.len() {
-        // a line and its `+` continuations, as one
-        let mut j = k + 1;
-        while j < lines.len() && lines[j].trim_start().starts_with('+') {
+        // a line and its `+` continuations, as one (comments and blank lines between them
+        // skipped, as ngspice does); each without its inline comment
+        let (mut j, mut end) = (k + 1, k + 1);
+        while let Some(l) = lines.get(j).map(|l| l.trim_start()) {
+            match l.chars().next() {
+                Some('+') => end = j + 1,
+                Some('*') | None | Some('\r' | '\n') => {}
+                _ => break,
+            }
             j += 1;
         }
-        let whole = lines[k..j].iter().enumerate().map(|(i, l)| {
-            let l = l.trim_end_matches(['\n', '\r']);
-            if i == 0 { l } else { &l.trim_start()[1..] }
+        let j = end;
+        let whole = lines[k..j].iter().enumerate().filter_map(|(i, l)| {
+            let l = crate::schematic::uncommented(l.trim_end_matches(['\n', '\r']));
+            if i == 0 { Some(l) } else { l.trim_start().strip_prefix('+') }
         }).collect::<Vec<_>>().join(" ");
         match device(&whole) {
             Some(Ok(lines)) => {
@@ -405,10 +437,11 @@ fn device(l: &str) -> Option<Result<String, String>> {
     if toks.len() != 5 {
         return Some(Err("a Laplace source needs its two output and two input nodes (E1 out 0 in 0 Laplace=…)".into()));
     }
-    // the expression: up to an inline comment, or the options (window=, nfft=, mtol=) that
-    // have no use here
+    // the expression: up to the options (window=, nfft=, mtol=) that have no use here
     let v0 = low.len() - low[at + 7..].trim_start().len() + 1;
-    let cut = [";", " $", "\t$", " window", " nfft", " mtol"].iter().filter_map(|o| low[v0..].find(o)).min().unwrap_or(low.len() - v0);
+    let rest = &low[v0..];
+    let option = |k: usize| ["window", "nfft", "mtol"].iter().any(|o| rest[k..].trim_start().strip_prefix(o).is_some_and(|x| x.trim_start().starts_with('=')));
+    let cut = rest.char_indices().find(|&(k, c)| c.is_whitespace() && option(k)).map_or(rest.len(), |p| p.0);
     let h = match coefficients(&t[v0..v0 + cut]) {
         Ok(h) => h,
         Err(e) => return Some(Err(e)),
@@ -447,17 +480,20 @@ mod tests {
         assert!(coefficients("s^2/(1+s)").unwrap_err().contains("improper"));
         assert!(coefficients("1/s^1.5").unwrap_err().contains("whole number"));
         assert!(coefficients("2^s").unwrap_err().contains("exponent"));
+        assert!(coefficients("1/(1+s*tau/20)^20").unwrap_err().contains("20,000"));
         assert!(!mentions_s("tau") && mentions_s("2*s+1") && !mentions_s("sigma"));
+        assert!(internal("e1_lapz1") && internal("x1.e1_lapy") && !internal("out") && !internal("_lapz") && !internal("a_lapz1x"));
     }
 
     #[test]
     fn lines() {
         let mut w = vec![];
-        let t = rewrite("E1 out 0 in 0 Laplace=1/(1+s*1m) ; a pole\nG2 a b c d laplace = {gm}/(1+s*{tau}) window=1\nR1 a 0 1k\nE3 laplace_out 0 in 0\n+ Laplace=2\nE4 o 0 i 0 Laplace=3\n+ window=1\n", &mut w);
+        let t = rewrite("E1 out 0 in 0 Laplace=1/(1+s*1µ) ; a pole\nG2 a b c d laplace = {gm}/(1+s*{tau})\twindow=1 // as LTspice\nR1 a 0 1k\nE3 laplace_out 0 in 0\n* between\n\n+ Laplace=2\nE4 o 0 i 0 Laplace=3\n+ window=1\nE5 o 0 i 0 Laplace=1/(1+\u{a0}s)\n", &mut w);
         assert!(w.is_empty(), "{w:?}");
-        assert!(t.contains("CE1_z1 e1_z1 0 1e-3\nBE1_z1 0 e1_z1 I=(1e0)*V(in,0)+(-1e0)*V(e1_z1)\nBE1_y e1_y 0 V=(1e0)*V(e1_z1)\nE1 out 0 e1_y 0 1\n"), "{t}");
-        assert!(t.contains("G2 a b g2_y 0 1") && t.contains("{gm}") && t.contains("R1 a 0 1k") && !t.contains("pole") && !t.contains("window"), "{t}");
-        assert!(t.contains("E3 laplace_out 0 in 0 2e0\n") && t.contains("E4 o 0 i 0 3e0\n"), "continuations: {t}");
+        assert!(t.contains("GE1_u 0 e1_lapz1 in 0 1e0\nGE1_a0 0 e1_lapz1 e1_lapz1 0 -1e0\nGE1_b0 0 e1_lapy e1_lapz1 0 1e0\nCE1_z1 e1_lapz1 0 1e-6\nRE1_y e1_lapy 0 1\nE1 out 0 e1_lapy 0 1\n"), "{t}");
+        assert!(t.contains("G2 a b g2_lapy 0 1") && t.contains("{gm}") && t.contains("R1 a 0 1k") && !t.contains("pole") && !t.contains("window") && !t.contains("LTspice"), "{t}");
+        assert!(t.contains("E3 laplace_out 0 in 0 2e0\nE4 o 0 i 0 3e0\n") && !t.contains("between"), "continuations: {t}");
+        assert!(t.contains("E5 o 0 e5_lapy 0 1"), "a no-break space: {t}");
         let t = rewrite("E1 out 0 Laplace=1/s\n", &mut w);
         assert!(w[0].contains("two output and two input") && t.contains("Laplace"), "left as it was, said");
     }

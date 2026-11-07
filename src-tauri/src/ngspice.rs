@@ -569,7 +569,7 @@ fn plot_vectors(api: &Api, plot: &str, sensors: &[crate::schematic::Sensor], par
     }));
     // the helper sources ngspice makes for `.meas … par('…')`: pa_00, bpa_00#branch … one per par()
     let helpers: std::collections::HashSet<String> = (0..pars).flat_map(|k| [format!("pa_{k:02}"), format!("bpa_{k:02}#branch")]).collect();
-    vectors.retain(|v| !helpers.contains(v));
+    vectors.retain(|v| !helpers.contains(v) && !crate::laplace::internal(v)); // (and a Laplace source's states)
     vectors.sort();
     let scale = ["time", "frequency", "v-sweep", "i-sweep", "temp-sweep", "res-sweep"]
         .into_iter()
