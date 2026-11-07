@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { useSize } from "./lib/useSize";
 import uPlot from "uplot";
 import { create } from "zustand";
@@ -248,7 +248,9 @@ export const Waveform = memo(function Waveform() {
 
   // an .ac result as Nyquist (Im over Re) or Nichols (dB over phase) curves, one per step
   const polar = useS((s) => s.plot.polar);
-  const polarOn = ac && !!polar && signals.some((t) => t.data!.im);
+  const cplx = signals.some((t) => t.data!.im);
+  const polarOn = ac && !!polar && cplx;
+  const [fitted, refit] = useState(0); // (Reset zoom there: a new Polar)
   const steps = run?.steps ?? NO_STEPS;
   // (Nichols: the Bode panes' dB and phase series, curve by curve; Nyquist: re and im as they are)
   const curves = useMemo<Curve[]>(() => {
@@ -259,7 +261,8 @@ export const Waveform = memo(function Waveform() {
     }
     return signals.filter((t) => t.data!.im).flatMap((t) => {
       const n = Math.max(1, Math.floor(t.data!.re.length / seg));
-      return Array.from({ length: n }, (_, k) => ({ label: curveLabel(t, k, n, steps), slot: t.slot, x: t.data!.re.slice(k * seg, (k + 1) * seg), y: t.data!.im!.slice(k * seg, (k + 1) * seg) }));
+      const part = <T,>(a: T[], k: number) => (n === 1 ? a : a.slice(k * seg, (k + 1) * seg));
+      return Array.from({ length: n }, (_, k) => ({ label: curveLabel(t, k, n, steps), slot: t.slot, x: part(t.data!.re, k), y: part(t.data!.im!, k) }));
     });
   }, [polarOn, polar, signals, seg, steps, panes]);
 
@@ -350,7 +353,8 @@ export const Waveform = memo(function Waveform() {
               const { min, max } = u.scales.x;
               if (min == null || max == null || u.cursor.left == null) return;
               const lg = logX ? Math.log10 : (v: number) => v, ex = logX ? (v: number) => 10 ** v : lg;
-              const dx = e.deltaX, dy = e.deltaY * (e.deltaMode === 1 ? 16 : 1);
+              const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1; // (lines, pages as pixels)
+              const dx = e.deltaX * unit, dy = e.deltaY * unit;
               let lo = lg(min), hi = lg(max);
               if (Math.abs(dx) > Math.abs(dy)) {
                 const shift = (dx / (u.bbox.width / devicePixelRatio)) * (hi - lo); // horizontal swipe pans
@@ -451,14 +455,14 @@ export const Waveform = memo(function Waveform() {
         const db = pane?.unit === "dB" || pane?.unit === "°";
         const pos = !!pane && positive(pane);
         openMenu(e.clientX, e.clientY, [
-          { label: "Reset zoom", hint: "dbl-click", disabled: !panes.length || polarOn, run: () => { setPlot({ zoom: null }); plots.current[0]?.setScale("x", { min: xs[0], max: xs[xs.length - 1] }); } },
+          { label: "Reset zoom", hint: "dbl-click", disabled: !panes.length, run: () => { if (polarOn) return refit((n) => n + 1); setPlot({ zoom: null }); plots.current[0]?.setScale("x", { min: xs[0], max: xs[xs.length - 1] }); } },
           { label: "Clear cursors", run: () => setPlot({ a: null, b: null }) },
           { label: "Add trace…", disabled: !run, run: () => useS.setState({ dialog: { k: "trace" } }) },
           // (a loop gain's stability: where it passes -1)
           // (Nyquist/Nichols need a complex trace; without one, only the way back)
-          ...(ac && (signals.some((t) => t.data!.im) || polar) ? [
+          ...(ac && (cplx || polar) ? [
             { label: polar ? "Bode plot" : "Nyquist plot", hint: polar ? undefined : "Im over Re", run: () => setPlot({ polar: polar ? undefined : "nyquist" }) },
-            ...(!signals.some((t) => t.data!.im) ? [] : polar === "nichols" ? [{ label: "Nyquist plot", hint: "Im over Re", run: () => setPlot({ polar: "nyquist" }) }] : [{ label: "Nichols plot", hint: "dB over phase", run: () => setPlot({ polar: "nichols" }) }]),
+            ...(!cplx ? [] : polar === "nichols" ? [{ label: "Nyquist plot", hint: "Im over Re", run: () => setPlot({ polar: "nyquist" }) }] : [{ label: "Nichols plot", hint: "dB over phase", run: () => setPlot({ polar: "nichols" }) }]),
           ] : []),
           ...(tran ? [spec ? { label: "Back to the transient", run: () => showFft(null) }
             : { label: "FFT (spectrum)", hint: a != null && b != null && a !== b ? "of A–B" : zoom ? "of the shown range" : "of the whole run", disabled: !panes.length || !(range[1] > range[0]), run: () => showFft(range) }] : []),
@@ -473,7 +477,7 @@ export const Waveform = memo(function Waveform() {
           { label: "Remove all traces", danger: true, disabled: !traces.length, run: () => useS.setState({ traces: [] }) },
         ]);
       }}>
-        {polarOn ? <Polar curves={curves} freqs={xs} mode={polar!} onHover={hoverAt} />
+        {polarOn ? <Polar key={`${polar}${fitted}`} curves={curves} freqs={xs} mode={polar!} onHover={hoverAt} />
           : panes.map((p, i) => <div key={`${p.unit}-${i}`} ref={(el) => { paneEls.current[i] = el; }} />)}
         {!panes.length && (
           <div className="absolute inset-0 flex items-center justify-center text-xs text-text-tertiary">

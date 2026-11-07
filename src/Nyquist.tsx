@@ -17,12 +17,16 @@ export const Polar = memo(function Polar({ curves, freqs, mode, onHover }: { cur
   const size = useSize(host);
   const nyq = mode === "nyquist";
   // the bounds of every curve (Nyquist: and its mirror, the origin, -1; Nichols: the critical
-  // point nearest the curves' middle, -180° + k·360°)
+  // point nearest the curves' middle, -180° + k·360°). Nyquist: only where |H| ≤ 10, around the
+  // unit circle (a loop gain with an integrator is 10^5 at low frequencies: -1 would be a dot);
+  // zooming out shows the rest
   const fit = useMemo(() => {
     let [x0, x1, y0, y1] = [Infinity, -Infinity, Infinity, -Infinity];
+    const any = nyq && curves.some((c) => c.x.some((a, i) => a != null && c.y[i] != null && Math.hypot(a, c.y[i]!) <= 10));
+    const near = (x: number, y: number) => !any || Math.hypot(x, y) <= 10; // (none that near: all of it)
     for (const c of curves) c.x.forEach((x, i) => {
       const y = c.y[i];
-      if (x == null || y == null || !Number.isFinite(x) || !Number.isFinite(y)) return;
+      if (x == null || y == null || !Number.isFinite(x) || !Number.isFinite(y) || !near(x, y)) return;
       [x0, x1, y0, y1] = [Math.min(x0, x), Math.max(x1, x), Math.min(y0, y, nyq ? -y : y), Math.max(y1, y, nyq ? -y : y)];
     });
     const crit = nyq ? -1 : x0 > x1 ? -180 : -180 + 360 * Math.round(((x0 + x1) / 2 + 180) / 360);
@@ -35,7 +39,7 @@ export const Polar = memo(function Polar({ curves, freqs, mode, onHover }: { cur
   const [view, setView] = useState<{ cx: number; cy: number; kx: number; ky: number } | null>(null);
   const [hit, setHit] = useState<Hit | null>(null);
   // (another mode or other curves: fitted afresh; a re-run of the same ones keeps the zoom)
-  const which = `${mode} ${curves.map((c) => c.label).join("\n")}`;
+  const which = curves.map((c) => c.label).join("\n"); // (another mode: a new Polar, keyed by it)
   useEffect(() => {
     setView(null);
     setHit(null);
@@ -66,7 +70,9 @@ export const Polar = memo(function Polar({ curves, freqs, mode, onHover }: { cur
   const drawn = useMemo(() => curves.map((c) => ({ d: path(c, 1), mirror: nyq ? path(c, -1) : "" })), [curves, nyq, v.cx, v.cy, v.kx, v.ky, size.w, size.h]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // hover: the nearest point within 14 px, its frequency to the trace table
-  // drag: pan (both ways)
+  // drag: pan (both ways). ponytail: each move rebuilds the paths and the hover scans every point;
+  // fine for 10^5 points, a transform and a grid if .step families of 10^6 lag
+
   const drag = useRef<{ X: number; Y: number; cx: number; cy: number } | null>(null);
   const onMove = (e: React.MouseEvent) => {
     const r = host.current!.getBoundingClientRect(), X = e.clientX - r.left, Y = e.clientY - r.top;
@@ -101,7 +107,7 @@ export const Polar = memo(function Polar({ curves, freqs, mode, onHover }: { cur
     const wheel = (e: WheelEvent) => {
       const { v, base, val } = now.current;
       e.preventDefault();
-      const unit = e.deltaMode === 1 ? 16 : 1, dx = e.deltaX * unit, dy = e.deltaY * unit;
+      const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1, dx = e.deltaX * unit, dy = e.deltaY * unit; // (lines, pages as pixels)
       if (Math.abs(dx) > Math.abs(dy)) return setView({ ...v, cx: v.cx + dx / v.kx });
       const r = el.getBoundingClientRect(), at = val(e.clientX - r.left, e.clientY - r.top);
       const f = Math.exp(-dy * 0.002);
