@@ -343,6 +343,20 @@ export const Schematic = memo(function Schematic() {
     }
     return { ...it, x, y };
   };
+  /** Pasted items at `at`: a part whose name is taken (or pasted twice) renumbered, as LTspice does
+   *  (the preview shows the names the click gives). */
+  const pasted = (its: Shape[], [x, y]: Pt): Shape[] => {
+    const out: Shape[] = [], taken = new Set(items.flatMap((it) => (it.t === "sym" && it.attrs.InstName ? [it.attrs.InstName.toUpperCase()] : [])));
+    for (const it of its) {
+      let s = shifted(it, x, y);
+      if (s.t === "sym") {
+        if (!s.attrs.InstName || taken.has(s.attrs.InstName.toUpperCase())) s = { ...s, attrs: { ...s.attrs, InstName: nextInst([...items, ...out], prefixOf(s, defOf(lib, s)) || "X") } };
+        taken.add(s.attrs.InstName.toUpperCase());
+      }
+      out.push(s);
+    }
+    return out;
+  };
   const wirePath = (a: Pt, b: Pt): Item[] => {
     const corner: Pt = hFirst ?? true ? [b[0], a[1]] : [a[0], b[1]];
     return dropZeroWires([
@@ -372,16 +386,7 @@ export const Schematic = memo(function Schematic() {
     } else if (tool.k === "place") {
       commit([...items, placed(tool.item, g)]);
     } else if (tool.k === "paste") {
-      // here, selected; a part whose name is taken (or pasted twice) renumbered, as LTspice does
-      const out: Shape[] = [], taken = new Set(items.flatMap((it) => (it.t === "sym" && it.attrs.InstName ? [it.attrs.InstName.toUpperCase()] : [])));
-      for (const it of tool.items) {
-        let s = shifted(it, g[0], g[1]);
-        if (s.t === "sym") {
-          if (!s.attrs.InstName || taken.has(s.attrs.InstName.toUpperCase())) s = { ...s, attrs: { ...s.attrs, InstName: nextInst([...items, ...out], prefixOf(s, defOf(lib, s)) || "X") } };
-          taken.add(s.attrs.InstName.toUpperCase());
-        }
-        out.push(s);
-      }
+      const out = pasted(tool.items, g); // (here, selected)
       commit([...items, ...out], out.map((_, k) => items.length + k));
       useS.setState({ tool: { k: "select" } });
     } else if (tool.k === "delete") {
@@ -581,7 +586,7 @@ export const Schematic = memo(function Schematic() {
     : drag.current?.k === "pan" ? "grabbing" : hover >= 0 ? "pointer" : "default";
   const gap = GRID * view.k;
   const ghost = tool.k === "place" ? placed(tool.item, cursor) : null;
-  const ghosts = tool.k === "paste" ? tool.items.map((it) => shifted(it, cursor[0], cursor[1])) : [];
+  const ghosts: Shape[] = tool.k === "paste" ? pasted(tool.items, cursor) : ghost && isShape(ghost) ? [ghost] : [];
 
   return (
     <div className="relative h-full w-full overflow-hidden bg-surface-schematic-canvas">
@@ -629,11 +634,6 @@ export const Schematic = memo(function Schematic() {
           ))}
           {conn.dots.map(([x, y]) => <circle key={`d${x},${y}`} cx={x} cy={y} r={4} fill="var(--sch-wire)" />)}
           {conn.open.map(([x, y]) => <rect key={`o${x},${y}`} x={x - 3} y={y - 3} width={6} height={6} stroke="var(--sch-pin)" strokeWidth={1} vectorEffect="non-scaling-stroke" />)}
-          {ghost && isShape(ghost) && (
-            <g color="var(--selection)" stroke="currentColor" strokeWidth={1.6} opacity={0.7} className="[&_*]:[vector-effect:non-scaling-stroke]">
-              <ItemView it={ghost} lib={lib} />
-            </g>
-          )}
           {!!ghosts.length && (
             <g color="var(--selection)" stroke="currentColor" strokeWidth={1.6} opacity={0.7} className="[&_*]:[vector-effect:non-scaling-stroke]">
               {ghosts.map((it, k) => <ItemView key={k} it={it} lib={lib} />)}

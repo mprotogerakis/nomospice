@@ -1,7 +1,7 @@
 // Editing actions shared by the toolbar, hotkeys and context menus.
 import type { Item, Shape } from "./types";
 import { commit, useS } from "./store";
-import { rotateInPlace, shifted, snap } from "./geom";
+import { isShape, rotateInPlace, shifted, snap } from "./geom";
 
 export function deleteSelection() {
   const { items, sel } = useS.getState();
@@ -32,54 +32,55 @@ const CLIP = "nomospice-items:";
 /** The selection as clipboard text, or null: nothing to copy. */
 export function copyText(): string | null {
   const { items, sel } = useS.getState();
-  const its = sel.map((i) => items[i]).filter((it): it is Shape => !!it && it.t !== "raw");
+  const its = sel.map((i) => items[i]).filter((it): it is Shape => !!it && isShape(it));
   return its.length ? CLIP + JSON.stringify(its) : null;
 }
 
 // (what the core takes: i32 coordinates; no line breaks or control characters a saved .asc line
 // would carry into lines of its own, no spaces in a symbol name or an attribute's key)
-const num = (v: unknown) => typeof v === "number" && Number.isInteger(v) && Math.abs(v) < 2 ** 31;
-const str = (v: unknown) => typeof v === "string" && !/[\u0000-\u001f\u007f]/.test(v);
+const num = (v: unknown) => typeof v === "number" && Number.isInteger(v) && Math.abs(v) < 2 ** 30;
+const str = (v: unknown) => typeof v === "string" && !/[\u0000-\u0008\u000a-\u001f\u007f]/.test(v); // (a tab is fine)
 const word = (v: unknown) => str(v) && !/\s/.test(v as string) && (v as string).length > 0;
+// (a symbol's WINDOW lines, a label's IOPIN: nothing else rides along to be read as items later)
+const extras = (v: unknown, head: string) => (Array.isArray(v) && v.every((l) => str(l) && (l as string).startsWith(`${head} `)) ? { extra: v as string[] } : {});
 /** A pasted item is only taken as one of ours (the clipboard holds whatever was copied anywhere). */
 function shape(v: unknown): Shape | null {
   const it = v as Record<string, unknown>;
   if (!it || typeof it !== "object") return null;
   if (it.t === "wire" && [it.x1, it.y1, it.x2, it.y2].every(num)) return { t: "wire", x1: it.x1 as number, y1: it.y1 as number, x2: it.x2 as number, y2: it.y2 as number };
   if (!num(it.x) || !num(it.y)) return null;
-  const extra = Array.isArray(it.extra) && it.extra.every(str) ? { extra: it.extra as string[] } : {};
-  if (it.t === "flag" && str(it.name)) return { t: "flag", x: it.x as number, y: it.y as number, name: it.name as string, ...extra };
+  if (it.t === "flag" && word(it.name)) return { t: "flag", x: it.x as number, y: it.y as number, name: it.name as string, ...extras(it.extra, "IOPIN") };
   if (it.t === "text" && typeof it.text === "string" && !/[\u0000-\u0009\u000b-\u001f\u007f]/.test(it.text)) return { t: "text", x: it.x as number, y: it.y as number, text: it.text as string, directive: !!it.directive, ...(str(it.align) && { align: it.align as string }) };
   const attrs = it.attrs as Record<string, unknown>;
   if (it.t === "sym" && word(it.sym) && word(it.rot) && attrs && typeof attrs === "object" && Object.keys(attrs).every(word) && Object.values(attrs).every(str)) {
-    return { t: "sym", sym: it.sym as string, x: it.x as number, y: it.y as number, rot: it.rot as string, attrs: { ...(attrs as Record<string, string>) }, ...extra };
+    return { t: "sym", sym: it.sym as string, x: it.x as number, y: it.y as number, rot: it.rot as string, attrs: { ...(attrs as Record<string, string>) }, ...extras(it.extra, "WINDOW") };
   }
   return null;
 }
 
-/** The items copied last (pasting falls back to them where reading the system clipboard is refused). */
-let clip = "";
+/** The items copied last, and whether the system clipboard holds them too (writing it can fail). */
+let clip = "", written = false;
 
 /** Copy (or cut) the selection: to the system clipboard and here. False: nothing selected. */
 export function copySelection(cut = false) {
   const t = copyText();
   if (!t) return false;
   clip = t;
-  void navigator.clipboard?.writeText(t).catch(() => {});
+  written = false;
+  void navigator.clipboard?.writeText(t).then(() => (written = clip === t), () => {});
   if (cut) deleteSelection();
   return true;
 }
 
-/** Paste the system clipboard's items (also from another window); where reading it is refused,
- *  the last copied here. Other text there: nothing. */
+/** Paste the system clipboard's items (also from another window). The last copied here instead
+ *  where the system clipboard cannot be read here at all, or did not take them; other text there,
+ *  or reading declined: nothing. Not if the tool changed while reading (Esc, another tool). */
 export function pasteClipboard() {
-  let read: Promise<string>;
-  try {
-    read = navigator.clipboard.readText(); // (missing on some webviews: throws)
-  } catch {
-    read = Promise.reject();
-  }
-  void read.then((t) => pasteText(t), () => pasteText(clip));
+  const tool = useS.getState().tool;
+  const still = () => useS.getState().tool === tool;
+  if (clip && !written) return void pasteText(clip);
+  if (typeof navigator.clipboard?.readText !== "function") return void (clip && pasteText(clip));
+  void navigator.clipboard.readText().then((t) => still() && pasteText(t), () => {});
 }
 
 /** Paste clipboard text: the items follow the cursor (held at their top-left grid point) until a
@@ -96,6 +97,8 @@ export function pasteText(text: string): boolean {
   if (!its.length) return false;
   const xs = its.flatMap((it) => (it.t === "wire" ? [it.x1, it.x2] : [it.x])), ys = its.flatMap((it) => (it.t === "wire" ? [it.y1, it.y2] : [it.y]));
   const [x0, y0] = [snap(xs.reduce((a, b) => Math.min(a, b))), snap(ys.reduce((a, b) => Math.min(a, b)))];
+  // (a group wider than any schematic: placed anywhere it would leave the core's coordinates)
+  if (xs.some((x) => x - x0 > 2 ** 24) || ys.some((y) => y - y0 > 2 ** 24)) return false;
   useS.setState({ tool: { k: "paste", items: its.map((it) => shifted(it, -x0, -y0)) }, sel: [] });
   return true;
 }

@@ -295,7 +295,7 @@ export function App() {
         if (k === "d") return run(duplicate);
         // copy, cut, paste of items, by key (WebKit sends no copy event without a text selection);
         // selected text anywhere (the log, the netlist): its own copy
-        const text = !!window.getSelection()?.toString();
+        const text = !!sel?.toString();
         if ((k === "c" || k === "x") && !text) return void (copySelection(k === "x") && e.preventDefault());
         if (k === "v" && !text) return e.preventDefault(), pasteClipboard();
         if (k === "s") return run(() => saveFile(e.shiftKey));
