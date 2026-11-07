@@ -330,7 +330,8 @@ pub struct Trace {
     pub x: Vec<f64>,
     pub re: Vec<f64>,
     pub im: Option<Vec<f64>>,
-    /// one value spread over the x range (`0.5`, `vdd/2`): a reference line, drawn on the top pane
+    /// one value spread over the x range (`0.5`, `3.3/2`; not `vdd/2`, that is the node v(vdd)): a
+    /// reference line, drawn on the top pane
     pub constant: bool,
     /// ngspice vector type (sim.h): 3 = voltage, 4 = current
     #[serde(skip)]

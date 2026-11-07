@@ -547,7 +547,7 @@ function BottomPanel() {
   // edge, kept across sessions
   const [share, setShare] = useState(() => {
     const v = Number(localStorage.getItem("nomospice.panelShare"));
-    return v > 0 && v <= 1 - FILL_MIN ? v : PANEL_SHARE;
+    return v > 0 && v < 1 ? v : PANEL_SHARE; // (more than fits: the panel gives way)
   });
   const ref = useRef<HTMLDivElement>(null);
   const resize = (e: React.PointerEvent) => {

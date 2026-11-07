@@ -401,7 +401,7 @@ async function addTraceNow(label: string, expr: string, unit: string, power = fa
   let seq: number, t: Trace;
   do {
     seq = runSeq;
-    t = await fetchTrace({ label, expr, unit, slot: 0, ...(power && { power }) });
+    t = await fetchTrace({ label, expr, unit, slot: 0, power: power || undefined });
     if (seq !== runSeq) await idle(); // a run started meanwhile: evaluate again on its result
   } while (seq !== runSeq);
   if (gen !== docGen || !get().sim?.run || isOp(get().sim)) return;
