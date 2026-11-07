@@ -1411,34 +1411,61 @@ pub fn prepare(text: &str, dir: Option<&std::path::Path>, warnings: &mut Vec<Str
 /// LTspice's random functions as ngspice's, which draw anew each time a deck is read (so each run
 /// of `.step param run 1 100 1` is another sample): `mc(x,tol)`, x·(1 ± tol) uniform, is
 /// `unif(x,tol)`; `flat(x)`, uniform in ±x, is `aunif(0,x)`; `gauss(x)`, normal with σ = x, is
-/// `agauss(0,x,1)` (ngspice's own three-argument gauss stays).
-fn lt_random(text: &str) -> String {
-    if !["mc", "flat", "gauss"].iter().any(|f| contains_ci(text, f)) {
-        return text.to_string();
+/// `agauss(0,x,1)` (ngspice's own three-argument gauss stays). Only where ngspice's parameter
+/// expressions are: in `{…}` and on `.param` lines (not in comments, a B source's expression, a
+/// file name), and not where the deck has a `.func` of that name.
+fn lt_random(text: &str) -> std::borrow::Cow<'_, str> {
+    if !RANDOM.iter().any(|f| contains_ci(text, &format!("{f}("))) {
+        return std::borrow::Cow::Borrowed(text);
     }
-    let (b, mut out, mut k) = (text.as_bytes(), String::with_capacity(text.len()), 0);
+    let own: Vec<String> = text.lines().filter_map(|l| {
+        let t = l.trim_start();
+        t.get(..5).filter(|h| h.eq_ignore_ascii_case(".func")).map(|_| t[5..].trim_start().split(|c: char| c == '(' || c.is_whitespace()).next().unwrap_or("").to_ascii_lowercase())
+    }).collect();
+    let mut out = String::with_capacity(text.len() + 64);
+    for line in text.split_inclusive('\n') {
+        let t = line.trim_start();
+        if t.starts_with('*') {
+            out.push_str(line);
+            continue;
+        }
+        let code = uncommented(line);
+        let param = t.get(..6).is_some_and(|h| h.eq_ignore_ascii_case(".param"));
+        out.push_str(&random_calls(code, param, &own));
+        out.push_str(&line[code.len()..]);
+    }
+    std::borrow::Cow::Owned(out)
+}
+
+const RANDOM: [&str; 3] = ["mc", "flat", "gauss"];
+
+/// `s` with LTspice's random calls translated (see `lt_random`): everywhere if `all`, else in braces.
+fn random_calls(s: &str, all: bool, own: &[String]) -> String {
+    let (b, mut out, mut k, mut braces) = (s.as_bytes(), String::with_capacity(s.len()), 0, 0i32);
     let word = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
     while k < b.len() {
-        let call = ["mc", "flat", "gauss"].into_iter().find(|f| {
-            b.len() >= k + f.len() && b[k..k + f.len()].eq_ignore_ascii_case(f.as_bytes()) && (k == 0 || !word(b[k - 1])) && text[k + f.len()..].trim_start().starts_with('(')
+        let call = (all || braces > 0)
+            .then(|| RANDOM.into_iter().find(|f| {
+                b.len() >= k + f.len() && b[k..k + f.len()].eq_ignore_ascii_case(f.as_bytes()) && (k == 0 || !word(b[k - 1])) && s[k + f.len()..].trim_start().starts_with('(') && !own.iter().any(|o| o == f)
+            }))
+            .flatten();
+        // its arguments: up to the matching parenthesis (an unclosed one: left as it is)
+        let open = call.map(|f| s.len() - s[k + f.len()..].trim_start().len());
+        let close = open.and_then(|open| {
+            let mut depth = 0;
+            s[open..].char_indices().find_map(|(i, c)| {
+                depth += match c { '(' => 1, ')' => -1, _ => 0 };
+                (depth == 0).then_some(open + i)
+            })
         });
-        let Some(f) = call else {
-            let c = text[k..].chars().next().unwrap_or(' ');
+        let (Some(f), Some(open), Some(close)) = (call, open, close) else {
+            let c = s[k..].chars().next().unwrap_or(' ');
+            braces += match c { '{' => 1, '}' => -1, _ => 0 };
             out.push(c);
             k += c.len_utf8();
             continue;
         };
-        // the arguments: up to the matching parenthesis (translated too: nested calls)
-        let open = k + f.len() + (text[k + f.len()..].len() - text[k + f.len()..].trim_start().len());
-        let mut depth = 0;
-        let Some(close) = text[open..].char_indices().find_map(|(i, c)| {
-            depth += match c { '(' => 1, ')' => -1, _ => 0 };
-            (depth == 0).then_some(open + i)
-        }) else {
-            out.push_str(&text[k..]);
-            break;
-        };
-        let inner = lt_random(&text[open + 1..close]);
+        let inner = random_calls(&s[open + 1..close], true, own);
         let args = {
             let mut d = 0;
             inner.chars().filter(|&c| {
@@ -1450,7 +1477,7 @@ fn lt_random(text: &str) -> String {
             ("mc", 2) => out.push_str(&format!("unif({inner})")),
             ("flat", 1) => out.push_str(&format!("aunif(0,{inner})")),
             ("gauss", 1) => out.push_str(&format!("agauss(0,{inner},1)")),
-            _ => out.push_str(&format!("{}({inner})", &text[k..k + f.len()])),
+            _ => out.push_str(&format!("{}({inner})", &s[k..k + f.len()])),
         }
         k = close + 1;
     }
@@ -2558,7 +2585,11 @@ mod tests {
     #[test]
     fn monte_carlo() {
         assert_eq!(lt_random("R1 a b {mc(1k, tol)}\n.param x=flat(1)+Gauss(2*(1+1)) y=gauss(1,0.1,3) amc(1) mc_x"), "R1 a b {unif(1k, tol)}\n.param x=aunif(0,1)+agauss(0,2*(1+1),1) y=gauss(1,0.1,3) amc(1) mc_x");
-        assert_eq!(lt_random("{mc(mc(1k,0.1),0.1)}"), "{unif(unif(1k,0.1),0.1)}", "nested");
+        assert_eq!(lt_random("R1 a b {mc(mc(1k,0.1),0.1)}"), "R1 a b {unif(unif(1k,0.1),0.1)}", "nested");
+        // not in comments (an unclosed one before does not stop the rest), a B source, a file name, a .func's own
+        assert_eq!(lt_random("* FLAT (zero TC\nR1 a b {mc(1k,0.1)} ; gauss (see\nB1 n 0 V=gauss(1)\nV1 a 0 PWL file=\"gauss (1).csv\"\n"), "* FLAT (zero TC\nR1 a b {unif(1k,0.1)} ; gauss (see\nB1 n 0 V=gauss(1)\nV1 a 0 PWL file=\"gauss (1).csv\"\n");
+        assert_eq!(lt_random(".func flat(x) {x*2}\nR1 a b {flat(1)+mc(1,1)}\n"), ".func flat(x) {x*2}\nR1 a b {flat(1)+unif(1,1)}\n");
+        assert!(matches!(lt_random("XU1 a b MC33078\n"), std::borrow::Cow::Borrowed(_)), "nothing to do: no copy");
         // each step of `.step param run …` another sample, within the tolerance
         let _s = SIM.lock();
         let deck = prepare("* mc\nV1 a 0 1\nR1 a b {mc(1k,0.5)}\nR2 b 0 1k\n.op\n.end\n", None, &mut vec![]);
