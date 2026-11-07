@@ -119,7 +119,7 @@ fn call(base: &Path, name: &str, args: &Value) -> Result<Value, String> {
                 "vectors": run.vectors,
                 "values": run.op.iter().map(|(n, re, im, unit)| json!({ "name": n, "re": re, "im": im, "unit": unit })).collect::<Vec<_>>(),
                 // .meas results (value null: ngspice could not evaluate it)
-                "measurements": run.meas.iter().map(|(n, v, info)| json!({ "name": n, "value": v, "info": info })).collect::<Vec<_>>(),
+                "measurements": run.meas.iter().map(|(n, v, info, _)| json!({ "name": n, "value": v, "info": info })).collect::<Vec<_>>(),
                 "warnings": warnings, "traces": traces,
             }))
         }

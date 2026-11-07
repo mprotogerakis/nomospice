@@ -856,7 +856,7 @@ fn ltspice_meas(text: &str, sensors: &[Sensor], warnings: &mut Vec<String>) -> S
 }
 
 /// A line without its inline comment (`;` LTspice, ` $` ngspice).
-fn uncommented(l: &str) -> &str {
+pub fn uncommented(l: &str) -> &str {
     let l = l.split(';').next().unwrap_or("");
     l.find(" $").map_or(l, |k| &l[..k])
 }
@@ -883,11 +883,20 @@ fn meas_statement(s: &str, sensors: &[Sensor], an: &str) -> Result<String, Strin
     // a vector, V(..)/I(..) and ngspice's vdb(..), vm(..) … or a number: ngspice reads it as it is
     // (par() would turn it into a B-source, which knows none of the vdb/vm/… forms)
     const VECTOR: [&str; 14] = ["v", "i", "vdb", "vm", "vp", "vr", "vi", "vg", "idb", "im", "ip", "ir", "ii", "ig"];
+    // V(a), vdb(out) …: a vector ngspice evaluates itself
+    let call = |x: &str| {
+        let l = low(x.trim());
+        l.find('(').is_some_and(|o| VECTOR.contains(&&l[..o]) && l.ends_with(')') && o + 1 < l.len() && !l[o + 1..l.len() - 1].contains(['(', ')']))
+    };
     let simple = |x: &str| {
         let (x, l) = (x.trim(), low(x.trim()));
-        let call = l.find('(').is_some_and(|o| VECTOR.contains(&&l[..o]) && l.ends_with(')') && o + 1 < l.len() && !l[o + 1..l.len() - 1].contains(['(', ')']));
         let par = l.starts_with("par(") && l.ends_with(')'); // already ngspice's form
-        call || par || (!x.is_empty() && x.chars().all(|c| c.is_ascii_alphanumeric() || "_#.:".contains(c)))
+        call(x) || par || (!x.is_empty() && x.chars().all(|c| c.is_ascii_alphanumeric() || "_#.:".contains(c)))
+    };
+    // a quantity already in par('…') form, unwrapped (no par() in a par())
+    let unpar = |x: &str| -> String {
+        let x = x.trim();
+        if low(x).starts_with("par(") && x.ends_with(')') { x[4..x.len() - 1].trim().trim_matches('\'').to_string() } else { x.to_string() }
     };
     let number = |v: &str| {
         let v = v.trim();
@@ -966,10 +975,7 @@ fn meas_statement(s: &str, sensors: &[Sensor], an: &str) -> Result<String, Strin
                         return Err(format!("{}: in AC, ngspice takes only a number as the level ({v}), and would measure at its first number: left out", out.get(2).map_or(".meas", |n| n.as_str())));
                     }
                     Some(v) if !x.is_empty() && !number(&v) => {
-                        // (a quantity already in par('…') form is unwrapped: no par() in a par())
-                        let inner = low(&x).starts_with("par(") && x.ends_with(')');
-                        let q = if inner { x[4..x.len() - 1].trim().trim_matches('\'') } else { x.as_str() };
-                        out.push(par(&format!("{q}-({v})")));
+                        out.push(par(&format!("{}-({v})", unpar(&x))));
                         match val_at {
                             Some(j) => toks[j] = "VAL=0".into(),
                             None => out.push("VAL=0".into()),
@@ -990,16 +996,17 @@ fn meas_statement(s: &str, sensors: &[Sensor], an: &str) -> Result<String, Strin
                 }
                 let w = toks[start..i].join("");
                 match w.split_once('=') {
-                    Some((_, b)) if typ == "ac" && !(number(b) || simple(b)) => {
+                    Some((_, b)) if typ == "ac" && !(number(b) || call(b)) => {
                         return Err(format!("{}: in AC, ngspice takes only a number or a vector as the level ({b}), and would measure at its first number: left out", out.get(2).map_or(".meas", |n| n.as_str())));
                     }
                     Some((a, b)) => {
                         let a = if typ == "ac" { ac_vector(a).unwrap_or(a.to_string()) } else { a.to_string() };
-                        // ngspice reads `vector=number` and `vector=vector` itself (and AC stays as written)
-                        if simple(&a) && (number(b) || simple(b)) || typ == "ac" {
+                        // ngspice reads `vector=number` and `vector=vector` itself (and AC stays as written);
+                        // a bare name on the right is a .param in LTspice: par() resolves it
+                        if simple(&a) && (number(b) || call(b)) || typ == "ac" {
                             out.push(format!("WHEN {a}={b}"));
                         } else {
-                            out.push(format!("WHEN {}=0", par(&format!("{a}-({b})"))));
+                            out.push(format!("WHEN {}=0", par(&format!("{}-({b})", unpar(&a)))));
                         }
                     }
                     None => out.push(format!("WHEN {w}")),
@@ -1012,7 +1019,7 @@ fn meas_statement(s: &str, sensors: &[Sensor], an: &str) -> Result<String, Strin
     Ok(out.join(" "))
 }
 
-const TYPES_MEAS: [&str; 7] = ["tran", "ac", "dc", "op", "noise", "tf", "sp"];
+pub const TYPES_MEAS: [&str; 7] = ["tran", "ac", "dc", "op", "noise", "tf", "sp"];
 
 /// `I(R1)` → `i(vsense_r1)` for the parts that have a current sensor (LTspice measures part
 /// currents directly; ngspice only branch currents).
@@ -1856,6 +1863,8 @@ mod tests {
         assert_eq!(m(".meas tran t TRIG V(in)=0.5 * V(vdd) RISE=1"), ".meas tran t TRIG par('V(in)-(0.5*V(vdd))') VAL=0 RISE=1");
         assert_eq!(meas_statement(".meas x AVG V(a)", &[], "op").unwrap(), ".meas x AVG V(a)", "ngspice measures tran/ac/dc/sp only");
         assert_eq!(m(".meas tran t TRIG par('v(a)') VAL=0.5 * V(vdd) RISE=1"), ".meas tran t TRIG par('v(a)-(0.5*V(vdd))') VAL=0 RISE=1", "no par() in par(), nothing cut");
+        assert_eq!(m(".meas tran w WHEN par('v(a)*v(b)')=0.5*V(vdd)"), ".meas tran w WHEN par('v(a)*v(b)-(0.5*V(vdd))')=0", "WHEN too");
+        assert_eq!(m(".meas tran t WHEN V(out)=vth"), ".meas tran t WHEN par('V(out)-(vth)')=0", "a .param level resolves in par()");
         assert_eq!(m(".meas ac p FIND ph(V(out)) AT=1k"), ".meas ac p FIND ph(V(out)) AT=1k", "degrees vs radians: not mapped");
         let mut w = vec![];
         let skipped = ltspice_meas(".ac dec 10 1 1k\n.meas ac f1 TRIG vm(out) VAL=0.5*vm(in) TARG vm(out) VAL=1\n", &[], &mut w);

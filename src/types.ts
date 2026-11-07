@@ -75,8 +75,9 @@ export interface Run {
   op: [string, number, number, string][];
   /** ngspice gave up part-way: the data is partial */
   aborted: boolean;
-  /** `.meas` results: name, value (null: failed), the rest of ngspice's line (trig/targ, from/to) */
-  meas: [string, number | null, string][];
+  /** `.meas` results: name, value (null: failed), the rest of ngspice's line (trig/targ, from/to),
+   *  whether the value is on the x axis (a TRIG/TARG span, a WHEN point) */
+  meas: [string, number | null, string, boolean][];
 }
 
 export interface Sim {

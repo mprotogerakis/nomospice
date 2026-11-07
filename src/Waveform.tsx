@@ -323,22 +323,13 @@ export const Waveform = memo(function Waveform() {
 /** `.meas` results of the run (ngspice reports them in the log; LTspice in its error log). */
 export function Measurements({ xUnit }: { xUnit: string }) {
   const meas = useS((s) => s.sim?.run?.meas);
-  const deck = useS((s) => s.sim?.simulated ?? "");
-  // results on the x axis: TRIG/TARG (a span) and WHEN (a point) — not FIND/AVG … (a y value)
-  const atX = useMemo(() => new Set(deck.replace(/\n\s*\+/g, " ").split("\n").flatMap((l) => {
-    const t = l.trim().split(/\s+/);
-    if (!/^\.meas/i.test(t[0] ?? "")) return [];
-    const k = /^(tran|ac|dc|sp|op|noise|tf)$/i.test(t[1] ?? "") ? 2 : 1; // the name, after an optional type
-    const w = t.slice(k + 1);
-    return w.some((x) => /^when$/i.test(x)) && !w.some((x) => /^(find|deriv|derivative)$/i.test(x)) ? [t[k].toLowerCase()] : [];
-  })), [deck]);
   if (!meas?.length) return null;
   return (
     <div className="border-b border-border px-2 py-1 font-mono text-2xs">
       <div className="text-text-tertiary">Measurements (.meas)</div>
-      {meas.map(([name, v, info], k) => (
+      {meas.map(([name, v, info, onX], k) => (
         <div key={`${name}${k}`} className="truncate" title={v == null ? "ngspice could not evaluate it: see the log (⌘L)" : info}>
-          <span className="text-text">{name}</span> = {v == null ? <span className="text-status-danger">failed</span> : si(v, /targ=|trig=/.test(info) || atX.has(name.toLowerCase()) ? xUnit : "", 5)}
+          <span className="text-text">{name}</span> = {v == null ? <span className="text-status-danger">failed</span> : si(v, onX ? xUnit : "", 5)}
         </div>
       ))}
     </div>
@@ -360,7 +351,7 @@ const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot }: { trac
   const dx = a != null && b != null ? b - a : null;
   // average, RMS, integral (LTspice: ctrl-click a trace label) between the cursors, else over what is shown
   const zoom = useS((s) => s.plot.zoom);
-  const [lo, hi] = dx ? [Math.min(a!, b!), Math.max(a!, b!)] : zoom ?? [Math.min(xs[0], xs[xs.length - 1]), Math.max(xs[0], xs[xs.length - 1])];
+  const [lo, hi] = dx != null ? [Math.min(a!, b!), Math.max(a!, b!)] : zoom ?? [Math.min(xs[0], xs[xs.length - 1]), Math.max(xs[0], xs[xs.length - 1])];
   // (time and DC sweeps: over a frequency axis an average or integral of a magnitude means little)
   const stats = useMemo(() => xUnit === "Hz" ? [] : traces.flatMap((t) => panes.flatMap((p) => p.series.filter((s) => s.t === t && p.unit !== "dB" && p.unit !== "°").map((s) => ({ t, unit: p.unit, ...integrate(xs, s.y, lo, hi) })))),
     [traces, panes, xs, lo, hi, xUnit]); // not per hover move
@@ -404,7 +395,7 @@ const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot }: { trac
       )}
       {!!stats.length && hi > lo && (
         <div className="border-b border-border px-2 py-1 font-mono text-2xs text-text-secondary">
-          <div className="text-text-tertiary">{dx ? "A–B" : zoom ? "shown range" : "whole run"}: average · RMS · integral</div>
+          <div className="text-text-tertiary">{dx != null ? "A–B" : zoom ? "shown range" : "whole run"}: average · RMS · integral</div>
           {stats.map(({ t, unit, avg, rms, area }, k) => (
             <div key={`${t.expr}${k}`} className="truncate" title={`${t.label} from ${si(lo, xUnit)} to ${si(hi, xUnit)}`}>
               {t.label}: {si(avg, unit)} · {si(rms, unit)} · {si(area, unit && xUnit ? `${unit}·${xUnit}` : unit || xUnit)}

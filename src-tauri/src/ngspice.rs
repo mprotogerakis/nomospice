@@ -267,24 +267,35 @@ pub struct Run {
     pub op: Vec<(String, f64, f64, String)>,
     /// ngspice gave up part-way (e.g. "Timestep too small"): the data is partial.
     pub aborted: bool,
-    /// `.meas` results: name, value (None: failed), the rest of ngspice's line (trig/targ, from/to)
-    pub meas: Vec<(String, Option<f64>, String)>,
+    /// `.meas` results: name, value (None: failed), the rest of ngspice's line (trig/targ, from/to),
+    /// whether the value is on the x axis (a TRIG/TARG span, a WHEN point)
+    pub meas: Vec<(String, Option<f64>, String, bool)>,
     pub log: Vec<String>,
 }
 
-/// The names of the deck's `.meas` statements (lowercase, as ngspice reports them).
-fn meas_names(deck: &str) -> std::collections::HashSet<String> {
-    deck.lines().filter_map(|l| {
+/// The deck's `.meas` statements (their + lines joined): name (lowercase, as ngspice reports it) →
+/// whether the result is a point on the x axis (WHEN, not FIND/DERIV … WHEN).
+fn meas_names(deck: &str) -> std::collections::HashMap<String, bool> {
+    let mut stmts: Vec<String> = vec![];
+    for l in deck.lines().map(str::trim) {
+        match l.strip_prefix('+') {
+            Some(more) if !stmts.is_empty() => stmts.last_mut().unwrap().push_str(&format!(" {more}")),
+            _ => stmts.push(l.to_string()),
+        }
+    }
+    stmts.iter().filter_map(|l| {
         let t: Vec<String> = l.split_whitespace().map(str::to_ascii_lowercase).collect();
-        let typed = t.get(1).is_some_and(|w| ["tran", "ac", "dc", "sp", "op", "noise", "tf"].contains(&w.as_str()));
-        t.first().filter(|w| w.starts_with(".meas")).and_then(|_| t.get(if typed { 2 } else { 1 }).cloned())
+        let typed = t.get(1).is_some_and(|w| crate::schematic::TYPES_MEAS.contains(&w.as_str()));
+        let k = if typed { 2 } else { 1 };
+        let at_x = t.iter().skip(k + 1).any(|w| w == "when") && !t.iter().skip(k + 1).any(|w| ["find", "deriv", "derivative"].contains(&w.as_str()));
+        t.first().filter(|w| w.starts_with(".meas")).and_then(|_| Some((t.get(k)?.clone(), at_x)))
     }).collect()
 }
 
 /// The `.meas` results in ngspice's report (`name = value targ= … trig= …`, `… failed!`), for the
 /// deck's measurement `names` only: ngspice prints failure messages before the results, and other
 /// `x = y` lines are not results.
-fn measurements(log: &[String], names: &std::collections::HashSet<String>) -> Vec<(String, Option<f64>, String)> {
+fn measurements(log: &[String], names: &std::collections::HashMap<String, bool>) -> Vec<(String, Option<f64>, String, bool)> {
     let mut out = vec![];
     let mut on = false;
     for t in log.iter().map(|l| l.trim()) {
@@ -295,21 +306,24 @@ fn measurements(log: &[String], names: &std::collections::HashSet<String>) -> Ve
         if !on || t.is_empty() {
             continue;
         }
-        let known = |n: &str| names.contains(&n.to_ascii_lowercase());
+        let at_x = |n: &str| names.get(&n.to_ascii_lowercase()).copied();
         // `.meas tran x … failed!`, `meas x failed!` or `x failed!`
         if let Some(stmt) = t.strip_suffix("failed!") {
             let w: Vec<&str> = stmt.split_whitespace().collect();
-            let name = if w.first().is_some_and(|f| f.starts_with('.')) { w.get(2) } else { w.last() };
-            if let Some(name) = name.filter(|n| known(n)) {
-                out.push((name.to_string(), None, "failed".into()));
+            let typed = w.get(1).is_some_and(|t| crate::schematic::TYPES_MEAS.contains(&t.to_ascii_lowercase().as_str()));
+            let name = if w.first().is_some_and(|f| f.starts_with('.')) { w.get(if typed { 2 } else { 1 }) } else { w.last() };
+            if let Some((name, x)) = name.and_then(|n| Some((n, at_x(n)?))) {
+                out.push((name.to_string(), None, "failed".into(), x));
             }
             continue;
         }
         // `name = <number> …` (also a name like error_pct)
-        let result = t.split_once('=').filter(|(n, _)| known(n.trim())).and_then(|(n, rest)| {
+        let result = t.split_once('=').and_then(|(n, rest)| {
+            let x = at_x(n.trim())?;
             let rest = rest.trim();
             let (v, info) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
-            Some((n.trim().to_string(), Some(v.trim_end_matches(',').parse::<f64>().ok()?), info.trim().to_string()))
+            // a span (trig/targ) or a WHEN point lies on the x axis
+            Some((n.trim().to_string(), Some(v.trim_end_matches(',').parse::<f64>().ok()?), info.trim().to_string(), x || info.contains("targ=")))
         });
         out.extend(result);
     }
@@ -388,7 +402,7 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
     let sensors = &sensors[..];
     // ngspice makes a helper source per par() in its output lines, named pa_00, pa_01 …
     let mut output = false; // in an output statement (its + lines count too)
-    let pars = netlist.lines().map(|l| l.trim_start().to_ascii_lowercase()).filter(|l| {
+    let pars = netlist.lines().map(|l| crate::schematic::uncommented(l).trim_start().to_ascii_lowercase()).filter(|l| {
         if !l.starts_with('+') && !l.is_empty() && !l.starts_with('*') {
             output = [".meas", ".print", ".plot", ".four", ".save"].iter().any(|d| l.starts_with(d));
         }
@@ -504,10 +518,12 @@ mod tests {
     fn measurement_report() {
         let log: Vec<String> = ["Measurements for Transient Analysis", "error_pct           =  1.20000e-02", "Error: measure  w  (WHEN) : out of interval", "    Analysis is not possible.", " meas w failed!", ".meas tran p avg -i(v1) failed!", "tplh                =  5.4e-10 targ=  3.0e-08 trig=  3.0e-08", "tnom = 27"]
             .map(String::from).into();
-        let names = meas_names(".meas tran error_pct AVG x\n.meas tran w WHEN v(a)=1\n.MEAS p AVG -i(v1)\n.meas tran tplh TRIG …");
+        let names = meas_names(".meas tran error_pct AVG x\n.meas tran\n+ w WHEN v(a)=1\n.MEAS p AVG -i(v1)\n.meas tran tplh TRIG …");
+        assert_eq!(names.get("w"), Some(&true), "a name on a + line; WHEN is on the x axis");
         let m = measurements(&log, &names);
         let names: Vec<&str> = m.iter().map(|x| x.0.as_str()).collect();
         assert_eq!(names, ["error_pct", "w", "p", "tplh"], "{m:?}");
+        assert!(m[3].3 && !m[0].3, "trig/targ on the x axis, AVG not");
         assert_eq!(m[3].2, "targ=  3.0e-08 trig=  3.0e-08");
     }
 
