@@ -778,8 +778,10 @@ const paramTokens = (line: string) => {
   for (let i = 0; i < t.length; i++) {
     let x = t[i];
     if (!x.includes("=") && t[i + 1]?.startsWith("=")) x += t[++i];
-    // (a value: a number or an expression, {a==1?1u:2u} too; not the next key, w =1u, nor a flag, off)
-    if (x.endsWith("=") && /^[-+.\d{('"]/.test(t[i + 1] ?? "")) x += t[++i];
+    // (a value: a number, a name, an expression, {a==1?1u:2u}; not the next key, `w=1u` or
+    // `w =1u`, nor a flag, off)
+    const next = t[i + 1];
+    if (x.endsWith("=") && next && !/^[A-Za-z_]\w*=/.test(next) && !t[i + 2]?.startsWith("=") && !/^(off|on)$/i.test(next)) x += t[++i];
     out.push(x);
   }
   return out;
@@ -809,4 +811,5 @@ export function balanced(s: string) {
 
 /** A typed parameter value as it can go into an instance line, or why not yet: one item, every
  *  brace and quote closed (`{2*` while typing would swallow the rest of the line). */
-export const paramValue = (v: string): string | null => (!balanced(v) ? "not closed yet" : tokens(v).length > 1 ? "one value, no blanks (or in {…})" : null);
+export const paramValue = (v: string): string | null =>
+  !balanced(v) ? "not closed yet" : tokens(v).length > 1 ? "one value, no blanks (or in {…})" : /^[A-Za-z_]\w*\s*=/.test(v.trim()) ? "a value, not another parameter's k=" : null;

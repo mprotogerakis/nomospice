@@ -266,6 +266,8 @@ assert.equal(setParam("w=1u", "l", "{2 * Lmin}"), "w=1u l={2 * Lmin}", "blanks i
 assert.ok(!balanced("{2*") && !balanced("'a") && balanced("{2*(a+b)}") && balanced("1u"));
 assert.equal(setParam("l= w =1u", "l", "2u"), "l=2u w=1u", "an empty l before a spaced w");
 assert.equal(setParam("l= off", "l", "1u"), "l=1u off", "a flag is no value");
-assert.ok(paramValue("1u w=3u") && paramValue("{2*") && !paramValue("{a * b}") && !paramValue(""));
+assert.ok(paramValue("1u w=3u") && paramValue("{2*") && paramValue("w=3u") && !paramValue("{a * b}") && !paramValue("{a==b?1:2}") && !paramValue(""));
+assert.equal(getParam("l= Lmin w=1u", "l"), "Lmin", "a name after l=");
+assert.equal(setParam("l= Lmin w=1u", "l", "2u"), "l=2u w=1u");
 
 console.log("spice-check: ok");

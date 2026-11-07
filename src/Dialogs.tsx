@@ -40,6 +40,7 @@ function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: 
   // the other attributes (LTspice's attribute editor: Prefix X to call a subcircuit, SpiceModel …)
   const [extra, setExtra] = useState<string[][]>(() => (item.t === "sym" ? Object.entries(item.attrs).filter(([k]) => !SHOWN.includes(k)) : []));
   const done = () => {
+    if (Object.values(drafts).some((d) => d != null)) return; // (a field's value not written yet: said under it)
     // empty attributes go, except an emptied SpiceLine over a symbol default (missing = the default);
     // sorted as the .asc reader gives them, so an unchanged part compares equal
     if (it.t === "sym") {
@@ -99,9 +100,11 @@ function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: 
                 const before = has("Value", it.attrs.Value?.trim() ? it.attrs.Value : def?.value ?? "");
                 const after = [...has("SpiceLine", it.attrs.SpiceLine ?? def?.spice_line ?? ""), ...has("SpiceLine2", row("spiceline2"))];
                 let note = hint;
-                if (after.length) note = `${after.join("; ")}, which comes later on the line and wins`;
+                if (after.length) note = `${after[after.length - 1]}, which comes later on the line and wins`;
                 else if (before.length) note = v ? `${before[0]}; this one wins` : `${before[0]}, in effect`;
-                return <NumField key={k} label={label} value={v} set={set} unit={u} placeholder={k === "m" || k === "area" ? "1" : "model default"} hint={pending ? `⚠ ${pending}` : note} />;
+                // (not yet written: said first, over a number's own warning)
+                const help = numHelp(v, u, set);
+                return <TextField key={k} label={label} value={v} set={set} unit={u} placeholder={k === "m" || k === "area" ? "1" : "model default"} info={help.info} warn={pending ?? (help.warn || undefined)} hint={note} />;
               })}
               <TextField label="Value2" value={attr("Value2")} set={(v) => (setDrafts({}), setAttr("Value2", v))} hint={INSTANCE[prefix] ? "the instance parameters as SPICE reads them (others too: off, temp=…)" : undefined} />
               {/* the symbol's default shows as the value: emptying it visibly removes it (an empty attribute) */}
