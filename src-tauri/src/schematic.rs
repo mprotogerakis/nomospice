@@ -1559,14 +1559,20 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool) -> Netlist {
     }).collect();
     let mut seen = HashSet::new();
     let mut named: HashSet<String> = HashSet::new(); // current names given so far (lowercase)
-    // how many part pins each net reaches: a subcircuit pin alone on its net (an open NC pin) gets no
-    // sensor, which would float with a port the subcircuit may not use (singular matrix)
-    let mut pin_use: HashMap<String, usize> = HashMap::new();
-    for (it, nets) in items.iter().zip(&nl.nets) {
-        if matches!(it, Item::Sym { .. }) {
-            nets.iter().for_each(|n| *pin_use.entry(n.clone()).or_default() += 1);
+    // which parts each net reaches, and which nets have a label: a subcircuit pin on a net of its own
+    // part only, without a label a directive could use (open NC pins, two tied together) gets no
+    // sensor, which would float with ports the subcircuit may not use (singular matrix)
+    let mut owners: HashMap<&str, HashSet<usize>> = HashMap::new();
+    let mut labelled: HashSet<&str> = HashSet::new();
+    for (k, (it, nets)) in items.iter().zip(&nl.nets).enumerate() {
+        match it {
+            Item::Sym { .. } => nets.iter().for_each(|n| _ = owners.entry(n.as_str()).or_default().insert(k)),
+            Item::Flag { .. } => labelled.extend(nets.iter().map(String::as_str)),
+            _ => {}
         }
     }
+    let open = |k: usize, net: &str| net != "0" && !labelled.contains(net) && owners.get(net).is_none_or(|o| o.iter().all(|&j| j == k));
+    let open_pins: Vec<Vec<bool>> = nl.nets.iter().enumerate().map(|(k, nets)| nets.iter().map(|n| open(k, n)).collect()).collect();
     // drawn names more than one part has (T1 a diode and T1 a resistor): those parts go by their netlist names
     let mut drawn: HashMap<String, usize> = HashMap::new();
     for it in items {
@@ -1662,7 +1668,7 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool) -> Netlist {
             nl.pin_currents[i][0] = format!("I({inst})"); // a source's own branch current (ngspice: i(v1), by the netlist's name)
         }
         for k in sensed {
-            if prefix == 'X' && nl.nets[i][k] != "0" && pin_use.get(&nl.nets[i][k]).copied().unwrap_or(0) < 2 {
+            if prefix == 'X' && open_pins[i][k] {
                 continue; // (open: no current to measure)
             }
             // reserved in both builds (identical names), never clashing with the user's own
@@ -2155,6 +2161,17 @@ mod tests {
         let nl = netlist_for_sim(&parse_asc(&src), &mut Library::builtin());
         let q = nl.insts.iter().position(|n| n == "Q1").unwrap();
         assert_eq!(nl.pin_currents[q], ["Ic(Q1)", "Ib(Q1)", "Ie(Q1)"], "{}", nl.text);
+        // a subcircuit: a current per connected pin, none on open ones (they would float), no I(U1)
+        let follower = "WIRE -32 48 -32 0\nWIRE -32 0 48 0\nWIRE 48 0 48 64\nWIRE 48 64 32 64\nWIRE -112 80 -32 80\nFLAG -112 160 0\nFLAG 48 64 out\nSYMBOL Opamps\\opamp 0 0 R0\nSYMATTR InstName U1\nSYMBOL voltage -112 64 R0\nSYMATTR InstName V1\nSYMATTR Value 2\nTEXT 0 200 Left 2 !.op\n";
+        let f = netlist_for_sim(&parse_asc(follower), &mut Library::builtin());
+        let u = f.insts.iter().position(|n| n == "XU1").unwrap();
+        assert_eq!(f.pin_currents[u], ["Ix(U1:In-)", "Ix(U1:In+)", "Ix(U1:Out)"], "{}", f.text);
+        let lone = netlist_for_sim(&parse_asc("SYMBOL Opamps\\opamp 0 0 R0\nSYMATTR InstName U1\nTEXT 0 200 Left 2 !.op\n"), &mut Library::builtin());
+        assert!(!lone.text.contains("Vsense") && lone.pin_currents[0].iter().all(String::is_empty), "{}", lone.text);
+        let fr = crate::ngspice::run(&prepare(&f.text, None, &mut vec![]).with_sensors(f.sensors.clone())).unwrap();
+        let out = fr.op.iter().find(|o| o.0 == "Ix(U1:Out)").map(|o| o.1);
+        assert!(out.is_some_and(|i| i.abs() < 1e-6), "a follower without load: {:?}", fr.op);
+        assert!(crate::ngspice::trace("I(U1)", &fr.scale, fr.id).unwrap_err().contains("per pin"));
         // a part drawn as D1 that calls a subcircuit (netlist XD1): named as drawn
         let z = netlist_for_sim(&parse_asc(EXAMPLES.iter().find(|e| e.0 == "zener_prefix").unwrap().1), &mut Library::builtin());
         let d = z.insts.iter().position(|n| n == "XD1").unwrap();
