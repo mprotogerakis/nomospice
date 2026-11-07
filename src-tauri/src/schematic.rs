@@ -319,7 +319,7 @@ macro_rules! examples {
 }
 pub const EXAMPLES: &[(&str, &str)] =
     examples!("rc_transient", "rc_bode", "opamp_inverting", "ce_amplifier", "diode_sweep", "bjt_curves", "noise_rc", "phasor_rlc", "pz_sallen_key",
-        "meas_rc_timing", "buck_converter", "rectifier_rms", "analysis_tabs", "zener_prefix");
+        "meas_rc_timing", "buck_converter", "rectifier_rms", "analysis_tabs", "zener_prefix", "step_rc");
 
 /// LTspice writes ASCII, Latin-1 or UTF-16LE.
 pub fn decode(bytes: &[u8]) -> String {
@@ -463,6 +463,8 @@ pub struct Netlist {
     /// Sensors of the simulated netlist (names are reserved in both builds, so they match).
     #[serde(skip)]
     pub sensors: Vec<Sensor>,
+    /// The `.step` statements (`+` lines joined): ngspice has none, the run steps (see `Prepared::steps`).
+    pub steps: Vec<String>,
     pub warnings: Vec<String>,
 }
 
@@ -766,7 +768,7 @@ fn directive(line: &str, warnings: &mut Vec<String>) -> Option<String> {
 }
 
 /// A netlist that went through [`prepare`]; the only thing `ngspice::run` accepts.
-pub struct Prepared(String, Vec<Sensor>);
+pub struct Prepared(String, Vec<Sensor>, Vec<String>);
 
 impl Prepared {
     pub fn text(&self) -> &str {
@@ -788,17 +790,162 @@ impl Prepared {
         let text = deck_lines(&self.0).iter().map(|l| {
             if !l.skip && OTHER.contains(&l.head.as_str()) { format!("* {}", l.line) } else { l.line.to_string() }
         }).collect::<Vec<_>>().join("\n") + "\n";
-        Prepared(text, self.1.clone())
+        Prepared(text, self.1.clone(), vec![]) // (one .pz per sweep step: no .step)
     }
     /// This deck with the value at `spans` set to `value` (one step of a sweep such as a root locus).
     pub fn at(&self, spans: &[(usize, usize)], value: f64) -> Prepared {
-        Prepared(splice(&self.0, spans, value), self.1.clone())
+        Prepared(splice(&self.0, spans, value), self.1.clone(), vec![]) // (a sweep step: one run, no .step)
     }
 
 
     pub fn sensors(&self) -> &[Sensor] {
         &self.1
     }
+
+    /// The deck once per `.step` combination, the first `.step` varying fastest, each with its
+    /// label (`R=1k temp=27`). Empty: no `.step`.
+    pub fn steps(&self) -> Result<Vec<(String, Prepared)>, String> {
+        if self.2.is_empty() {
+            return Ok(vec![]);
+        }
+        let steps = self.2.iter().map(|s| parse_step(s)).collect::<Result<Vec<_>, _>>()?;
+        if steps.len() > 3 {
+            return Err("at most three .step statements (nested)".into());
+        }
+        let total = steps.iter().map(|s| s.values.len()).product::<usize>();
+        if total > MAX_STEPS {
+            return Err(format!("{total} steps: at most {MAX_STEPS}"));
+        }
+        (0..total).map(|mut k| {
+            let (mut text, mut label) = (self.0.clone(), vec![]);
+            for s in &steps {
+                let v = s.values[k % s.values.len()];
+                k /= s.values.len();
+                text = s.apply(&text, v)?;
+                label.push(format!("{}={}", s.name(), short_num(v)));
+            }
+            Ok((label.join(" "), Prepared(text, self.1.clone(), vec![])))
+        }).collect()
+    }
+}
+
+/// More steps are refused (each is a full run, its results kept until the next run).
+const MAX_STEPS: usize = 1000;
+
+/// One `.step` statement: what it varies, and its values.
+#[derive(Debug, PartialEq)]
+pub struct Step {
+    what: Stepped,
+    pub values: Vec<f64>,
+}
+
+#[derive(Debug, PartialEq)]
+enum Stepped {
+    Param(String),
+    Source(String),
+    Temp,
+}
+
+impl Step {
+    fn name(&self) -> &str {
+        match &self.what {
+            Stepped::Param(n) | Stepped::Source(n) => n,
+            Stepped::Temp => "temp",
+        }
+    }
+
+    /// `text` with this step at `v`: the `.param` set (added if the deck has none), the source's
+    /// DC value replaced, or `.options temp=`.
+    fn apply(&self, text: &str, v: f64) -> Result<String, String> {
+        match &self.what {
+            Stepped::Param(n) => {
+                let spans = param_spans(text, n);
+                Ok(if spans.is_empty() { before_end(text, &format!(".param {n}={v:e}")) } else { splice(text, &spans, v) })
+            }
+            Stepped::Temp => Ok(before_end(text, &format!(".options temp={v:e}"))),
+            Stepped::Source(n) => {
+                let low = n.to_ascii_lowercase();
+                let line = deck_lines(text).into_iter().find(|l| l.top && l.low.split_whitespace().next() == Some(low.as_str()))
+                    .ok_or_else(|| format!("`.step {n}`: there is no source {n}"))?;
+                // `V1 a b 5` or `V1 a b DC 5 …`: the DC value (a SINE or PULSE has none to step)
+                let sp = token_spans(line.line);
+                let k = if sp.get(3).is_some_and(|&(a, e)| line.line[a..e].eq_ignore_ascii_case("dc")) { 4 } else { 3 };
+                let (a, e) = *sp.get(k).filter(|&&(a, e)| spice_num(&line.line[a..e]).is_some() || line.line[a..e].starts_with('{'))
+                    .ok_or_else(|| format!("`.step {n}`: {n} has no DC value to step (a number, or DC <value>)"))?;
+                Ok(splice(text, &[(line.start + a, line.start + e)], v))
+            }
+        }
+    }
+}
+
+/// LTspice's `.step`: `[lin|oct|dec] param <name> <start> <stop> <increment|points>`,
+/// `… param <name> list <value>…`, a source (`.step V1 0 5 1`) or `temp`.
+pub fn parse_step(stmt: &str) -> Result<Step, String> {
+    let toks: Vec<&str> = spice_tokens(uncommented(stmt)).into_iter().skip(1).filter(|t| *t != "+").collect();
+    let mut t = toks.iter().copied().peekable();
+    let mode = match t.peek().map(|m| m.to_ascii_lowercase()) {
+        Some(m) if ["lin", "oct", "dec"].contains(&m.as_str()) => (t.next(), m).1,
+        _ => "lin".into(),
+    };
+    let what = match t.next() {
+        Some(w) if w.eq_ignore_ascii_case("param") => Stepped::Param(t.next().ok_or(format!("`{stmt}`: no parameter name"))?.to_string()),
+        Some(w) if w.eq_ignore_ascii_case("temp") => Stepped::Temp,
+        Some(w) if w.to_ascii_lowercase().starts_with(['v', 'i']) && !w.contains('(') => Stepped::Source(w.to_string()),
+        Some(w) => return Err(format!("`{stmt}`: stepping {w} (a model parameter) is not supported: give the model a {{parameter}} and step that")),
+        None => return Err(format!("`{stmt}`: nothing to step")),
+    };
+    let rest: Vec<&str> = t.collect();
+    let num = |s: &str| spice_num(s).ok_or_else(|| format!("`{stmt}`: `{s}` is not a number"));
+    let values: Vec<f64> = if rest.first().is_some_and(|r| r.eq_ignore_ascii_case("list")) {
+        rest[1..].iter().map(|s| num(s)).collect::<Result<_, _>>()?
+    } else {
+        let &[a, b, c] = &rest[..] else { return Err(format!("`{stmt}`: needs start, stop and step (or list <values>)")) };
+        let (a, b, c) = (num(a)?, num(b)?, num(c)?);
+        if mode == "lin" {
+            if c == 0.0 || (b - a) * c < 0.0 {
+                return Err(format!("`{stmt}`: the step does not lead from start to stop"));
+            }
+            let n = ((b - a) / c + 1e-9).floor() as usize + 1;
+            (0..n.min(MAX_STEPS + 1)).map(|k| a + k as f64 * c).collect()
+        } else {
+            if a <= 0.0 || b < a || c < 1.0 {
+                return Err(format!("`{stmt}`: oct/dec need 0 < start ≤ stop and at least 1 point"));
+            }
+            let ratio = (if mode == "dec" { 10f64 } else { 2.0 }).powf(1.0 / c);
+            let n = ((b / a).ln() / ratio.ln() + 1e-9).floor() as usize + 1;
+            (0..n.min(MAX_STEPS + 1)).map(|k| a * ratio.powi(k as i32)).collect()
+        }
+    };
+    if values.is_empty() {
+        return Err(format!("`{stmt}`: no values"));
+    }
+    Ok(Step { what, values })
+}
+
+/// Every top-level `.param` definition of `name` (byte spans of its value).
+fn param_spans(text: &str, name: &str) -> Vec<(usize, usize)> {
+    deck_lines(text).iter().filter(|l| l.top && l.param())
+        .flat_map(|l| param_defs(l.line, &l.low).into_iter().filter(|(n, _)| n.eq_ignore_ascii_case(name)).map(move |(_, (a, e))| (l.start + a, l.start + e)))
+        .collect()
+}
+
+/// `text` with `line` added before its `.end` (or at its end).
+fn before_end(text: &str, line: &str) -> String {
+    match deck_lines(text).iter().find(|l| l.top && (l.low.trim() == ".end" || l.low.starts_with(".end "))) {
+        Some(e) => format!("{}{line}\n{}", &text[..e.start], &text[e.start..]),
+        None => format!("{}{}{line}\n", text, if text.ends_with('\n') || text.is_empty() { "" } else { "\n" }),
+    }
+}
+
+/// A step value as people write it: 1k, 2.2u, 100n, 27.
+fn short_num(v: f64) -> String {
+    if v == 0.0 || !v.is_finite() {
+        return format!("{v}");
+    }
+    const SI: [(f64, &str); 9] = [(1e12, "T"), (1e9, "G"), (1e6, "Meg"), (1e3, "k"), (1.0, ""), (1e-3, "m"), (1e-6, "u"), (1e-9, "n"), (1e-12, "p")];
+    let (f, s) = SI.iter().find(|(f, _)| v.abs() >= *f * 0.9999999).copied().unwrap_or((1e-15, "f"));
+    let m = format!("{:.4}", v / f);
+    format!("{}{s}", m.trim_end_matches('0').trim_end_matches('.'))
 }
 
 /// A generated 0 V current sensor: source name, its extra node, the device it measures (all
@@ -824,7 +971,7 @@ impl Netlist {
     /// .include/.lib files (can be slow): call it on a blocking thread, without the library lock.
     pub fn prepared(&self, dir: Option<&std::path::Path>, warnings: &mut Vec<String>) -> Prepared {
         let p = prepare(&self.text, dir, warnings);
-        Prepared(ltspice_meas(&p.0, &self.sensors, warnings), self.sensors.clone())
+        Prepared(ltspice_meas(&p.0, &self.sensors, warnings), self.sensors.clone(), self.steps.clone())
     }
 }
 
@@ -1189,7 +1336,7 @@ pub fn prepare(text: &str, dir: Option<&std::path::Path>, warnings: &mut Vec<Str
     let mut x = Expander { warnings, out: String::new(), seen: HashSet::new(), read: true, diode: None, behavioural: vec![] };
     x.expand(text, dir, None, 0);
     x.warn_behavioural();
-    Prepared(x.out, vec![])
+    Prepared(x.out, vec![], vec![])
 }
 
 /// The warnings `prepare` would give for the schematic's own lines, without reading any
@@ -1538,8 +1685,21 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool) -> Netlist {
     for it in items {
         if let Item::Text { text, directive: true, .. } = it {
             let mut skipped = false; // `+` continuation lines of a skipped directive go too
+            let mut stepping = false; // ... of a .step: they belong to it
             for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
                 let l = line.to_lowercase();
+                if stepping && l.starts_with('+') {
+                    if let Some(s) = nl.steps.last_mut() {
+                        s.push(' ');
+                        s.push_str(line[1..].trim());
+                    }
+                    continue;
+                }
+                stepping = l.starts_with(".step") && l[5..].starts_with(char::is_whitespace);
+                if stepping {
+                    nl.steps.push(line.to_string());
+                    continue;
+                }
                 if skipped && l.starts_with('+') || l == ".end" || l.starts_with(".end ") {
                     continue;
                 }
@@ -1549,6 +1709,8 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool) -> Netlist {
             }
         }
     }
+    // a .step that will not run is said before a run
+    nl.warnings.extend(nl.steps.iter().filter_map(|s| parse_step(s).err()));
     let defined = |name: &str| directives.iter().any(|d| {
         let t: Vec<String> = d.split_whitespace().take(2).map(str::to_lowercase).collect();
         matches!(t.first().map(String::as_str), Some(".model" | ".subckt")) && t.get(1).map(String::as_str) == Some(name)
@@ -2114,7 +2276,7 @@ mod tests {
         assert!(text.contains(".MEAS TRAN TpLH TRIG par('V(in)-(0.5*V(vdd))') VAL=0 TD=22n RISE=1 TARG par('V(out)-(0.5*V(vdd))') VAL=0") && text.contains("* note"), "{text}");
         assert!(text.contains(".meas tran vmax MAX V(out)\n+ FROM=0 TO=10n"), "unchanged: as written\n{text}");
         let _s = SIM.lock();
-        let run = crate::ngspice::run(&Prepared(text, vec![])).unwrap();
+        let run = crate::ngspice::run(&Prepared(text, vec![], vec![])).unwrap();
         let get = |n: &str| run.meas.iter().find(|m| m.0 == n).and_then(|m| m.1).unwrap_or_else(|| panic!("{n}: {:?}\n{}", run.meas, run.log.join("\n")));
         assert!((get("tplh") / 7.28e-10 - 1.0).abs() < 0.02, "{:?}", run.meas); // V(in) at 1 V: 30.5 ns
         assert!((get("pdyn") / 2.9e-3 - 1.0).abs() < 0.03, "{:?}", run.meas);
@@ -2197,6 +2359,46 @@ mod tests {
         let good = netlist(&parse_asc(EXAMPLES[0].1), &mut Library::builtin());
         let run = crate::ngspice::run(&prepare(&good.text, None, &mut vec![]));
         assert!(run.as_ref().is_ok_and(|r| r.scale == "time"), "{run:?}");
+    }
+
+    #[test]
+    fn step_statements() {
+        let v = |s: &str| parse_step(s).map(|p| p.values).unwrap_or_else(|e| panic!("{e}"));
+        let near = |a: Vec<f64>, b: &[f64]| assert!(a.len() == b.len() && a.iter().zip(b).all(|(x, y)| (x / y - 1.0).abs() < 1e-9), "{a:?} {b:?}");
+        near(v(".step param R 1k 3k 1k"), &[1e3, 2e3, 3e3]);
+        near(v(".step param R 3k 1k -1k"), &[3e3, 2e3, 1e3]);
+        near(v(".step param C list 100n 1u 10u"), &[100e-9, 1e-6, 10e-6]);
+        let d = v(".step dec param R 1k 100k 2");
+        assert!(d.len() == 5 && (d[1] / 3162.28 - 1.0).abs() < 1e-4 && (d[4] / 1e5 - 1.0).abs() < 1e-9, "{d:?}");
+        near(v(".step oct param f 1 8 1"), &[1.0, 2.0, 4.0, 8.0]);
+        assert_eq!(parse_step(".step V1 0 5 1").unwrap().what, Stepped::Source("V1".into()));
+        assert_eq!(parse_step(".step temp list -40 25 85").unwrap().what, Stepped::Temp);
+        assert!(parse_step(".step NPN 2N2222(VAF) 50 100 25").unwrap_err().contains("model parameter"));
+        assert!(parse_step(".step param R 1k 2k -1").is_err() && parse_step(".step param R 1k").is_err());
+        assert_eq!(short_num(1e3), "1k");
+        assert_eq!(short_num(2.2e-6), "2.2u");
+        assert_eq!(short_num(-40.0), "-40");
+        // the variants: the first .step fastest; a param added where the deck has none
+        let p = Prepared("* t\nR1 a 0 {R}\nV1 a 0 DC 5\n.op\n.end\n".into(), vec![], vec![".step param R list 1k 2k".into(), ".step V1 list 1 2".into()]);
+        let s = p.steps().unwrap();
+        assert_eq!(s.iter().map(|x| x.0.as_str()).collect::<Vec<_>>(), ["R=1k V1=1", "R=2k V1=1", "R=1k V1=2", "R=2k V1=2"]);
+        assert!(s[1].1.text().contains(".param R=2e3\n.end") && s[3].1.text().contains("V1 a 0 DC 2e0"), "{}", s[3].1.text());
+    }
+
+    #[test]
+    fn stepped_run() {
+        let _s = SIM.lock();
+        let src = EXAMPLES.iter().find(|e| e.0 == "rc_transient").unwrap().1.replace("SYMATTR Value 100n", "SYMATTR Value {Cx}")
+            .replace("!.tran 3m", "!.tran 3m\\n.step param Cx list 100n 1u\\n.meas tran vmax MAX v(out)");
+        let nl = netlist_for_sim(&parse_asc(&src), &mut Library::builtin());
+        assert!(nl.warnings.is_empty() && nl.steps.len() == 1, "{:?} {:?}", nl.warnings, nl.steps);
+        let run = crate::ngspice::run(&nl.prepared(None, &mut vec![])).unwrap();
+        assert_eq!(run.steps, ["Cx=100n", "Cx=1u"]);
+        let out = crate::ngspice::trace("V(out)", &run.scale, run.id).unwrap();
+        let n = out.x.len() / 2;
+        assert!(n > 10 && out.x[..n] == out.x[n..] && out.re.len() == 2 * n, "a family of two on one time grid");
+        let m = |k: &str| run.meas.iter().find(|x| x.0 == format!("vmax [{k}]")).and_then(|x| x.1).unwrap_or_else(|| panic!("{:?}", run.meas));
+        assert!(m("Cx=1u") < 0.5 * m("Cx=100n"), "the larger C filters more: {:?}", run.meas);
     }
 
     #[test]
@@ -2363,6 +2565,12 @@ mod tests {
                         assert!(warnings.is_empty() && nl.warnings.is_empty(), "{name} {alt}: {warnings:?} {:?}", nl.warnings);
                         assert!(r.plot.starts_with(&alt[1..]) && !r.aborted && !r.scale.is_empty(), "{name} {alt}: {} {}", r.plot, r.scale);
                     }
+                }
+                "step_rc" => {
+                    assert_eq!(run.steps, ["C=47n", "C=100n", "C=220n"], "{name}");
+                    near(meas("fc [C=47n]"), 3386.0, 0.02);
+                    near(meas("fc [C=100n]"), 1591.5, 0.02);
+                    near(meas("fc [C=220n]"), 723.4, 0.02);
                 }
                 "zener_prefix" => {
                     let out = crate::ngspice::trace("v(out)", &run.scale, run.id).unwrap();

@@ -81,6 +81,8 @@ export interface Run {
   /** `.meas` results: name, value (null: failed), the rest of ngspice's line (trig/targ, from/to),
    *  whether the value is on the x axis (a TRIG/TARG span, a WHEN point) */
   meas: [string, number | null, string, boolean][];
+  /** a .step run: each step's label (R=1k), in order; a trace has one curve per step */
+  steps?: string[];
 }
 
 export interface Sim {

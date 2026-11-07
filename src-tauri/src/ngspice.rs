@@ -50,8 +50,9 @@ static LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
 static BG_DONE: AtomicBool = AtomicBool::new(true);
 /// Counts runs: each one destroys the results of the one before (see `Run::id`, `trace`).
 static RUNS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-/// The latest run's id and current sensors: trace expressions name part currents (`I(R1)`, `Ib(Q1)`).
-static SENSORS: Mutex<(u64, Option<std::sync::Arc<[crate::schematic::Sensor]>>)> = Mutex::new((0, None));
+/// The latest run: its id, its current sensors (trace expressions name part currents, `I(R1)`,
+/// `Ib(Q1)`) and, for a `.step` run, each step's plot.
+static SENSORS: Mutex<(u64, Option<std::sync::Arc<[crate::schematic::Sensor]>>, Vec<String>)> = Mutex::new((0, None, Vec::new()));
 /// Counts Halt presses. An operation (a simulation, a root locus) notes the count when it begins
 /// (`begin`) and is halted once the count moves on (`halted_since`): a Halt stops what was running
 /// when it was pressed, never something started afterwards, and no later start can undo it. Only
@@ -273,6 +274,8 @@ pub struct Run {
     /// whether the value is on the x axis (a TRIG/TARG span, a WHEN point)
     pub meas: Vec<(String, Option<f64>, String, bool)>,
     pub log: Vec<String>,
+    /// A `.step` run: each step's label (`R=1k`), in order; traces hold one curve per step.
+    pub steps: Vec<String>,
 }
 
 /// The deck's `.meas` statements (their + lines joined): name (lowercase, as ngspice reports it) →
@@ -369,17 +372,108 @@ pub fn run(netlist: &Prepared) -> Result<Run, Vec<String>> {
 }
 
 /// [`run`], stopped (`bg_halt`, partial data) as soon as `stop()` says so: polled while it runs.
+/// A deck with `.step` runs once per step; the steps' plots stay (traces read them all).
 pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec<String>> {
+    let steps = netlist.steps().map_err(|e| vec![format!(".step: {e}")])?;
     let sensors: std::sync::Arc<[crate::schematic::Sensor]> = netlist.sensors().into();
-    let netlist = netlist.text();
+    let text = netlist.text(); // (the decks' statements: the same in every step)
     let g = engine()?;
     let api = g.as_ref().unwrap();
     api.command("destroy all");
     api.command("remcirc");
     let id = RUNS.fetch_add(1, Ordering::SeqCst) + 1; // the previous run's results are gone now
-    *SENSORS.lock().unwrap_or_else(|e| e.into_inner()) = (id, Some(sensors.clone()));
     take_log();
-    let lines: Vec<CString> = netlist.lines().map(|l| CString::new(l).unwrap_or_default()).collect();
+    let decks: Vec<(&str, &str)> = if steps.is_empty() { vec![("", text)] } else { steps.iter().map(|(l, p)| (l.as_str(), p.text())).collect() };
+    // (label, plot, log) per step done; a later step that failed: its log, and the rest stop
+    let mut done: Vec<(String, String, Vec<String>)> = vec![];
+    let mut failed = vec![];
+    for (k, (label, deck)) in decks.iter().enumerate() {
+        if k > 0 {
+            api.command("remcirc"); // (its plot stays)
+        }
+        match one_run(api, deck, stop) {
+            Ok((plot, log, halted)) => {
+                done.push((label.to_string(), plot, log));
+                if halted || stop() {
+                    break;
+                }
+            }
+            Err(log) if done.is_empty() => return Err(log),
+            Err(log) => {
+                failed = std::iter::once(format!("--- .step {label} failed")).chain(log).collect();
+                break;
+            }
+        }
+    }
+    // .noise ends in its totals plot (noise2, noise4 …); the spectrum users plot is the one before it
+    let plots: Vec<String> = done.iter().map(|d| match d.1.strip_prefix("noise").and_then(|n| n.parse::<u32>().ok()) {
+        Some(n) if n >= 2 => format!("noise{}", n - 1),
+        _ => d.1.clone(),
+    }).collect();
+    *SENSORS.lock().unwrap_or_else(|e| e.into_inner()) = (id, Some(sensors.clone()), if steps.is_empty() { vec![] } else { plots.clone() });
+    let plot0 = &done[0].1;
+    let sensors = &sensors[..];
+    // a sensor's current vector -> its name (`vsense_q1_2#branch` -> `Ib(Q1)`)
+    let named: std::collections::HashMap<String, &str> = sensors.iter().map(|s| (format!("{}#branch", s.source), s.label.as_str())).collect();
+    // ngspice makes a helper source per par() in its output lines, named pa_00, pa_01 …
+    // (cheap checks first, without a lowercase copy of the deck: most decks have neither)
+    let pars = if !crate::schematic::contains_ci(text, "par(") { 0 } else {
+        crate::schematic::statements(text, &crate::schematic::PAR_STATEMENTS).iter().map(|l| crate::schematic::par_calls(l)).sum()
+    };
+    api.command(&format!("setplot {plot0}"));
+    let (_, mut scale) = plot_vectors(api, plot0, sensors, pars);
+    // one frequency (`.ac lin 1 50 50`): phasors, shown as a table like .op instead of a 1-point plot
+    let phasors = scale == "frequency" && read(api, "frequency").is_some_and(|f| f.re.len() == 1);
+    if phasors {
+        scale.clear();
+    }
+    // no scale (.op, .tf, .pz, .noise totals ...): single values, shown as a table (per step, named)
+    let mut op = vec![];
+    if scale.is_empty() {
+        for (label, plot, _) in &done {
+            api.command(&format!("setplot {plot}"));
+            for v in plot_vectors(api, plot, sensors, pars).0 {
+                let Some(t) = read(api, &v) else { continue };
+                // a sensor's current is reported by its name (`I(R1)`, `Ib(Q1)`)
+                let name = named.get(&v).map_or(v.clone(), |l| l.to_string());
+                let name = if label.is_empty() { name } else { format!("{name} [{label}]") };
+                // types are reliable only for .op and .ac (ngspice marks .tf/.pz/.sens/noise values as "voltage")
+                let unit = match (plot.starts_with("op") || phasors, t.typ) { (true, 3) => "V", (true, 4) => "A", _ => "" }.to_string();
+                if let Some(&re) = t.re.first() {
+                    op.push((name, re, t.im.and_then(|im| im.first().copied()).unwrap_or(0.0), unit));
+                }
+            }
+        }
+    }
+    // the plot traces come from (the spectrum of a .noise), its vectors
+    let plot = plots[0].clone();
+    api.command(&format!("setplot {plot}"));
+    let (vectors, scale2) = plot_vectors(api, &plot, sensors, pars);
+    if !scale.is_empty() || plot != *plot0 {
+        scale = scale2;
+    }
+    let log: Vec<String> = if steps.is_empty() { done[0].2.clone() } else {
+        done.iter().flat_map(|(l, _, log)| std::iter::once(format!("--- .step {l}")).chain(log.iter().cloned())).chain(failed).collect()
+    };
+    let aborted = log.iter().any(|l| {
+        let l = l.to_lowercase();
+        l.contains("aborted") || l.contains("timestep too small") || l.contains("simulation interrupted")
+    }) || done.len() < decks.len();
+    // .meas: per step, named with it (`tdelay [R=1k]`)
+    let meas = if !crate::schematic::contains_ci(text, ".meas") { vec![] } else {
+        let names = meas_names(text);
+        done.iter().flat_map(|(l, _, log)| measurements(log, &names).into_iter().map(move |m| if l.is_empty() { m } else { (format!("{} [{l}]", m.0), m.1, m.2, m.3) })).collect()
+    };
+    // sensor currents listed by their names, which trace expressions take (`I(R1)`, not `vsense_r1#branch`)
+    let mut vectors: Vec<String> = vectors.into_iter().map(|v| named.get(&v).map_or(v, |l| l.to_string())).collect();
+    vectors.sort();
+    Ok(Run { id, plot, scale, vectors, op, aborted, meas, log, steps: if steps.is_empty() { vec![] } else { done.iter().map(|d| d.0.clone()).collect() } })
+}
+
+/// Load `deck`, run it (background thread, so `halt` can stop it): its plot, its log, whether it
+/// was halted.
+fn one_run(api: &Api, deck: &str, stop: &dyn Fn() -> bool) -> Result<(String, Vec<String>, bool), Vec<String>> {
+    let lines: Vec<CString> = deck.lines().map(|l| CString::new(l).unwrap_or_default()).collect();
     let mut ptrs: Vec<*const c_char> = lines.iter().map(|l| l.as_ptr()).collect();
     ptrs.push(null());
     if unsafe { (api.circ)(ptrs.as_ptr()) } != 0 {
@@ -402,52 +496,12 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
         }
         std::thread::sleep(Duration::from_millis(5));
     }
-    let mut plot = cstr(unsafe { (api.cur_plot)() });
+    let plot = cstr(unsafe { (api.cur_plot)() });
     let log = take_log();
     if plot.is_empty() || plot == "const" {
         return Err(log);
     }
-    let sensors = &sensors[..];
-    // a sensor's current vector -> its name (`vsense_q1_2#branch` -> `Ib(Q1)`)
-    let named: std::collections::HashMap<String, &str> = sensors.iter().map(|s| (format!("{}#branch", s.source), s.label.as_str())).collect();
-    // ngspice makes a helper source per par() in its output lines, named pa_00, pa_01 …
-    // (cheap checks first, without a lowercase copy of the deck: most decks have neither)
-    let pars = if !crate::schematic::contains_ci(netlist, "par(") { 0 } else {
-        crate::schematic::statements(netlist, &crate::schematic::PAR_STATEMENTS).iter().map(|l| crate::schematic::par_calls(l)).sum()
-    };
-    let (mut vectors, mut scale) = plot_vectors(api, &plot, sensors, pars);
-    // one frequency (`.ac lin 1 50 50`): phasors, shown as a table like .op instead of a 1-point plot
-    let phasors = scale == "frequency" && read(api, "frequency").is_some_and(|f| f.re.len() == 1);
-    if phasors {
-        scale.clear();
-    }
-    // no scale (.op, .tf, .pz, .noise totals ...): single values, shown as a table
-    let op = if scale.is_empty() {
-        vectors.iter().filter_map(|v| {
-            let t = read(api, v)?;
-            // a sensor's current is reported by its name (`I(R1)`, `Ib(Q1)`)
-            let name = named.get(v).map_or(v.clone(), |l| l.to_string());
-            // types are reliable only for .op and .ac (ngspice marks .tf/.pz/.sens/noise values as "voltage")
-            let unit = match (plot.starts_with("op") || phasors, t.typ) { (true, 3) => "V", (true, 4) => "A", _ => "" }.to_string();
-            Some((name, *t.re.first()?, t.im.and_then(|im| im.first().copied()).unwrap_or(0.0), unit))
-        }).collect()
-    } else {
-        vec![]
-    };
-    // .noise ends in noise2 (totals); the spectrum users want to plot is noise1 (we `destroy all` per run)
-    if plot == "noise2" && api.command("setplot noise1") {
-        plot = "noise1".into();
-        (vectors, scale) = plot_vectors(api, &plot, sensors, pars);
-    }
-    let aborted = log.iter().any(|l| {
-        let l = l.to_lowercase();
-        l.contains("aborted") || l.contains("timestep too small") || l.contains("simulation interrupted")
-    });
-    let meas = if crate::schematic::contains_ci(netlist, ".meas") { measurements(&log, &meas_names(netlist)) } else { vec![] };
-    // sensor currents listed by their names, which trace expressions take (`I(R1)`, not `vsense_r1#branch`)
-    let mut vectors: Vec<String> = vectors.into_iter().map(|v| named.get(&v).map_or(v, |l| l.to_string())).collect();
-    vectors.sort();
-    Ok(Run { id, plot, scale, vectors, op, aborted, meas, log })
+    Ok((plot, log, halted))
 }
 
 fn plot_vectors(api: &Api, plot: &str, sensors: &[crate::schematic::Sensor], pars: usize) -> (Vec<String>, String) {
@@ -483,7 +537,7 @@ pub fn trace(expr: &str, scale: &str, run: u64) -> Result<Trace, String> {
     // part currents by name (`I(R1)-I(R2)`, `Ib(Q1)`): the latest run's sensors; messages show the
     // expression as written, ngspice's with the names (not the hidden sensor sources)
     // (the sensors of the run asked about; another run's: the results are gone anyway, see below)
-    let (of, sensors) = SENSORS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let (of, sensors, steps) = SENSORS.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let sensors = sensors.filter(|_| of == run).unwrap_or_else(|| std::sync::Arc::from([]));
     let (named, problem) = crate::schematic::sensor_currents(expr, &sensors);
     let (shown, expr) = (expr, named.as_str());
@@ -502,26 +556,72 @@ pub fn trace(expr: &str, scale: &str, run: u64) -> Result<Trace, String> {
     if let Some(why) = problem {
         return Err(why); // (a part current the circuit has not, or a subcircuit's I(U1))
     }
-    api.command("unlet nmsp_trace"); // a failed `let` would otherwise leave the previous trace behind
-    take_log(); // after unlet: it may print leftovers of the finished run ("Background thread stopped")
-    api.command(&format!("let nmsp_trace = {expr}"));
-    let mut t = read(api, "nmsp_trace").ok_or_else(|| {
-        let log = take_log().join("\n");
-        if log.is_empty() { format!("cannot evaluate {shown}") } else { unname(log) }
-    })?;
-    if !scale.is_empty() {
-        t.x = read(api, scale).map(|s| s.re).unwrap_or_default();
-    }
-    // a constant (`1`, a reference level) is one value: a line across the x range
-    if t.re.len() == 1 && t.x.len() > 1 {
-        let n = t.x.len();
-        t.constant = t.im.is_none() && numbers_only(expr);
-        t.re = vec![t.re[0]; n];
-        if let Some(im) = &mut t.im {
-            *im = vec![im[0]; n];
+    // the plot as it is, or (a .step run) each step's in turn
+    let mut each = vec![];
+    for plot in steps.iter().map(Some).chain(steps.is_empty().then_some(None)) {
+        if let Some(p) = plot {
+            api.command(&format!("setplot {p}"));
         }
+        api.command("unlet nmsp_trace"); // a failed `let` would otherwise leave the previous trace behind
+        take_log(); // after unlet: it may print leftovers of the finished run ("Background thread stopped")
+        api.command(&format!("let nmsp_trace = {expr}"));
+        let mut t = read(api, "nmsp_trace").ok_or_else(|| {
+            let log = take_log().join("\n");
+            if log.is_empty() { format!("cannot evaluate {shown}") } else { unname(log) }
+        })?;
+        if !scale.is_empty() {
+            t.x = read(api, scale).map(|s| s.re).unwrap_or_default();
+        }
+        // a constant (`1`, a reference level) is one value: a line across the x range
+        if t.re.len() == 1 && t.x.len() > 1 {
+            let n = t.x.len();
+            t.constant = t.im.is_none() && numbers_only(expr);
+            t.re = vec![t.re[0]; n];
+            if let Some(im) = &mut t.im {
+                *im = vec![im[0]; n];
+            }
+        }
+        each.push(t);
     }
-    Ok(t)
+    Ok(if each.len() == 1 { each.pop().unwrap() } else { steps_joined(each) })
+}
+
+/// The steps' curves of one trace as one, end to end over a shared x (each step's own where they
+/// agree, a .ac or .dc; else the union of their x, each step interpolated onto it: .tran picks its
+/// own time points), so the plot shows them as a family like a nested .dc.
+fn steps_joined(each: Vec<Trace>) -> Trace {
+    let same = each.windows(2).all(|w| w[0].x.len() == w[1].x.len() && w[0].x.iter().zip(&w[1].x).all(|(a, b)| (a - b).abs() <= 1e-12 * a.abs().max(b.abs())));
+    let rising = |x: &[f64]| x.windows(2).all(|w| w[1] >= w[0]);
+    let grid: Vec<f64> = if same || !each.iter().all(|t| rising(&t.x)) {
+        each[0].x.clone()
+    } else {
+        let mut g: Vec<f64> = each.iter().flat_map(|t| t.x.iter().copied()).collect();
+        g.sort_by(|a, b| a.total_cmp(b));
+        g.dedup_by(|a, b| (*a - *b).abs() <= 1e-12 * a.abs().max(b.abs()));
+        g
+    };
+    // linear between samples, the end value beyond (a step that stopped early)
+    let onto = |x: &[f64], y: &[f64]| -> Vec<f64> {
+        if same || x.len() < 2 {
+            return y.to_vec();
+        }
+        let mut k = 0;
+        grid.iter().map(|&g| {
+            while k + 2 < x.len() && x[k + 1] < g {
+                k += 1;
+            }
+            let f = if x[k + 1] == x[k] { 0.0 } else { ((g - x[k]) / (x[k + 1] - x[k])).clamp(0.0, 1.0) };
+            y[k] + f * (y[k + 1] - y[k])
+        }).collect()
+    };
+    let complex = each.iter().all(|t| t.im.is_some());
+    Trace {
+        x: each.iter().flat_map(|_| grid.iter().copied()).collect(),
+        re: each.iter().flat_map(|t| onto(&t.x, &t.re)).collect(),
+        im: complex.then(|| each.iter().flat_map(|t| onto(&t.x, t.im.as_deref().unwrap_or_default())).collect()),
+        constant: each.iter().all(|t| t.constant),
+        typ: each[0].typ,
+    }
 }
 
 /// Only numbers (exponents, SPICE suffixes: `1e-3`, `10k`), operators and parentheses: a level the

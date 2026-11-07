@@ -7,8 +7,9 @@ files — with a modern UI, ngspice as the engine, a Rust core and a React front
 
 - **Workflow**: `R C L D V I G W N S T` place parts, wires, labels and directives; `⌃R`/`⌃E`
   rotate and mirror; `F2`/`P`/`⌘K` opens the component library; `⌘↵` runs. After a run, click a wire
-  to plot its voltage, a part to plot its current (`I`, `Ic`, `Id`) — in `.tran`, `.dc` **and `.ac`**
-  (every R C L D Q M J gets a 0 V current sensor in the simulated netlist, so currents have phase).
+  to plot its voltage, a part to plot its current — in `.tran`, `.dc` **and `.ac`** (0 V current
+  sensors in the simulated netlist, so currents have phase). Near a pin, its own current: `Ib(Q1)`,
+  `Ig(M1)`, `Ix(U1:OUT)`. Expressions take these names: `I(R1)-I(R2)`, `V(in)*I(R1)`.
 - **File format**: opens and saves `.asc` (Latin-1/UTF-16, every unknown line kept). 
 - **Forms instead of syntax**: sources (sine, pulse, exp, FM, PWL with a waveform preview, AC, Rser/Cpar),
   every analysis, `.param`, `.model` (parameters explained), `.meas`, `.ic`, `.temp`, `.include` are edited
@@ -17,13 +18,17 @@ files — with a modern UI, ngspice as the engine, a Rust core and a React front
 - **Analyses**: `.tran`, `.ac` (Bode: magnitude + phase panes), `.dc` (nested sweeps as curve
   families), `.op`, `.noise` (spectrum + totals), `.tf`, `.pz`, `.sens`; Live mode re-runs on every edit.
   **A result tab per analysis**: keep e.g. a transient and an AC analysis in one schematic, each tab with its own traces, zoom and cursors.
+- **Parameter sweeps**: `.step param C list 47n 100n 220n` (also lin/oct/dec, a source's DC value,
+  `temp`, up to three nested) runs the analysis once per value; every trace becomes a family of
+  curves, one per step, and `.meas` is measured per step.
 - **Measurements**: `.meas` results are listed with the plot.
 - **Poles and zeros**: `.pz` results as a map in the s-plane (× poles, ○ zeros, unstable half-plane
   shaded, f₀ and damping ζ per pole) and a **root locus**: sweep a `.param` or an R/C/L value and see
   the poles move, one `.pz` run per step.
-- **Waveforms** (uPlot): one pane per unit, synced zoom, cursors A/B with Δ and 1/Δx, average, RMS
-  and integral between them, expressions in ngspice syntax (a constant draws a reference line), a
-  part's power (right-click > Plot power), copy as CSV. A single-frequency `.ac` (`.ac lin 1 50 50`) gives a phasor table
+- **Waveforms** (uPlot): one pane per unit (units from the expression: V·A = W, integrals in J), a
+  right axis per pane for traces of other sizes, synced zoom, cursors A/B with Δ and 1/Δx, average,
+  RMS and integral between them (shift-drag marks the range), expressions in ngspice syntax (a
+  constant draws a reference line), a part's power (right-click > Plot power), copy as CSV. A single-frequency `.ac` (`.ac lin 1 50 50`) gives a phasor table
   (magnitude ∠ phase) instead of a plot.
 - **SVG export** for slides and papers (right-click the canvas or the plot): the schematic or the plots as
   shown, in a light print style, readable by Inkscape, browsers, PowerPoint and Keynote.
@@ -37,7 +42,8 @@ files — with a modern UI, ngspice as the engine, a Rust core and a React front
   search the libraries (see below).
 - **Examples** on the start screen, one per feature: RC transient and Bode, inverting op-amp, CE
   amplifier, diode sweep, BJT curves, noise, phasors, Sallen-Key poles and root locus, RC timing with
-  `.meas`, buck converter (efficiency), rectifier (RMS, power), result tabs, `Prefix X` subcircuit.
+  `.meas`, buck converter (efficiency), rectifier (RMS, power), result tabs, `Prefix X` subcircuit,
+  `.step` of a capacitor.
 - Context menus everywhere, light/dark theme, crash recovery for unsaved work, automatic updates
   from the GitHub releases, macOS / Windows / Linux.
 

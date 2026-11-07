@@ -44,9 +44,16 @@ function segment(xs: number[]) {
   return n > 1 ? n : xs.length;
 }
 
-/** The plotted data as CSV: x, then one column per series (family curves numbered). */
-function csv(xs: number[], xUnit: string, panes: Pane[]) {
-  const cols = panes.flatMap((p) => p.series.map((s, k, all) => ({ name: `${s.t.label}${all.filter((o) => o.t === s.t).length > 1 ? ` #${all.filter((o, j) => o.t === s.t && j <= k).length}` : ""} [${p.unit}]`, y: s.y })));
+/** A family member's name: its .step (R=1k) where the trace has a curve per step, else its number
+ *  (a nested .dc), nothing for a single curve. */
+function member(p: Pane, s: Series, steps: string[]) {
+  const mine = p.series.filter((o) => o.t === s.t), k = mine.indexOf(s);
+  return mine.length < 2 ? "" : mine.length === steps.length ? steps[k] : `#${k + 1}`;
+}
+
+/** The plotted data as CSV: x, then one column per series (family curves named by step or numbered). */
+function csv(xs: number[], xUnit: string, panes: Pane[], steps: string[]) {
+  const cols = panes.flatMap((p) => p.series.map((s) => ({ name: `${s.t.label}${((m) => (m ? ` ${m}` : ""))(member(p, s, steps))} [${p.unit}]`, y: s.y })));
   const head = [`x [${xUnit}]`, ...cols.map((c) => `"${c.name.replace(/"/g, '""')}"`)].join(",");
   return [head, ...xs.map((x, i) => [x, ...cols.map((c) => c.y[i] ?? "")].join(","))].join("\n") + "\n";
 }
@@ -331,7 +338,7 @@ export const Waveform = memo(function Waveform() {
           { label: "Clear cursors", run: () => setPlot({ a: null, b: null }) },
           { label: "Add trace…", disabled: !run, run: () => useS.setState({ dialog: { k: "trace" } }) },
           "-",
-          { label: "Copy data as CSV", disabled: !panes.length, run: () => navigator.clipboard.writeText(csv(xs, xUnit, panes)) },
+          { label: "Copy data as CSV", disabled: !panes.length, run: () => navigator.clipboard.writeText(csv(xs, xUnit, panes, run?.steps ?? [])) },
           { label: "Export plot as SVG…", disabled: !panes.length, run: () => void saveSvg(plotSvg(plots.current, panes, useS.getState().plot), "-plot") },
           { label: "Remove all traces", danger: true, disabled: !traces.length, run: () => useS.setState({ traces: [] }) },
         ]);
@@ -344,7 +351,7 @@ export const Waveform = memo(function Waveform() {
         )}
       </div>
       <div className="flex w-[340px] shrink-0 flex-col border-l border-border bg-surface-panel text-xs">
-        <Readout traces={traces} panes={panes} xs={xs} xUnit={xUnit} plot={run?.plot ?? ""} />
+        <Readout traces={traces} panes={panes} xs={xs} xUnit={xUnit} plot={run?.plot ?? ""} steps={run?.steps ?? NO_STEPS} />
         <Measurements xUnit={xUnit} />
         <button
           className="m-2 inline-flex h-[22px] items-center justify-center gap-1 rounded-control border border-border-control text-text-secondary hover:bg-surface-hover hover:text-text-strong disabled:opacity-40"
@@ -379,7 +386,8 @@ export function Measurements({ xUnit }: { xUnit: string }) {
 
 /** Trace table: values under the hover crosshair and at cursors A/B. Own component + hover store,
  *  so mouse moves over the plot re-render only this table. */
-const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot }: { traces: Trace[]; panes: Pane[]; xs: number[]; xUnit: string; plot: string }) {
+const NO_STEPS: string[] = [];
+const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot, steps }: { traces: Trace[]; panes: Pane[]; xs: number[]; xUnit: string; plot: string; steps: string[] }) {
   const hover = useHover((h) => h.x);
   const { a, b } = useS(useShallow((s) => ({ a: s.plot.a, b: s.plot.b })));
   // a trace alone in its pane(s): a right axis would change nothing there
@@ -388,8 +396,10 @@ const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot }: { trac
     const ps = panes.flatMap((p) => p.series.filter((s) => s.t === t).map((s) => ({ s, unit: p.unit })));
     const fmt = (unit: string, v: number) => (Number.isNaN(v) ? "–" : unit === "dB" ? `${v.toFixed(2)} dB` : unit === "°" ? `∠${v.toFixed(1)}°` : si(v, unit));
     const val = (x: number | null) => (x == null || !ps.length ? "–" : ps.map(({ s, unit }) => fmt(unit, at(xs, s.y, x))).join(" "));
+    // (a .step family: each value with its step, in a tooltip)
+    const named = (x: number | null) => (x == null || !steps.length ? undefined : panes.flatMap((p) => p.series.filter((s) => s.t === t).map((s) => `${member(p, s, steps)}: ${fmt(p.unit, at(xs, s.y, x))}`)).join("\n"));
     const delta = a != null && b != null && ps.length ? ps.map(({ s, unit }) => fmt(unit, at(xs, s.y, b) - at(xs, s.y, a))).join(" ") : "–";
-    return { t, val, delta };
+    return { t, val, delta, named };
   });
   const dx = a != null && b != null ? b - a : null;
   // average, RMS, integral (LTspice: ctrl-click a trace label) between the cursors, else over what is shown
@@ -398,21 +408,21 @@ const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot }: { trac
   // (time and DC sweeps: over a frequency axis an average or integral of a magnitude means little.
   // xs is one sweep segment, rising or falling: nested .dc families are separate series of it)
   const num = (v: number, u: string) => (Number.isNaN(v) ? "–" : si(v, u)); // (no data in the range)
-  const stats = useMemo(() => xUnit === "Hz" ? [] : traces.filter((t) => !t.data?.constant).flatMap((t) => panes.flatMap((p) => p.series.filter((s) => s.t === t && p.unit !== "dB" && p.unit !== "°").map((s) => ({ t, unit: p.unit, ...integrate(xs, s.y, lo, hi) })))),
-    [traces, panes, xs, lo, hi, xUnit]); // not per hover move
+  const stats = useMemo(() => xUnit === "Hz" ? [] : traces.filter((t) => !t.data?.constant).flatMap((t) => panes.flatMap((p) => p.series.filter((s) => s.t === t && p.unit !== "dB" && p.unit !== "°").map((s) => ({ t, unit: p.unit, of: member(p, s, steps), ...integrate(xs, s.y, lo, hi) })))),
+    [traces, panes, xs, lo, hi, xUnit, steps]); // not per hover move
   return (
     <>
       <table className="w-full table-fixed font-mono text-2xs">
         <thead className="text-text-tertiary">
           <tr className="h-[22px] border-b border-border">
-            <th className="w-[38%] pl-2 text-left font-normal">{plot} · x</th>
+            <th className="w-[38%] pl-2 text-left font-normal">{plot}{steps.length ? ` · ${steps.length} steps` : ""} · x</th>
             <th className="text-right font-normal">{hover == null ? "cursor" : si(hover, xUnit)}</th>
             <th className="text-right font-normal text-selection">A {a == null ? "" : si(a, xUnit)}</th>
             <th className="pr-2 text-right font-normal text-selection">B {b == null ? "" : si(b, xUnit)}</th>
           </tr>
         </thead>
         <tbody>
-          {rows.map(({ t, val, delta }) => (
+          {rows.map(({ t, val, delta, named }) => (
             <tr key={t.expr} className="group h-[22px] border-b border-border-subtle align-middle" title={t.error ?? t.expr}
               onContextMenu={(e) => (e.preventDefault(), openMenu(e.clientX, e.clientY, [
                 { label: t.right ? "Back to the left axis" : "Right axis (own scale)", hint: !t.right && alone(t) ? "alone in its pane" : undefined, disabled: !t.right && alone(t), run: () => setTraceRight(t.expr, !t.right) },
@@ -427,13 +437,18 @@ const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot }: { trac
                   <X className="inline h-3 w-3" />
                 </button>
               </td>
-              <td className="truncate text-right text-text-secondary">{val(hover)}</td>
-              <td className="truncate text-right">{val(a)}</td>
-              <td className="truncate pr-2 text-right" title={`B−A: ${delta}`}>{val(b)}</td>
+              <td className="truncate text-right text-text-secondary" title={named(hover)}>{val(hover)}</td>
+              <td className="truncate text-right" title={named(a)}>{val(a)}</td>
+              <td className="truncate pr-2 text-right" title={`${named(b) ?? ""}${named(b) ? "\n" : ""}B−A: ${delta}`}>{val(b)}</td>
             </tr>
           ))}
         </tbody>
       </table>
+      {!!steps.length && (
+        <div className="border-b border-border px-2 py-1 font-mono text-2xs text-text-secondary" title="Each trace has a curve per step; its values above are in this order">
+          <span className="text-text-tertiary">.step: </span>{steps.join(" · ")}
+        </div>
+      )}
       {dx != null && (
         <div className="border-b border-border px-2 py-1 font-mono text-2xs text-text-secondary">
           Δx = {si(dx, xUnit)}{xUnit === "s" && dx ? ` · 1/Δx = ${si(1 / Math.abs(dx), "Hz")}` : ""}
@@ -443,9 +458,9 @@ const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot }: { trac
       {!!stats.length && hi > lo && (
         <div className="border-b border-border px-2 py-1 font-mono text-2xs text-text-secondary">
           <div className="text-text-tertiary">{dx != null ? "A–B" : zoom ? "shown range" : "whole run"}: average · RMS · integral</div>
-          {stats.map(({ t, unit, avg, rms, area }, k) => (
-            <div key={`${t.expr}${k}`} className="truncate" title={`${t.label} from ${si(lo, xUnit)} to ${si(hi, xUnit)}`}>
-              {t.label}: {num(avg, unit)} · {num(rms, unit)} · {num(area, unitTimes(unit, xUnit))}
+          {stats.map(({ t, unit, of, avg, rms, area }, k) => (
+            <div key={`${t.expr}${k}`} className="truncate" title={`${t.label}${of ? ` ${of}` : ""} from ${si(lo, xUnit)} to ${si(hi, xUnit)}`}>
+              {t.label}{of ? ` ${of}` : ""}: {num(avg, unit)} · {num(rms, unit)} · {num(area, unitTimes(unit, xUnit))}
             </div>
           ))}
         </div>
