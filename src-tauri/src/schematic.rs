@@ -2151,8 +2151,9 @@ mod tests {
                 "analysis_tabs" => near(meas("peak"), 3.16, 0.05), // Q at f0 (the active .ac)
                 "zener_prefix" => {
                     let out = crate::ngspice::trace("v(out)", &run.scale, run.id).unwrap();
-                    near(out.re[120], 5.1, 0.08); // V1 = 12 V: clamped near 5 V
-                    near(out.re[30], 3.0 * 10.0 / 11.0, 0.03); // V1 = 3 V: below breakdown, the divider R1 R2
+                    let at = |v: f64| out.re[out.x.iter().position(|&x| x >= v - 1e-6).unwrap()]; // (the sweep's V1)
+                    near(at(12.0), 5.1, 0.08); // V1 = 12 V: clamped near 5 V
+                    near(at(3.0), 3.0 * 10.0 / 11.0, 0.03); // V1 = 3 V: below breakdown, the divider R1 R2
                 }
                 _ => {
                     assert!(!run.scale.is_empty(), "{name}: {run:?}");

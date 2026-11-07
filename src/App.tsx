@@ -325,10 +325,10 @@ export function App() {
     : showWave ? "Click a wire to plot V · click a part to plot I · right-click to edit"
     : "Drag to move · shift-drag box select · double/right-click to edit · ⌘↵ run";
 
-  const startSplit = (e: React.PointerEvent) => drag(e, (ev) => {
-    const r = mainRef.current!.getBoundingClientRect();
-    setSplit(Math.min(0.8, Math.max(0.15, (ev.clientY - r.top) / r.height)));
-  });
+  const startSplit = (e: React.PointerEvent) => {
+    const r = mainRef.current!.getBoundingClientRect(), max = Math.min(0.8, roomFor(e.currentTarget.previousElementSibling as HTMLElement) / r.height);
+    drag(e, (ev) => setSplit(Math.min(max, Math.max(0.15, (ev.clientY - r.top) / r.height))));
+  };
 
   const run = s.sim?.run;
   const warnings = s.warnings ?? [];
@@ -387,11 +387,11 @@ export function App() {
         )}
         {/* the panes give way (flex-shrink) before the schematic gets less than a strip: a split and a
             panel height from a larger window can not push it out */}
-        <div className="relative min-h-[48px] flex-1">
+        <div data-fill className="relative min-h-[48px] flex-1">
           <Schematic />
           {!s.hasItems && tool.k === "select" && (
             <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-              <div className="pointer-events-auto w-[440px] rounded-float border border-border bg-surface-panel p-4 shadow-float">
+              <div className="pointer-events-auto max-h-full w-[440px] overflow-auto rounded-float border border-border bg-surface-panel p-4 shadow-float">
                 <div className="text-sm font-medium text-text-strong">Start a schematic</div>
                 <p className="mt-1 text-xs text-text-secondary">
                   Place parts with <kbd>R</kbd> <kbd>C</kbd> <kbd>L</kbd> <kbd>D</kbd> <kbd>V</kbd> <kbd>G</kbd>, draw wires with <kbd>W</kbd>, add <kbd>S</kbd> a directive like <code>.tran 1m</code>, then run with {keys("⌘↵")}. Or open an example:
@@ -498,16 +498,27 @@ function CursorStatus() {
   );
 }
 
-/** A drag on a splitter handle (left button): `move` gets the pointer, captured, until it is up or
- *  lost (a cancelled gesture, the handle unmounted); then `done`. */
+/** A drag on a splitter handle (left button): `move` gets the pointer (captured by the handle, so
+ *  none once it is unmounted) until the button is up or the gesture cancelled; then `done`. */
 function drag(e: React.PointerEvent, move: (ev: PointerEvent) => void, done?: () => void) {
   if (e.button !== 0) return;
-  const el = e.currentTarget as HTMLElement;
-  el.setPointerCapture(e.pointerId);
-  const end = () => (el.removeEventListener("pointermove", move), el.removeEventListener("lostpointercapture", end), done?.());
+  const el = e.currentTarget as HTMLElement, id = e.pointerId;
+  el.setPointerCapture(id);
+  const end = (ev: PointerEvent) => {
+    if (ev.pointerId !== id) return;
+    el.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", end);
+    window.removeEventListener("pointercancel", end);
+    done?.();
+  };
   el.addEventListener("pointermove", move);
-  el.addEventListener("lostpointercapture", end);
+  window.addEventListener("pointerup", end);
+  window.addEventListener("pointercancel", end);
 }
+
+/** How tall pane `el` may get by dragging: its height plus what the schematic ([data-fill]) has
+ *  above its strip. (Too little room later, a smaller window: the panes shrink, see below.) */
+const roomFor = (el: HTMLElement) => el.offsetHeight + Math.max(0, (el.parentElement!.querySelector<HTMLElement>(":scope > [data-fill]")?.offsetHeight ?? 48) - 48);
 
 function BottomPanel() {
   const { panel, sim, nets } = useS(useShallow((s) => ({ panel: s.panel, sim: s.sim, nets: s.nets })));
@@ -519,9 +530,9 @@ function BottomPanel() {
   const [height, setHeight] = useState(() => Number(localStorage.getItem("nomospice.panelHeight")) || 0);
   const ref = useRef<HTMLDivElement>(null);
   const resize = (e: React.PointerEvent) => {
-    const room = ref.current!.parentElement!.getBoundingClientRect().height;
+    const el = ref.current!, bottom = el.getBoundingClientRect().bottom, max = roomFor(el);
     let h = 0;
-    drag(e, (ev) => setHeight((h = Math.round(Math.min(room * 0.85, Math.max(80, ref.current!.getBoundingClientRect().bottom - ev.clientY))))),
+    drag(e, (ev) => setHeight((h = Math.round(Math.max(80, Math.min(max, bottom - ev.clientY))))),
       () => h && localStorage.setItem("nomospice.panelHeight", String(h)));
   };
   return (

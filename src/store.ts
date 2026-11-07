@@ -436,9 +436,9 @@ export async function probe(target: Item, power = false) {
     if (!powerMode(sim)) return;
     // LTspice's power probe: the voltage across a two-pin part times the current into pin 1 —
     // positive where it takes power (a resistor), negative where it gives it (a source)
-    const [a, b] = sim.netlist.nets[i] ?? [], expr = sim.netlist.probes[i];
+    const pins = sim.netlist.nets[i], expr = sim.netlist.probes[i];
     const v = (n: string) => (n === "0" ? "0" : vexpr(n));
-    if (expr && a && b && sim.netlist.nets[i].length === 2) await addTraceNow(`P(${sim.netlist.insts[i]})`, `(${v(a)}-${v(b)})*${expr}`, "W");
+    if (expr && pins?.length === 2) await addTraceNow(`P(${sim.netlist.insts[i]})`, `(${v(pins[0])}-${v(pins[1])})*${expr}`, "W");
   } else if (target.t === "sym") {
     const expr = sim.netlist.probes[i];
     if (expr) await addTraceNow(currentLabel(sim.netlist.insts[i]), expr, "A");
