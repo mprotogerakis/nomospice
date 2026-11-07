@@ -382,6 +382,8 @@ export function Measurements({ xUnit }: { xUnit: string }) {
 const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot }: { traces: Trace[]; panes: Pane[]; xs: number[]; xUnit: string; plot: string }) {
   const hover = useHover((h) => h.x);
   const { a, b } = useS(useShallow((s) => ({ a: s.plot.a, b: s.plot.b })));
+  // a trace alone in its pane(s): a right axis would change nothing there
+  const alone = (t: Trace) => !panes.some((p) => p.series.some((s) => s.t === t) && p.series.some((s) => s.t !== t));
   const rows = traces.map((t) => {
     const ps = panes.flatMap((p) => p.series.filter((s) => s.t === t).map((s) => ({ s, unit: p.unit })));
     const fmt = (unit: string, v: number) => (Number.isNaN(v) ? "–" : unit === "dB" ? `${v.toFixed(2)} dB` : unit === "°" ? `∠${v.toFixed(1)}°` : si(v, unit));
@@ -413,14 +415,14 @@ const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot }: { trac
           {rows.map(({ t, val, delta }) => (
             <tr key={t.expr} className="group h-[22px] border-b border-border-subtle align-middle" title={t.error ?? t.expr}
               onContextMenu={(e) => (e.preventDefault(), openMenu(e.clientX, e.clientY, [
-                { label: t.right ? "Back to the left axis" : "Right axis (own scale)", run: () => setTraceRight(t.expr, !t.right) },
+                { label: t.right ? "Back to the left axis" : "Right axis (own scale)", hint: !t.right && alone(t) ? "alone in its pane" : undefined, disabled: !t.right && alone(t), run: () => setTraceRight(t.expr, !t.right) },
                 { label: "Copy expression", hint: t.expr, run: () => navigator.clipboard.writeText(t.expr) },
                 { label: `Remove ${t.label}`, danger: true, run: () => removeTrace(t.expr) },
               ]))}>
               <td className="truncate pl-2 text-text">
                 <span className="mr-1.5 inline-block h-2 w-2 rounded-full align-middle" style={{ background: `var(--series-${t.slot + 1})` }} />
                 <span className={t.error ? "text-status-danger" : ""}>{t.label}</span>
-                {t.right && <span className="ml-1 text-text-tertiary" title="on the right axis">⇥</span>}
+                {t.right && !alone(t) && <span className="ml-1 text-text-tertiary" title="on the right axis">⇥</span>}
                 <button className="row-actions ml-1 align-middle text-text-tertiary hover:text-text-strong" aria-label={`Remove ${t.label}`} onClick={() => removeTrace(t.expr)}>
                   <X className="inline h-3 w-3" />
                 </button>

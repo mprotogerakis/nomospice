@@ -1114,7 +1114,9 @@ pub fn sensor_currents(s: &str, sensors: &[Sensor]) -> String {
             // (`I(Q1)`: pin 1 of a two-pin part or transistor, by its drawn or netlist name; a
             // subcircuit's currents are per pin)
             // (an exact name first: a part's own I(T1) before another's alias)
-            let drawn = |l: &str| l.split_once('(').map_or("", |(_, r)| r.trim_end_matches(')')).to_string();
+            fn drawn(l: &str) -> &str {
+                l.split_once('(').map_or("", |(_, r)| r.trim_end_matches(')'))
+            }
             sensors.iter().find(|x| x.label.eq_ignore_ascii_case(&key)).or_else(|| sensors.iter().find(|x| {
                 x.pin == 0 && !x.label.starts_with("Ix(") && name.eq_ignore_ascii_case("i") && (x.inst.eq_ignore_ascii_case(arg) || drawn(&x.label).eq_ignore_ascii_case(arg))
             }))
@@ -1633,10 +1635,17 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool) -> Netlist {
         let mut labels = pin_labels(prefix, &shown, pins_of);
         let other = !shown.eq_ignore_ascii_case(&inst) && (taken.contains(&shown.to_uppercase()) || drawn.get(&shown.to_uppercase()).is_some_and(|&n| n > 1)); // (another part's name)
         if other || labels.iter().any(|l| named.contains(&l.to_lowercase())) {
-            labels = pin_labels(prefix, &inst, pins_of);
+            // (the netlist's name; still taken, e.g. two parts drawn alike: made unique like the sensors)
+            let mut alt = inst.clone();
+            labels = pin_labels(prefix, &alt, pins_of);
+            while labels.iter().any(|l| named.contains(&l.to_lowercase())) {
+                alt.push('_');
+                labels = pin_labels(prefix, &alt, pins_of);
+            }
         }
-        // ponytail: a sensor on every device (+1 node, +1 branch each); sense only probed devices
-        // if huge imported schematics get slow
+        // ponytail: a sensor on every device, on every pin of transistors and subcircuits (+1 node,
+        // +1 branch each: an imported board of 100 ICs gains ~1500 rows); sense only probed devices
+        // or pins if huge imported schematics get slow
         // (two-pin parts: pin 1; transistors and subcircuits: every pin of the symbol, not an M's
         // added bulk, which stays on the source's own net)
         let sensed = if !SENSED.contains(prefix) || npins == 0 { 0..0 } else if npins <= 2 || !"QMJX".contains(prefix) { 0..1 } else { 0..npins };
