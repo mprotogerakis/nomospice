@@ -637,7 +637,7 @@ export function exprUnit(expr: string, vector: (name: string) => string = () => 
     if (name === "sqrt") return { d: a.d && a.d.map((x) => x / 2), n: a.n };
     // (over time only: over frequency or a source sweep a named product would read wrong, W for A·V)
     if (name === "integ" || name === "deriv") return x === "s" ? mul(a, dims(x), name === "integ" ? 1 : -1) : { d: null };
-    if (name === "group_delay") return dims("s"); // (-dφ/dω of a transfer function: seconds)
+    if (name === "group_delay") return x === "Hz" ? dims("s") : { d: null }; // (-dφ/dω of a transfer function: seconds; over frequency only)
     return { d: null }; // db(), ph(), exp() …: no unit of its own here
   }
   function power(): D {

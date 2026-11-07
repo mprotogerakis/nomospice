@@ -80,10 +80,12 @@ function segment(xs: number[]) {
 const curveName = (t: Trace, k: number, n: number, steps: string[]) =>
   n < 2 ? "" : t.data?.steps?.length === n ? steps[t.data.steps[k]] ?? `#${k + 1}` : `#${k + 1}`;
 const member = (s: Series, steps: string[]) => curveName(s.t, s.k, s.n, steps);
+/** A curve's name: its trace's, with its step if one of a family. */
+const curveLabel = (t: Trace, k: number, n: number, steps: string[]) => `${t.label}${((m) => (m ? ` ${m}` : ""))(curveName(t, k, n, steps))}`;
 
 /** The plotted data as CSV: x, then one column per series (family curves named by step or numbered). */
 function csv(xs: number[], xUnit: string, panes: Pane[], steps: string[]) {
-  const cols = panes.flatMap((p) => p.series.map((s) => ({ name: `${s.t.label}${((m) => (m ? ` ${m}` : ""))(member(s, steps))} [${s.u}]`, y: s.y })));
+  const cols = panes.flatMap((p) => p.series.map((s) => ({ name: `${curveLabel(s.t, s.k, s.n, steps)} [${s.u}]`, y: s.y })));
   const head = [`x [${xUnit}]`, ...cols.map((c) => `"${c.name.replace(/"/g, '""')}"`)].join(",");
   return [head, ...xs.map((x, i) => [x, ...cols.map((c) => c.y[i] ?? "")].join(","))].join("\n") + "\n";
 }
@@ -248,11 +250,18 @@ export const Waveform = memo(function Waveform() {
   const polar = useS((s) => s.plot.polar);
   const polarOn = ac && !!polar && signals.some((t) => t.data!.im);
   const steps = run?.steps ?? NO_STEPS;
-  const curves = useMemo<Curve[]>(() => !polarOn ? [] : signals.filter((t) => t.data!.im).flatMap((t) => {
-    const n = Math.max(1, Math.floor(t.data!.re.length / seg));
-    const [x, y] = polar === "nyquist" ? [t.data!.re, t.data!.im!] : [phase(t, seg), mag(t)];
-    return Array.from({ length: n }, (_, k) => ({ label: `${t.label}${((m) => (m ? ` ${m}` : ""))(curveName(t, k, n, steps))}`, slot: t.slot, x: x.slice(k * seg, (k + 1) * seg), y: y.slice(k * seg, (k + 1) * seg) }));
-  }), [polarOn, polar, signals, seg, steps]);
+  // (Nichols: the Bode panes' dB and phase series, curve by curve; Nyquist: re and im as they are)
+  const curves = useMemo<Curve[]>(() => {
+    if (!polarOn) return [];
+    if (polar === "nichols") {
+      const ph = panes[1]?.series ?? [];
+      return (panes[0]?.series ?? []).filter((s) => s.t.data!.im).map((s, j) => ({ label: curveLabel(s.t, s.k, s.n, steps), slot: s.t.slot, x: ph[j]?.y ?? [], y: s.y }));
+    }
+    return signals.filter((t) => t.data!.im).flatMap((t) => {
+      const n = Math.max(1, Math.floor(t.data!.re.length / seg));
+      return Array.from({ length: n }, (_, k) => ({ label: curveLabel(t, k, n, steps), slot: t.slot, x: t.data!.re.slice(k * seg, (k + 1) * seg), y: t.data!.im!.slice(k * seg, (k + 1) * seg) }));
+    });
+  }, [polarOn, polar, signals, seg, steps, panes]);
 
   const host = useRef<HTMLDivElement>(null);
   const paneEls = useRef<(HTMLDivElement | null)[]>([]);
@@ -446,9 +455,10 @@ export const Waveform = memo(function Waveform() {
           { label: "Clear cursors", run: () => setPlot({ a: null, b: null }) },
           { label: "Add trace…", disabled: !run, run: () => useS.setState({ dialog: { k: "trace" } }) },
           // (a loop gain's stability: where it passes -1)
+          // (Nyquist/Nichols need a complex trace; without one, only the way back)
           ...(ac && (signals.some((t) => t.data!.im) || polar) ? [
             { label: polar ? "Bode plot" : "Nyquist plot", hint: polar ? undefined : "Im over Re", run: () => setPlot({ polar: polar ? undefined : "nyquist" }) },
-            ...(polar !== "nichols" ? [{ label: "Nichols plot", hint: "dB over phase", run: () => setPlot({ polar: "nichols" }) }] : polar ? [{ label: "Nyquist plot", hint: "Im over Re", run: () => setPlot({ polar: "nyquist" }) }] : []),
+            ...(!signals.some((t) => t.data!.im) ? [] : polar === "nichols" ? [{ label: "Nyquist plot", hint: "Im over Re", run: () => setPlot({ polar: "nyquist" }) }] : [{ label: "Nichols plot", hint: "dB over phase", run: () => setPlot({ polar: "nichols" }) }]),
           ] : []),
           ...(tran ? [spec ? { label: "Back to the transient", run: () => showFft(null) }
             : { label: "FFT (spectrum)", hint: a != null && b != null && a !== b ? "of A–B" : zoom ? "of the shown range" : "of the whole run", disabled: !panes.length || !(range[1] > range[0]), run: () => showFft(range) }] : []),

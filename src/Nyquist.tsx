@@ -34,7 +34,14 @@ export const Polar = memo(function Polar({ curves, freqs, mode, onHover }: { cur
   // wheel zooms around the cursor, double-click fits again (and other curves: they may lie elsewhere)
   const [view, setView] = useState<{ cx: number; cy: number; kx: number; ky: number } | null>(null);
   const [hit, setHit] = useState<Hit | null>(null);
-  useEffect(() => (setView(null), setHit(null)), [mode, curves]);
+  // (another mode or other curves: fitted afresh; a re-run of the same ones keeps the zoom)
+  const which = `${mode} ${curves.map((c) => c.label).join("\n")}`;
+  useEffect(() => {
+    setView(null);
+    setHit(null);
+    onHover(null);
+  }, [which]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => onHover(null), [onHover]); // (gone: the table's hover value with it)
   const margin = 32;
   const base = useMemo(() => {
     const kx = Math.max((size.w - 2 * margin) / (fit.x1 - fit.x0), 1e-30), ky = Math.max((size.h - 2 * margin) / (fit.y1 - fit.y0), 1e-30);
@@ -59,15 +66,25 @@ export const Polar = memo(function Polar({ curves, freqs, mode, onHover }: { cur
   const drawn = useMemo(() => curves.map((c) => ({ d: path(c, 1), mirror: nyq ? path(c, -1) : "" })), [curves, nyq, v.cx, v.cy, v.kx, v.ky, size.w, size.h]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // hover: the nearest point within 14 px, its frequency to the trace table
+  // drag: pan (both ways)
+  const drag = useRef<{ X: number; Y: number; cx: number; cy: number } | null>(null);
   const onMove = (e: React.MouseEvent) => {
     const r = host.current!.getBoundingClientRect(), X = e.clientX - r.left, Y = e.clientY - r.top;
-    let best: Hit | null = null, bd = 14;
-    curves.forEach((c, ci) => c.x.forEach((x, i) => {
-      const y = c.y[i];
-      if (x == null || y == null) return;
-      const [hx, hy] = px(x, y), d = Math.hypot(hx - X, hy - Y);
-      if (d < bd) (best = { c: ci, i }), (bd = d);
-    }));
+    if (drag.current && e.buttons & 1) {
+      const d = drag.current;
+      return setView({ ...v, cx: d.cx - (X - d.X) / v.kx, cy: d.cy + (Y - d.Y) / v.ky });
+    }
+    // (inline, no arrays: a .step family may hold a million points)
+    let best: Hit | null = null, bd = 14 * 14;
+    const [w2, h2] = [size.w / 2, size.h / 2];
+    curves.forEach((c, ci) => {
+      for (let i = 0; i < c.x.length; i++) {
+        const x = c.x[i], y = c.y[i];
+        if (x == null || y == null) continue;
+        const dx = w2 + (x - v.cx) * v.kx - X, dy = h2 - (y - v.cy) * v.ky - Y, d = dx * dx + dy * dy;
+        if (d < bd) (best = { c: ci, i }), (bd = d);
+      }
+    });
     const h = best as Hit | null;
     if (h?.c !== hit?.c || h?.i !== hit?.i) {
       setHit(h);
@@ -75,11 +92,14 @@ export const Polar = memo(function Polar({ curves, freqs, mode, onHover }: { cur
     }
   };
   // wheel: zoom around the cursor (a mouse's lines as pixels), a sideways swipe pans; not passive,
-  // so the page does not scroll along
+  // so the page does not scroll along (registered once: the current view from a ref)
+  const now = useRef({ v, base, val });
+  now.current = { v, base, val };
   useEffect(() => {
     const el = host.current;
     if (!el) return;
     const wheel = (e: WheelEvent) => {
+      const { v, base, val } = now.current;
       e.preventDefault();
       const unit = e.deltaMode === 1 ? 16 : 1, dx = e.deltaX * unit, dy = e.deltaY * unit;
       if (Math.abs(dx) > Math.abs(dy)) return setView({ ...v, cx: v.cx + dx / v.kx });
@@ -90,7 +110,7 @@ export const Polar = memo(function Polar({ curves, freqs, mode, onHover }: { cur
     };
     el.addEventListener("wheel", wheel, { passive: false });
     return () => el.removeEventListener("wheel", wheel);
-  });
+  }, []);
 
   // grid
   const lo = val(0, size.h), hi = val(size.w, 0);
@@ -109,7 +129,8 @@ export const Polar = memo(function Polar({ curves, freqs, mode, onHover }: { cur
   const hx = h ? h.x[hit!.i] : null, hy = h ? h.y[hit!.i] : null;
 
   return (
-    <div ref={host} className="relative h-full min-w-0 flex-1 overflow-hidden" onMouseMove={onMove} onMouseLeave={() => (setHit(null), onHover(null))} onDoubleClick={() => setView(null)}>
+    <div ref={host} className="relative h-full min-w-0 flex-1 cursor-grab overflow-hidden active:cursor-grabbing" onMouseMove={onMove} onMouseLeave={() => ((drag.current = null), setHit(null), onHover(null))} onDoubleClick={() => setView(null)}
+      onMouseDown={(e) => { const r = host.current!.getBoundingClientRect(); drag.current = { X: e.clientX - r.left, Y: e.clientY - r.top, cx: v.cx, cy: v.cy }; }} onMouseUp={() => (drag.current = null)}>
       {size.w > 0 && (
         <svg width={size.w} height={size.h} className="block text-text-secondary">
           {ticks(lo.x, hi.x).map((t) => { const [x] = px(t, 0); return <g key={`x${t}`}><line x1={x} x2={x} y1={0} y2={size.h} stroke="var(--border)" /><text x={x + 3} y={size.h - 6} fontSize={10} fill="currentColor" className="font-mono">{fmt(t, xu)}</text></g>; })}
@@ -155,7 +176,7 @@ export const Polar = memo(function Polar({ curves, freqs, mode, onHover }: { cur
           <div>{nyq ? `${si(hx, "", 4)} ${hy < 0 ? "−" : "+"} j${si(Math.abs(hy), "", 4)}` : `${hy.toFixed(2)} dB ∠ ${hx.toFixed(1)}°`}</div>
         </div>
       )}
-      <div className="pointer-events-none absolute bottom-6 right-2 text-2xs text-text-tertiary">● lowest frequency{nyq ? " · dashed: negative frequencies" : ""} · wheel: zoom · dbl-click: fit</div>
+      <div className="pointer-events-none absolute bottom-6 right-2 text-2xs text-text-tertiary">● lowest frequency{nyq ? " · dashed: negative frequencies" : ""} · drag: pan · wheel: zoom · dbl-click: fit</div>
     </div>
   );
 });
