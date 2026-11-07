@@ -7,7 +7,7 @@ import { listen } from "@tauri-apps/api/event";
 import { ask, message, open, save } from "@tauri-apps/plugin-dialog";
 import {
   Code, Component, Copy, FilePlus, FlipHorizontal2, FolderOpen, Moon, MousePointer2, Play, Redo2, RotateCw, Save,
-  Info, Plus, Scissors, ScrollText, SlidersHorizontal, Spline, Square, Sun, Tag, Type, Undo2, Zap,
+  Info, Plus, Scissors, X, ScrollText, SlidersHorizontal, Spline, Square, Sun, Tag, Type, Undo2, Zap,
 } from "lucide-react";
 import type { Item } from "./types";
 import { Schematic } from "./Schematic";
@@ -508,15 +508,37 @@ function BottomPanel() {
   const isOpPlot = !!sim?.run?.plot.startsWith("op");
   const phasors = !!sim?.run?.plot.startsWith("ac"); // a table from .ac means one frequency: phasors
   const tabs: [typeof panel, string][] = [["log", "Log"], ["netlist", "Netlist"], ...(sim?.run?.op.length ? [["op", isOpPlot ? "Operating point" : phasors ? "Phasors" : "Results"] as [typeof panel, string]] : []), ["history", "History"]];
+  // its height: dragged at the top edge, kept across sessions (0: the default share)
+  const [height, setHeight] = useState(() => Number(localStorage.getItem("nomospice.panelHeight")) || 0);
+  const ref = useRef<HTMLDivElement>(null);
+  const resize = (e: React.PointerEvent) => {
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const room = ref.current!.parentElement!.getBoundingClientRect().height;
+    const move = (ev: PointerEvent) => {
+      const h = Math.round(Math.min(room * 0.85, Math.max(80, ref.current!.getBoundingClientRect().bottom - ev.clientY)));
+      setHeight(h);
+      localStorage.setItem("nomospice.panelHeight", String(h));
+    };
+    const up = () => (window.removeEventListener("pointermove", move), window.removeEventListener("pointerup", up));
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
   return (
-    <div className="flex h-[32%] min-h-[120px] shrink-0 flex-col border-t border-border bg-surface-panel">
+    <div ref={ref} style={height ? { height } : undefined} className={cn("flex min-h-[80px] shrink-0 flex-col border-t border-border bg-surface-panel", !height && "h-[32%]")}>
+      <div onPointerDown={resize} onDoubleClick={() => (setHeight(0), localStorage.removeItem("nomospice.panelHeight"))} title="Drag to resize · double-click: default height"
+        className="-mt-[3px] h-[5px] shrink-0 cursor-row-resize hover:bg-selection/40" />
       <div className="flex h-[26px] shrink-0 items-center border-b border-border bg-surface-panel-head px-1">
         {tabs.map(([k, label]) => (
-          <button key={k} onClick={() => useS.setState({ panel: k })}
+          // (the open tab clicked again: the panel closes)
+          <button key={k} onClick={() => useS.setState({ panel: panel === k ? null : k })}
             className={cn("h-full border-b-2 px-3 text-xs", panel === k ? "border-selection text-text-strong" : "border-transparent text-text-secondary hover:text-text-strong")}>
             {label}
           </button>
         ))}
+        <button type="button" aria-label="Close the panel" title={`Close (${keys("⌘L")} opens it again)`} onClick={() => useS.setState({ panel: null })}
+          className="ml-auto flex h-5 w-5 items-center justify-center rounded-control text-text-tertiary hover:bg-surface-hover hover:text-text-strong">
+          <X className="h-3.5 w-3.5" />
+        </button>
       </div>
       <div data-selectable className="min-h-0 flex-1 overflow-auto p-2 font-mono text-xs leading-[18px] select-text">
         {panel === "log" && (sim?.log.length

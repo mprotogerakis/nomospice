@@ -318,7 +318,8 @@ macro_rules! examples {
     ($($n:literal),*) => { &[$(($n, include_str!(concat!("../../examples/", $n, ".asc")))),*] };
 }
 pub const EXAMPLES: &[(&str, &str)] =
-    examples!("rc_transient", "rc_bode", "opamp_inverting", "ce_amplifier", "diode_sweep", "bjt_curves", "noise_rc", "phasor_rlc", "pz_sallen_key");
+    examples!("rc_transient", "rc_bode", "opamp_inverting", "ce_amplifier", "diode_sweep", "bjt_curves", "noise_rc", "phasor_rlc", "pz_sallen_key",
+        "meas_rc_timing", "buck_converter", "rectifier_rms", "analysis_tabs", "zener_prefix");
 
 /// LTspice writes ASCII, Latin-1 or UTF-16LE.
 pub fn decode(bytes: &[u8]) -> String {
@@ -2096,9 +2097,13 @@ mod tests {
         for (name, src) in EXAMPLES {
             let nl = netlist_for_sim(&parse_asc(src), &mut Library::builtin());
             assert!(nl.warnings.is_empty(), "{name}: {:?}", nl.warnings);
-            let deck = prepare(&nl.text, None, &mut vec![]).with_sensors(nl.sensors.clone());
+            let mut warnings = vec![];
+            let deck = nl.prepared(None, &mut warnings); // as the app runs it (.meas rewritten)
+            assert!(warnings.is_empty(), "{name}: {warnings:?}");
             let run = crate::ngspice::run(&deck).unwrap_or_else(|log| panic!("{name}\n{}\n{}", nl.text, log.join("\n")));
             let op = |n: &str| run.op.iter().find(|o| o.0 == n).map(|o| o.1.hypot(o.2)).unwrap_or_else(|| panic!("{name}: no {n} in {:?}", run.op));
+            let meas = |n: &str| run.meas.iter().find(|m| m.0 == n).and_then(|m| m.1).unwrap_or_else(|| panic!("{name}: {n} in {:?}\n{}", run.meas, deck.text()));
+            let near = |v: f64, want: f64, tol: f64| assert!((v / want - 1.0).abs() < tol, "{name}: {v} (want {want}) {:?}", run.meas);
             // the diagram-type examples: what their comments promise
             match *name {
                 "bjt_curves" => {
@@ -2124,6 +2129,30 @@ mod tests {
                     assert!(k4.op.iter().any(|o| o.0.starts_with("pole") && o.1 > 0.0), "{name}: {:?}", k4.op);
                     let ui = netlist(&parse_asc(src), &mut Library::builtin()); // what simulate lists from
                     assert_eq!(sweepable(&ui.text, &ui.insts).first().map(String::as_str), Some("Rb"), "{name}: the locus panel's default");
+                }
+                // the feature examples: what their comments promise
+                "meas_rc_timing" => {
+                    near(meas("tdelay"), 0.686e-6, 0.03); // 0.69 tau
+                    near(meas("trise"), 2.197e-6, 0.03); // 2.2 tau
+                    near(meas("ratio"), 3.2, 0.04);
+                    near(meas("pr"), 1e-4, 0.1); // C V^2 per 10 us period
+                }
+                "buck_converter" => {
+                    let (vout, eff) = (meas("vout"), meas("eff"));
+                    assert!((4.0..5.0).contains(&vout) && (0.8..0.99).contains(&eff) && meas("ripple") < 0.2, "{name}: {:?}", run.meas);
+                    near(meas("pout"), vout * vout / 5.0, 0.03);
+                }
+                "rectifier_rms" => {
+                    let (vrms, vavg) = (meas("vrms"), meas("vavg"));
+                    assert!((8.0..9.6).contains(&vrms) && (vrms / vavg - 1.0) < 0.01, "{name}: {:?}", run.meas);
+                    assert!(meas("irms") > 3.0 * meas("iavg") && meas("pd") > 0.0, "{name}: {:?}", run.meas);
+                    near(meas("pr"), vrms * vrms / 1e3, 0.02);
+                }
+                "analysis_tabs" => near(meas("peak"), 3.16, 0.05), // Q at f0 (the active .ac)
+                "zener_prefix" => {
+                    let out = crate::ngspice::trace("v(out)", &run.scale, run.id).unwrap();
+                    near(out.re[120], 5.1, 0.08); // V1 = 12 V: clamped near 5 V
+                    near(out.re[30], 3.0 * 10.0 / 11.0, 0.03); // V1 = 3 V: below breakdown, the divider R1 R2
                 }
                 _ => {
                     assert!(!run.scale.is_empty(), "{name}: {run:?}");

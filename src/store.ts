@@ -423,14 +423,20 @@ export function canProbe(target: Item | undefined) {
 
 /** LTspice probe: wire/label -> V(net), part -> current. Re-runs first if the results are stale,
  *  so net names always come from the netlist the results were computed with. */
-export async function probe(target: Item) {
+export async function probe(target: Item, power = false) {
   if (!canProbe(target)) return; // only things that can be plotted are worth a re-simulation
   await idle();
   if (get().stale) await simulate();
   const { sim, items, stale } = get();
   const i = items.indexOf(target); // edits during the await may have shifted indices
   if (!sim?.run || !probeMode(sim) || stale || i < 0) return; // e.g. the re-run turned out to be .noise
-  if (target.t === "sym") {
+  if (target.t === "sym" && power) {
+    // LTspice's power probe: the voltage across a two-pin part times the current into pin 1 —
+    // positive where it takes power (a resistor), negative where it gives it (a source)
+    const [a, b] = sim.netlist.nets[i] ?? [], expr = sim.netlist.probes[i];
+    const v = (n: string) => (n === "0" ? "0" : vexpr(n));
+    if (expr && a && b && sim.netlist.nets[i].length === 2) await addTraceNow(`P(${sim.netlist.insts[i]})`, `(${v(a)}-${v(b)})*${expr}`, "W");
+  } else if (target.t === "sym") {
     const expr = sim.netlist.probes[i];
     if (expr) await addTraceNow(currentLabel(sim.netlist.insts[i]), expr, "A");
   } else {

@@ -12,18 +12,24 @@ files — with a modern UI, ngspice as the engine, a Rust core and a React front
 - **LTspice files**: opens and saves `.asc` (Latin-1/UTF-16 like LTspice, every unknown line kept;
   checked against 2,321 LTspice example files). Symbols from a local LTspice install are used for
   parts nomospice does not ship. LTspice-only syntax is translated or reported (`.tran 1m`, `SINE`,
-  `Rser=`/`Lser=`/`Rpar=`/`Cpar=`, diode `N=`, `ako:` models, `MISC\JUMPER`, `.step` …).
+  `Rser=`/`Lser=`/`Rpar=`/`Cpar=`, diode `N=`, `ako:` models, `MISC\JUMPER`, `.step` …). Symbols
+  (`.asy`) next to the schematic are found; a part's own attributes such as `Prefix X` work as in LTspice.
 - **Forms instead of syntax**: sources (sine, pulse, exp, FM, PWL with a waveform preview, AC, Rser/Cpar),
   every analysis, `.param`, `.model` (parameters explained), `.meas`, `.ic`, `.temp`, `.include` are edited
   in forms that show the SPICE text they write; number fields show how SPICE reads them and catch
   `1M` (milli, not mega) and `10F` (femto). Typing SPICE directly still works everywhere.
 - **Analyses**: `.tran`, `.ac` (Bode: magnitude + phase panes), `.dc` (nested sweeps as curve
   families), `.op`, `.noise` (spectrum + totals), `.tf`, `.pz`, `.sens`; Live mode re-runs on every edit.
+  **A result tab per analysis**: keep e.g. a transient and an AC analysis in one schematic (the
+  alternatives as LTspice keeps them, `;.ac …` comments), each tab with its own traces, zoom and cursors.
+- **Measurements**: `.meas` results are listed with the plot; LTspice's syntax is translated for
+  ngspice (expressions such as `AVG -I(V1)*V(VDD)`, levels such as `VAL=0.5*V(VDD)`, `PARAM`, `I(R1)`).
 - **Poles and zeros**: `.pz` results as a map in the s-plane (× poles, ○ zeros, unstable half-plane
   shaded, f₀ and damping ζ per pole) and a **root locus**: sweep a `.param` or an R/C/L value and see
   the poles move, one `.pz` run per step.
-- **Waveforms** (uPlot): one pane per unit, synced zoom, cursors A/B with Δ and 1/Δx, expressions in
-  ngspice syntax, copy as CSV. A single-frequency `.ac` (`.ac lin 1 50 50`) gives a phasor table
+- **Waveforms** (uPlot): one pane per unit, synced zoom, cursors A/B with Δ and 1/Δx, average, RMS
+  and integral between them, expressions in ngspice syntax (a constant draws a reference line), a
+  part's power (right-click > Plot power), copy as CSV. A single-frequency `.ac` (`.ac lin 1 50 50`) gives a phasor table
   (magnitude ∠ phase) instead of a plot.
 - **SVG export** for slides and papers (right-click the canvas or the plot): the schematic or the plots as
   shown, in a light print style, readable by Inkscape, browsers, PowerPoint and Keynote.
@@ -35,7 +41,11 @@ files — with a modern UI, ngspice as the engine, a Rust core and a React front
   on the canvas (added/removed parts highlighted) and restore it.
 - **MCP server**: `nomospice --mcp` lets AI assistants read/write schematics, simulate them and
   search the libraries (see below).
-- Context menus everywhere, light/dark theme, crash recovery for unsaved work, macOS / Windows / Linux.
+- **Examples** on the start screen, one per feature: RC transient and Bode, inverting op-amp, CE
+  amplifier, diode sweep, BJT curves, noise, phasors, Sallen-Key poles and root locus, RC timing with
+  `.meas`, buck converter (efficiency), rectifier (RMS, power), result tabs, `Prefix X` subcircuit.
+- Context menus everywhere, light/dark theme, crash recovery for unsaved work, automatic updates
+  from the GitHub releases, macOS / Windows / Linux.
 
 ## Download
 

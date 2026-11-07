@@ -439,6 +439,8 @@ export const Schematic = memo(function Schematic() {
     const selectNet = () => set({ sel: items.flatMap((x, j) => ((x.t === "wire" || x.t === "flag") && nets?.nets[j]?.[0] === net ? [j] : [])) });
     const edit = () => set({ sel: [i], dialog: { k: "edit", index: i } });
     const plot: MenuItem[] = probing && it && canProbe(it) ? [{ label: it.t === "sym" ? `Plot ${currentLabel(nets?.insts[i] || "current")}` : `Plot V(${net ?? "?"})`, run: () => probe(it) }] : [];
+    // two-pin parts: their power too (LTspice: alt-click)
+    if (plot.length && it?.t === "sym" && nets?.nets[i]?.length === 2) plot.push({ label: `Plot power P(${nets.insts[i] || "?"})`, run: () => probe(it, true) });
     const arrange: MenuItem[] = [
       { label: "Rotate", hint: "⌃R", run: () => transform(rotate) },
       { label: "Mirror", hint: "⌃E", run: () => transform(mirror) },
