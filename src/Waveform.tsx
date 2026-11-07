@@ -6,7 +6,7 @@ import { Plus, X } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { removeTrace, setPlot, setTracePane, setTraceRight, setYAxis, showFft, useS } from "./store";
 import { openMenu } from "./Menu";
-import { at, fftSize, integrate, si, spectrum, unitTimes, xUnitOf } from "./spice";
+import { at, fftFreqs, fftSize, integrate, si, spectrum, unitTimes, xUnitOf } from "./spice";
 import { keys } from "./lib/utils";
 import type { Trace } from "./types";
 import { saveSvg, withLightTheme, xmlEscape } from "./svgExport";
@@ -20,16 +20,17 @@ type Series = { t: Trace; y: (number | null)[]; k: number; n: number; u: string;
 const scaleOf = (pane: { series: Series[] }, s: Series) => (s.r && pane.series.some((o) => !o.r) ? "y2" : "y");
 /** `unit2`: its right axis's unit (one for all its series there, else none). */
 type Pane = { unit: string; unit2: string; series: Series[] };
-/** The spectra of a trace's curves (each .step's), kept while its data and the window are the same
- *  (another trace added, an axis moved: not all transformed again). */
-const SPECTRA = new WeakMap<object, { key: string; parts: { f: number[]; db: (number | null)[] }[] }>();
+/** The spectra of a trace's curves (each .step's) end to end, kept while its data and the window
+ *  are the same (another trace added, an axis moved: not all transformed again); emptied when
+ *  the transient is shown again. ponytail: on the UI thread; a worker if 2^20-point families lag. */
+let SPECTRA = new WeakMap<object, { key: string; db: (number | null)[] }>();
 function spectra(d: Trace["data"] & object, lo: number, hi: number, n: number) {
   const key = `${lo} ${hi} ${n}`, got = SPECTRA.get(d);
-  if (got?.key === key) return got.parts;
+  if (got?.key === key) return got.db;
   const sg = segment(d.x);
-  const parts = Array.from({ length: Math.max(1, Math.floor(d.x.length / sg)) }, (_, k) => spectrum(d.x.slice(k * sg, (k + 1) * sg), d.re.slice(k * sg, (k + 1) * sg), lo, hi, n));
-  SPECTRA.set(d, { key, parts });
-  return parts;
+  const db = Array.from({ length: Math.max(1, Math.floor(d.x.length / sg)) }, (_, k) => spectrum(d.x.slice(k * sg, (k + 1) * sg), d.re.slice(k * sg, (k + 1) * sg), lo, hi, n)).flat();
+  SPECTRA.set(d, { key, db });
+  return db;
 }
 
 /** Whether the pane's left axis has a value above 0 to draw on a log scale (reference lines aside). */
@@ -169,14 +170,14 @@ export const Waveform = memo(function Waveform() {
   }, [spec, ok, fft]);
   const shown = useMemo(() => {
     if (!win) return ok;
-    return ok.filter((t) => !t.data!.constant && !t.data!.im).map((t): Trace => {
-      const parts = spectra(t.data!, win.lo, win.hi, win.n);
-      // (x: the frequencies once, shared; the curves end to end in re, split by its length)
-      return { ...t, unit: "dB", right: undefined, pane: undefined, data: { ...t.data!, x: parts[0].f, re: parts.flatMap((p) => p.db) as number[], constant: undefined } };
-    });
+    const f = fftFreqs(win.lo, win.hi, win.n); // (x: the frequencies once, shared; the curves end to end in re)
+    return ok.filter((t) => !t.data!.constant && !t.data!.im).map((t): Trace => ({ ...t, unit: "dB", right: undefined, pane: undefined, data: { ...t.data!, x: f, re: spectra(t.data!, win.lo, win.hi, win.n) as number[], constant: undefined } }));
   }, [ok, win]);
-  // the table's rows: in the spectrum also the traces without one (an error: still listed, removable)
-  const listed = useMemo(() => (spec ? [...shown, ...traces.filter((t) => !t.data?.x.length)] : traces), [spec, shown, traces]);
+  useEffect(() => {
+    if (!spec) SPECTRA = new WeakMap();
+  }, [spec]);
+  // the table's rows: in the spectrum also the traces without one (an error, a level: still listed, removable)
+  const listed = useMemo(() => (spec ? [...shown, ...traces.filter((t) => !shown.some((s) => s.expr === t.expr))] : traces), [spec, shown, traces]);
   // constants (reference lines: 0.5, 500m) are drawn on the top pane's axis, whatever it is now:
   // volts first, the magnitude in a Bode plot
   const [lines, signals] = useMemo(() => [shown.filter((t) => t.data!.constant), shown.filter((t) => !t.data!.constant)], [shown]);
@@ -215,7 +216,7 @@ export const Waveform = memo(function Waveform() {
     if (lines.length && !panes.length) panes.push({ unit: "", unit2: "", series: [] });
     // one series per level (not one per outer .dc step); in a Bode plot a magnitude, as in LTspice:
     // 1 at 0 dB, 0.707 at -3 dB
-    panes[0]?.series.push(...lines.map((t) => ({ t, y: (panes[0].unit === "dB" ? mag(t) : t.data!.re).slice(0, seg), k: 0, n: 1, u: panes[0].unit, r: false })));
+    panes[0]?.series.push(...lines.map((t) => ({ t, y: (panes[0].unit === "dB" ? mag(t) : t.data!.re).slice(0, seg), k: 0, n: 1, u: panes[0].unit, r: !!t.right && !panes[0].series.some((s) => s.u !== panes[0].unit) })));
     for (const p of panes) {
       const right = new Set(p.series.filter((s) => scaleOf(p, s) === "y2").map((s) => s.u));
       p.unit2 = right.size === 1 ? [...right][0] : "";
@@ -434,7 +435,7 @@ export const Waveform = memo(function Waveform() {
       <div className="flex w-[340px] shrink-0 flex-col border-l border-border bg-surface-panel text-xs">
         {win && (
           <div className="border-b border-border px-2 py-1 font-mono text-2xs text-text-secondary">
-            Spectrum of {si(win!.lo, "s")} … {si(win!.hi, "s")}: {win!.n} points, Hann window, dB of the amplitude (a sine of 1 V: 0 dB) ·{" "}
+            Spectrum of {si(win!.lo, "s")} … {si(win!.hi, "s")}: {win!.n} points, Hann window, dB of the amplitude (a sine of 1 V or 1 A: 0 dB) ·{" "}
             <button className="underline hover:text-text-strong" onClick={() => showFft(null)}>back to the transient</button>
           </div>
         )}

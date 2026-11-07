@@ -6,7 +6,7 @@ import type { Item, LibEntry, LibSource } from "./types";
 import { addTrace, analysisItem, commit, currentTab, loadSymbols, placePart, placeSymbol, refreshLibrarySymbols, setYAxis, useS } from "./store";
 import { defOf, prefixOf, vexpr } from "./geom";
 import { Button } from "./ui/button";
-import { closeDialog as close, Field, FIELD, Modal, numHelp, Rows, TextField } from "./ui/dialog";
+import { closeDialog as close, Field, FIELD, Modal, numHelp, NumField, Rows, TextField } from "./ui/dialog";
 import { SourceEditor } from "./SourceEditor";
 import { SimDialog } from "./SimDialog";
 import { DirectiveDialog } from "./DirectiveDialog";
@@ -333,11 +333,10 @@ function YRangeDialog({ pane, unit, log }: { pane: string; unit: string; log: bo
     close();
     setYAxis(pane, { ...y, lo: empty ? undefined : a!, hi: empty ? undefined : b! });
   };
-  const help = (v: string, set: (v: string) => void) => ((h) => ({ info: h.info, warn: h.warn || undefined }))(numHelp(v, unit, set));
   return (
     <Modal title="Y Range" onSubmit={submit}>
-      <TextField label="From" value={lo} set={setLo} unit={unit} autofocus {...help(lo, setLo)} />
-      <TextField label="To" value={hi} set={setHi} unit={unit} {...help(hi, setHi)} hint="both empty: automatic" />
+      <NumField label="From" value={lo} set={setLo} unit={unit} autofocus />
+      <NumField label="To" value={hi} set={setHi} unit={unit} hint="both empty: automatic" />
       {bad && <p className="text-2xs text-status-warning">⚠ {bad}</p>}
     </Modal>
   );

@@ -712,34 +712,45 @@ function fft(re: Float64Array, im: Float64Array) {
   }
 }
 
-/** Points of a spectrum of lo..hi: a power of 2, at least the samples there (the simulator's
- *  time steps: fewer would fold what lies above the new Nyquist frequency back in), 4096 to 2^20.
- *  ponytail: past 2^20 samples in the range it folds; average down first if such runs matter. */
+/** Points of a spectrum of lo..hi: a power of 2, as fine as the simulator's finest time step
+ *  there (coarser would fold what an edge has above the new Nyquist frequency back in), 4096 to 2^20.
+ *  ponytail: past 2^20 it folds; average down first if such runs matter. */
 export function fftSize(xs: number[], lo: number, hi: number) {
-  const m = xs.reduce((n, x) => n + (x >= lo && x <= hi ? 1 : 0), 0);
+  let dt = Infinity;
+  for (let i = 1; i < xs.length; i++) if (xs[i] > lo && xs[i - 1] < hi && xs[i] > xs[i - 1]) dt = Math.min(dt, xs[i] - xs[i - 1]);
+  const m = Math.min(2 ** 20, (hi - lo) / dt); // (Infinity without a step there: the most)
   return Math.min(2 ** 20, Math.max(4096, 2 ** Math.ceil(Math.log2(Math.max(m, 2)))));
 }
 
+/** The frequencies of `spectrum`'s bins: k/(hi-lo), k = 1 … n/2. */
+export const fftFreqs = (lo: number, hi: number, n: number) => Array.from({ length: n / 2 }, (_, k) => (k + 1) / (hi - lo));
+
 /** The amplitude spectrum of ys(xs) over lo..hi in dB (a sine of amplitude 1: 0 dB): resampled
- *  at n even points (the time steps are not even), Hann window. Bins 1 … n/2, the frequencies
- *  k/(hi-lo); DC left out (a log axis). */
-export function spectrum(xs: number[], ys: (number | null)[], lo: number, hi: number, n: number): { f: number[]; db: (number | null)[] } {
+ *  at n even points (the time steps are not even), its mean taken off (DC is not shown, and the
+ *  window would leak it into the lowest bins), Hann window. Bins 1 … n/2 (see `fftFreqs`). */
+export function spectrum(xs: number[], ys: (number | null)[], lo: number, hi: number, n: number): (number | null)[] {
   const re = new Float64Array(n), im = new Float64Array(n);
-  let sum = 0;
   // (one pass: the sample times only rise; xs outside lo..hi or a gap (a step halted early): 0)
+  let mean = 0;
   for (let i = 0, j = 0; i < n; i++) {
-    const w = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / n), t = lo + ((hi - lo) * i) / n;
+    const t = lo + ((hi - lo) * i) / n;
     while (j < xs.length - 2 && xs[j + 1] <= t) j++;
     const [a, b] = [ys[j], ys[j + 1]];
     const v = t < xs[0] || t > xs[xs.length - 1] || a == null || b == null ? 0 : xs[j + 1] === xs[j] ? a : a + Math.min(1, Math.max(0, (t - xs[j]) / (xs[j + 1] - xs[j]))) * (b - a);
-    re[i] = (Number.isFinite(v) ? v : 0) * w;
+    re[i] = Number.isFinite(v) ? v : 0;
+    mean += re[i] / n;
+  }
+  let sum = 0;
+  for (let i = 0; i < n; i++) {
+    const w = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / n);
+    re[i] = (re[i] - mean) * w;
     sum += w;
   }
   fft(re, im);
   const db: (number | null)[] = [];
   for (let k = 1; k <= n / 2; k++) {
-    const a = (2 * Math.hypot(re[k], im[k])) / sum;
+    const a = ((k === n / 2 ? 1 : 2) * Math.hypot(re[k], im[k])) / sum; // (the Nyquist bin has no mirror)
     db.push(a > 0 ? 20 * Math.log10(a) : null);
   }
-  return { f: Array.from({ length: n / 2 }, (_, k) => (k + 1) / (hi - lo)), db };
+  return db;
 }
