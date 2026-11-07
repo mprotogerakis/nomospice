@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import type { GitStatus, Item, Netlist, Sim, SymbolDef, Trace, TraceData } from "./types";
 import { currentLabel, defOf, symKey, vexpr, type Lib } from "./geom";
-import { ANY_ANALYSIS, analysisOptions, stripAnalyses, type Analysis } from "./spice";
+import { ANALYSIS, analysisOptions, stripAnalyses, type Analysis } from "./spice";
 
 export type Tool =
   | { k: "select" }
@@ -143,7 +143,8 @@ async function loadSymbolsNow(items: Item[], dir: string | null, { force = false
   // the answer replaces ours, and the backend may have dropped symbols it had cached (switched-off
   // libraries): ask for everything in use — the document, its undo history, a diff on show
   const s = get(), names = new Set(want(items));
-  if (!fresh) for (const its of [s.items, ...s.past, ...s.future, s.diff?.items ?? []]) for (const it of its) if (it.t === "sym") names.add(it.sym);
+  const placing = s.tool.k === "place" ? [s.tool.item] : []; // the part being placed, too
+  if (!fresh) for (const its of [s.items, ...s.past, ...s.future, s.diff?.items ?? [], placing]) for (const it of its) if (it.t === "sym") names.add(it.sym);
   const defs = await invoke<SymbolDef[]>("symbols", { names: [...names], dir });
   symDir = dir; // only once answered: a failed request is asked again next time
   set({ lib: Object.fromEntries(defs.map((d) => [d.name, d])) }); // the backend's whole set
@@ -251,11 +252,11 @@ export function analysisItem(items: Item[], kind: Analysis | null) {
 /** What a run for tab `tab` gets: a chosen tab runs its analysis instead of the schematic's. The
  *  items keep their indices (the netlist's arrays are aligned with them), the analyses are taken
  *  out, the tab's line goes last. Simulation and root locus use it. */
-export function simDeck(items: Item[], tab: Analysis | null) {
-  const opts = analysesOf(items);
+export function simDeck(items: Item[], tab: Analysis | null, opts = analysesOf(items)) {
   // several active analyses (ngspice would run them all and show the last): the shown tab's alone;
   // the schematic's only active analysis runs as it is (the live netlist stays the schematic's)
-  const actives = items.reduce((n, it) => n + (it.t === "text" && it.directive ? it.text.split("\n").filter((l) => ANY_ANALYSIS.test(l.trim())).length : 0), 0);
+  // (the form's kinds: an extra .pss beside one .op runs along as written, as before)
+  const actives = items.reduce((n, it) => n + (it.t === "text" && it.directive ? it.text.split("\n").filter((l) => ANALYSIS.test(l.trim())).length : 0), 0);
   // (a chosen tab whose analysis is gone: the shown one, as currentTab says)
   const kind = tab && opts.some((o) => o.kind === tab) ? tab : actives > 1 ? currentTab({ tab, items }, opts) : null;
   const pick = kind ? opts.find((o) => o.kind === kind) : undefined;
@@ -303,7 +304,7 @@ useS.subscribe((s, prev) => {
 export async function simulate() {
   if (get().running) return;
   const { items, path, tab } = get();
-  const deck = simDeck(items, tab), shown = currentTab(get()); // the tab these results are for
+  const opts = analysesOf(items), deck = simDeck(items, tab, opts), shown = currentTab(get(), opts); // the tab these results are for
   const gen = docGen;
   runSeq++;
   set({ running: true });
@@ -369,10 +370,10 @@ async function addTraceNow(label: string, expr: string, unit: string) {
     seq = runSeq;
     t = await fetchTrace({ label, expr, unit, slot: 0 });
     // this tab's results are no longer in ngspice (another tab or a root locus ran since): run it again, once
-    if (rerun && seq === runSeq && /replaced by a later run/.test(t.error ?? "")) {
+    // (not from inside a run, e.g. simulate's auto-plot: waiting for it to end would never end)
+    if (rerun && seq === runSeq && !get().running && /replaced by a later run/.test(t.error ?? "")) {
       rerun = false;
-      await idle(); // a run in flight first (simulate would not start a second one)
-      if (seq === runSeq) await simulate();
+      await simulate();
     }
     if (seq !== runSeq) await idle(); // a run started meanwhile: evaluate again on its result
   } while (seq !== runSeq);

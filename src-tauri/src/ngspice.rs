@@ -392,8 +392,10 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
     }
     let sensors = &sensors[..];
     // ngspice makes a helper source per par() in its output lines, named pa_00, pa_01 …
-    let pars = crate::schematic::statements(netlist, &[".meas", ".measure", ".print", ".plot", ".four", ".save"])
-        .iter().map(|l| l.to_ascii_lowercase().matches("par(").count()).sum();
+    let low = netlist.to_ascii_lowercase(); // (cheap checks first: most decks have neither)
+    let pars = if !low.contains("par(") { 0 } else {
+        crate::schematic::statements(netlist, &[".meas", ".measure", ".print", ".plot", ".four", ".save"]).iter().map(|l| l.to_ascii_lowercase().matches("par(").count()).sum()
+    };
     let (mut vectors, mut scale) = plot_vectors(api, &plot, sensors, pars);
     // one frequency (`.ac lin 1 50 50`): phasors, shown as a table like .op instead of a 1-point plot
     let phasors = scale == "frequency" && read(api, "frequency").is_some_and(|f| f.re.len() == 1);
@@ -422,7 +424,8 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
         let l = l.to_lowercase();
         l.contains("aborted") || l.contains("timestep too small") || l.contains("simulation interrupted")
     });
-    Ok(Run { id, plot, scale, vectors, op, aborted, meas: measurements(&log, &meas_names(netlist)), log })
+    let meas = if low.contains(".meas") { measurements(&log, &meas_names(netlist)) } else { vec![] };
+    Ok(Run { id, plot, scale, vectors, op, aborted, meas, log })
 }
 
 fn plot_vectors(api: &Api, plot: &str, sensors: &[crate::schematic::Sensor], pars: usize) -> (Vec<String>, String) {

@@ -328,7 +328,7 @@ export function Measurements({ xUnit }: { xUnit: string }) {
     <div className="border-b border-border px-2 py-1 font-mono text-2xs">
       <div className="text-text-tertiary">Measurements (.meas)</div>
       {meas.map(([name, v, info, onX], k) => (
-        <div key={`${name}${k}`} className="truncate" title={v == null ? "ngspice could not evaluate it: see the log (⌘L)" : info}>
+        <div key={`${name}${k}`} className="truncate" title={v == null ? `ngspice could not evaluate it: see the log (${keys("⌘L")})` : info}>
           <span className="text-text">{name}</span> = {v == null ? <span className="text-status-danger">failed</span> : si(v, onX ? xUnit : "", 5)}
         </div>
       ))}

@@ -239,7 +239,8 @@ impl Library {
         }
         if !self.0.contains_key(&key) {
             let file = format!("{key}.asy");
-            let folders = crate::library::sources().into_iter().filter(|s| s.enabled).map(|s| (s.path, true));
+            // (the library folders are asked for only when LTspice's do not have it)
+            let folders = std::iter::once_with(|| crate::library::sources().into_iter().filter(|s| s.enabled).map(|s| (s.path, true))).flatten();
             let found = ltspice_sym_dirs().into_iter().map(|d| (d, false)).chain(folders).find_map(|(dir, lent)| {
                 // folders only (the entry type comes with the listing: no stat per model file)
                 let folder = |e: &std::fs::DirEntry| e.file_type().is_ok_and(|t| t.is_dir() || (t.is_symlink() && e.path().is_dir()));

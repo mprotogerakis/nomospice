@@ -147,15 +147,16 @@ async function saveFile(as = false) {
   const [own, clash] = [found.filter(([, c]) => !c).map(([f]) => f), found.filter(([, c]) => c).map(([f]) => f)];
   // a different file of the same name over there: it would be used instead (and is not overwritten)
   const differ = clash.length ? `\n\nThe new folder has its own, different ${clash.join(", ")}: the schematic will use ${clash.length > 1 ? "those" : "that one"} there.` : "";
-  if (own.length && (await ask(`The schematic uses symbols from its old folder: ${own.join(", ")}. Copy them to the new folder?${differ}`, { title: "nomospice" })))
-    await invoke("folder_symbols", { from, to, names, copy: true }).catch(fail("Cannot copy all symbols"));
-  else if (!own.length && clash.length) await message(differ.trim(), { title: "nomospice" });
+  // decided now, copied once the schematic is written (a failed save leaves no copies behind)
+  const carry = !!own.length && (await ask(`The schematic uses symbols from its old folder: ${own.join(", ")}. Copy them to the new folder?${differ}`, { title: "nomospice" }));
+  if (!own.length && clash.length) await message(differ.trim(), { title: "nomospice" });
   if (doc !== docId()) return;
   try {
     // saves are written in the order they were requested: a newer snapshot never loses to an older one
     const write = (saveQueue = saveQueue.catch(() => {}).then(() => invoke("save_asc", { path, items })));
     await write;
     if (doc !== docId()) return; // another document was loaded meanwhile
+    if (carry) await invoke("folder_symbols", { from, to, names, copy: true }).catch(fail("Cannot copy all symbols"));
     const moved = path !== useS.getState().path; // relative .include paths now resolve elsewhere
     useS.setState({ path, dirty: useS.getState().items !== items, ...(moved && useS.getState().sim && { stale: true }) });
     if (moved) void loadSymbols(useS.getState().items).catch(() => {}).finally(refreshNets); // the new folder's symbols

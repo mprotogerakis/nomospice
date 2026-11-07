@@ -42,7 +42,9 @@ function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: 
     else onDone(it);
   };
   // independent sources (V, I; not the controlled E/G/F/H) get the waveform form
-  const prefix = it.t === "sym" ? prefixOf(it, def) : ""; // the part's own Prefix wins, as in the netlist
+  // the part's own Prefix wins, as in the netlist — as typed in the rows below, live
+  const prefixRow = extra.find(([k]) => k.trim().toLowerCase() === "prefix")?.[1] ?? "";
+  const prefix = it.t === "sym" ? prefixOf({ ...it, attrs: { ...it.attrs, Prefix: prefixRow } }, def) : "";
   const source = prefix === "V" || prefix === "I";
   // R, C, L: show how SPICE reads a single value (1M is a milliohm, 10F ten femtofarad)
   const unit = ({ R: "Ω", C: "F", L: "H" } as Record<string, string>)[prefix];
@@ -226,7 +228,8 @@ function Sources({ start }: { start?: "add" | "microcap" }) {
   const microcap = async () => {
     // already downloaded (still on disk), only switched off: switch it on again instead of fetching 60 MB
     const cur = await invoke<LibSource[]>("library_sources");
-    const mine = cur.find((s) => /[\\/]libraries[\\/]Micro-Cap 12$/i.test(s.path));
+    // (the download, or a detected install switched off)
+    const mine = cur.find((s) => /micro-cap/i.test(s.name) && !s.enabled);
     if (mine && (await invoke<boolean>("path_exists", { path: mine.path }))) return save(cur.map((s) => (s === mine ? { ...s, enabled: true } : s)));
     setBusy("Downloading Micro-Cap 12 (60 MB) from the Internet Archive…");
     try {
