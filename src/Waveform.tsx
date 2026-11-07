@@ -149,7 +149,7 @@ export const Waveform = memo(function Waveform() {
     if (lines.length && !panes.length) panes.push({ unit: "", series: [] });
     // one series per level (not one per outer .dc step); in a Bode plot a magnitude, as in LTspice:
     // 1 at 0 dB, 0.707 at -3 dB
-    panes[0]?.series.push(...lines.map((t) => ({ t, y: (cplx.length ? mag(t) : t.data!.re).slice(0, seg) })));
+    panes[0]?.series.push(...lines.map((t) => ({ t, y: (panes[0].unit === "dB" ? mag(t) : t.data!.re).slice(0, seg) })));
     return panes;
   }, [ok, lines, signals, zero, seg]);
 
@@ -362,7 +362,7 @@ const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot }: { trac
   // (time and DC sweeps: over a frequency axis an average or integral of a magnitude means little.
   // xs is one sweep segment, rising or falling: nested .dc families are separate series of it)
   const num = (v: number, u: string) => (Number.isNaN(v) ? "–" : si(v, u)); // (no data in the range)
-  const stats = useMemo(() => xUnit === "Hz" ? [] : traces.flatMap((t) => panes.flatMap((p) => p.series.filter((s) => s.t === t && p.unit !== "dB" && p.unit !== "°").map((s) => ({ t, unit: p.unit, ...integrate(xs, s.y, lo, hi) })))),
+  const stats = useMemo(() => xUnit === "Hz" ? [] : traces.filter((t) => !t.data?.constant).flatMap((t) => panes.flatMap((p) => p.series.filter((s) => s.t === t && p.unit !== "dB" && p.unit !== "°").map((s) => ({ t, unit: p.unit, ...integrate(xs, s.y, lo, hi) })))),
     [traces, panes, xs, lo, hi, xUnit]); // not per hover move
   return (
     <>
