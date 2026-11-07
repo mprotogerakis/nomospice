@@ -313,7 +313,7 @@ export async function simulate() {
     if (gen !== docGen) return; // another document was opened meanwhile
     // edited next to the schematic: reloaded for the folder current when the request runs (a
     // document loaded meanwhile must not get the old folder back)
-    if (sim.symbols) void loadSymbols(get().items, undefined, { force: true });
+    if (sim.symbols) void loadSymbols(get().items, undefined, { force: true }).catch(() => {});
     const changed = get().items !== items; // edited while ngspice ran: results are already stale
     const op = isOp(sim);
     const newKind = !!sim.run && plotKind(sim) !== get().plot.kind;

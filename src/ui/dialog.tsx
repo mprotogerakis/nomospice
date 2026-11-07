@@ -126,15 +126,17 @@ export function Tabs<K extends string>({ tabs, value, set }: { tabs: [K, string]
 
 /** Rows of two text cells with add/remove: parameters (name = value), initial conditions, PWL points.
  *  `units` are shown after each cell; `sep` between them. */
-export function Rows({ rows, set, a, b, list, sep = "=", units = ["", ""], add = "Add" }: {
+export function Rows({ rows, set, a, b, list, sep = "=", units = ["", ""], add = "Add", autofocus = true }: {
   rows: string[][]; set: (r: string[][]) => void; a: string; b: string; list?: string; sep?: string; units?: [string, string]; add?: string;
+  /** the first row takes the dialog's focus (not in a form whose own field should) */
+  autofocus?: boolean;
 }) {
   const put = (r: number, c: number, v: string) => set(rows.map((row, i) => (i === r ? (c ? [row[0], v] : [v, row[1]]) : row)));
   return (
     <div className="flex flex-col gap-1">
       {rows.map(([x, y], r) => (
         <div key={r} className="flex items-center gap-1">
-          <input className={FIELD} value={x} placeholder={a} list={list} data-autofocus={r === 0 || undefined} aria-label={`${a} ${r + 1}`} onChange={(e) => put(r, 0, e.target.value)} />
+          <input className={FIELD} value={x} placeholder={a} list={list} data-autofocus={(autofocus && r === 0) || undefined} aria-label={`${a} ${r + 1}`} onChange={(e) => put(r, 0, e.target.value)} />
           {units[0] && <span className="text-2xs text-text-tertiary">{units[0]}</span>}
           {sep && <span className="text-text-tertiary">{sep}</span>}
           <input className={FIELD} value={y} placeholder={b} aria-label={`${b} ${r + 1}`} onChange={(e) => put(r, 1, e.target.value)} />

@@ -68,7 +68,7 @@ function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: 
             </>
           )}
           <Field label="Other attributes" hint={`e.g. Prefix X to call a subcircuit model instead of the ${def?.prefix || "symbol's"} device`}>
-            <Rows rows={extra} set={setExtra} a="attribute" b="value" list="sym-attrs" add="Add attribute" />
+            <Rows rows={extra} set={setExtra} a="attribute" b="value" list="sym-attrs" add="Add attribute" autofocus={false} />
           </Field>
           <datalist id="sym-attrs">{["Prefix", "SpiceLine2"].map((n) => <option key={n} value={n} />)}</datalist>
         </>
@@ -137,8 +137,9 @@ function PartsDialog({ replace, kind0, libraries }: { replace?: number; kind0?: 
     const { items } = useS.getState();
     const target = replace != null ? items[replace] : undefined;
     if (target?.t === "sym" && e.kind !== "SYMBOL") {
-      // "choose model": the part keeps its place; a subcircuit brings its own box symbol
-      const sym = e.kind === "SUBCKT" ? e.symbol : target.sym;
+      // "choose model": the part keeps its place; a subcircuit brings its own box symbol — unless the
+      // part calls subcircuits through its own Prefix (X on a MOSFET symbol): its symbol stays
+      const sym = e.kind === "SUBCKT" && !target.attrs.Prefix?.trim() ? e.symbol : target.sym;
       await loadSymbols([{ ...target, sym }]);
       commit(items.map((it) => (it === target ? { ...target, sym, attrs: { ...target.attrs, Value: e.name } } : it)));
     } else if (e.kind === "SYMBOL") placeSymbol(e.name);

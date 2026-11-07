@@ -352,7 +352,8 @@ const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot }: { trac
   // average, RMS, integral (LTspice: ctrl-click a trace label) between the cursors, else over what is shown
   const zoom = useS((s) => s.plot.zoom);
   const [lo, hi] = dx != null ? [Math.min(a!, b!), Math.max(a!, b!)] : zoom ?? [Math.min(xs[0], xs[xs.length - 1]), Math.max(xs[0], xs[xs.length - 1])];
-  // (time and DC sweeps: over a frequency axis an average or integral of a magnitude means little)
+  // (time and DC sweeps: over a frequency axis an average or integral of a magnitude means little.
+  // xs is one sweep segment, rising or falling: nested .dc families are separate series of it)
   const num = (v: number, u: string) => (Number.isNaN(v) ? "–" : si(v, u)); // (no data in the range)
   const stats = useMemo(() => xUnit === "Hz" ? [] : traces.flatMap((t) => panes.flatMap((p) => p.series.filter((s) => s.t === t && p.unit !== "dB" && p.unit !== "°").map((s) => ({ t, unit: p.unit, ...integrate(xs, s.y, lo, hi) })))),
     [traces, panes, xs, lo, hi, xUnit]); // not per hover move

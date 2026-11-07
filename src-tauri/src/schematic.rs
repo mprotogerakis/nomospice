@@ -214,7 +214,8 @@ impl Library {
                     self.local.lent.remove(&key); // the folder's own now, no longer lent
                     self.local.own.insert(key);
                 }
-                Err(_) => self.local.stamp = None, // (being written?) the next rescan tries again
+                // unreadable: left out; a write that finishes changes the stamp, and the next rescan reads it
+                Err(_) => {}
             }
         }
         true
@@ -823,7 +824,7 @@ impl Netlist {
 /// - `I(R1)` of a part with a current sensor becomes the sensor's current;
 /// - no analysis type (LTspice measures the simulation's) gets the deck's.
 fn ltspice_meas(text: &str, sensors: &[Sensor], warnings: &mut Vec<String>) -> String {
-    if !text.to_ascii_lowercase().contains(".meas") {
+    if !contains_ci(text, ".meas") {
         return text.to_string(); // nothing to rewrite: no pass over a big deck
     }
     let lines = deck_lines(text);
@@ -887,6 +888,11 @@ pub fn statements(text: &str, heads: &[&str]) -> Vec<String> {
         }
     }
     out
+}
+
+/// Whether `hay` contains `needle` (ASCII, any case), without a lowercase copy of a big deck.
+pub fn contains_ci(hay: &str, needle: &str) -> bool {
+    hay.as_bytes().windows(needle.len()).any(|w| w.eq_ignore_ascii_case(needle.as_bytes()))
 }
 
 /// How many par() calls `s` makes (ngspice: at most 99 per deck; one helper vector pair each):
@@ -1053,11 +1059,13 @@ fn meas_statement(s: &str, sensors: &[Sensor], an: &str) -> Result<String, Strin
                 }
                 let w = toks[start..i].join("");
                 match w.split_once('=') {
-                    Some((_, b)) if linear && !(number(b) || call(b)) => {
+                    Some((_, b)) if linear && !(number(b) || call(b) || ac_vector(b).is_some()) => {
                         return Err(format!("{}: in AC/SP, ngspice takes only a number or a vector as the level ({b}), and would measure at its first number: left out", out.get(2).map_or(".meas", |n| n.as_str())));
                     }
                     Some((a, b)) => {
                         let a = if linear { ac_vector(a).unwrap_or(a.to_string()) } else { a.to_string() };
+                        let b = if linear { ac_vector(b).unwrap_or(b.to_string()) } else { b.to_string() };
+                        let b = b.as_str();
                         // ngspice reads `vector=number` and `vector=vector` itself (and AC stays as written);
                         // a bare name on the right is a .param in LTspice: par() resolves it
                         if simple(&a) && (number(b) || call(b)) || linear {
@@ -1933,6 +1941,7 @@ mod tests {
         assert_eq!(m(".meas tran ratio PARAM tplh / tphl"), ".meas tran ratio param='tplh/tphl'", "LTspice's PARAM");
         assert_eq!(m(".meas tran t TRIG V(in) VAL='0.5*V(vdd)' RISE=1"), ".meas tran t TRIG par('V(in)-(0.5*V(vdd))') VAL=0 RISE=1", "a quoted level: no nested quotes");
         assert_eq!(m(".meas sp g MAX V(out)/V(in)"), ".meas sp g MAX V(out)/V(in)", "SP: no par() either (linearized)");
+        assert_eq!(m(".meas ac x WHEN mag(V(out))=mag(V(in))"), ".meas ac x WHEN vm(out)=vm(in)", "both sides as ngspice vectors");
         assert_eq!(m(".meas ac p FIND ph(V(out)) AT=1k"), ".meas ac p FIND ph(V(out)) AT=1k", "degrees vs radians: not mapped");
         let mut w = vec![];
         let skipped = ltspice_meas(".ac dec 10 1 1k\n.meas ac f1 TRIG vm(out) VAL=0.5*vm(in) TARG vm(out) VAL=1\n", &[], &mut w);
