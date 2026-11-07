@@ -108,11 +108,19 @@ impl R {
         }
         R(padd(&pmul(&self.0, &o.1), &pmul(&on, &self.1)), pmul(&self.1, &o.1))
     }
+    // ponytail: a factor is cancelled only where it is written alike above and below (G/(1+G):
+    // G's denominator); a numeric polynomial gcd if other forms leave hidden pole-zero pairs
     fn mul(&self, o: &R) -> R {
+        if self.0 == o.1 {
+            return R(o.0.clone(), self.1.clone());
+        }
+        if self.1 == o.0 {
+            return R(self.0.clone(), o.1.clone());
+        }
         R(pmul(&self.0, &o.0), pmul(&self.1, &o.1))
     }
     fn div(&self, o: &R) -> R {
-        R(pmul(&self.0, &o.1), pmul(&self.1, &o.0))
+        self.mul(&R(o.1.clone(), o.0.clone()))
     }
 }
 
@@ -121,6 +129,8 @@ impl R {
 struct P<'a> {
     s: &'a str,
     i: usize,
+    /// how deep in parentheses (a stack's worth at most)
+    d: usize,
 }
 
 impl P<'_> {
@@ -157,6 +167,15 @@ impl P<'_> {
         }
     }
     fn unary(&mut self) -> Result<R, String> {
+        if self.d > 100 {
+            return Err("nested too deep".into());
+        }
+        self.d += 1;
+        let r = self.unary1();
+        self.d -= 1;
+        r
+    }
+    fn unary1(&mut self) -> Result<R, String> {
         match self.peek() {
             Some('-') => {
                 self.i += 1;
@@ -201,7 +220,7 @@ impl P<'_> {
             Some('{') => {
                 let rest = &self.s[self.i..];
                 let end = rest.find('}').ok_or("a { without its }")?;
-                let mut inner = P { s: &rest[1..end], i: 0 };
+                let mut inner = P { s: &rest[1..end], i: 0, d: self.d };
                 let a = inner.sum()?;
                 if inner.peek().is_some() {
                     return Err(format!("cannot read `{}`", &rest[1..end]));
@@ -274,11 +293,10 @@ fn constant(r: &R) -> Option<C> {
     (r.0.len() == 1 && r.1.len() == 1).then(|| r.0[0].div(&r.1[0]))
 }
 
-/// Whether ngspice's vector `v` is one of `realise`'s nodes (`e1_lapz1`, `x1.e1_lapy`): not
+/// Whether ngspice's vector `v` is one of `realise`'s nodes (`e1#lapz1`, `x1.e1#lapy`): not
 /// listed with the results.
 pub fn internal(v: &str) -> bool {
-    let last = v.rsplit('.').next().unwrap_or(v);
-    last.ends_with("_lapy") || last.rsplit_once("_lapz").is_some_and(|(a, k)| !a.is_empty() && !k.is_empty() && k.bytes().all(|b| b.is_ascii_digit()))
+    v.ends_with("#lapy") || v.rsplit_once("#lapz").is_some_and(|(_, k)| !k.is_empty() && k.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// Whether `s` occurs in `t` as a word of its own.
@@ -292,7 +310,7 @@ fn mentions_s(t: &str) -> bool {
 /// `expr` (the Laplace= value) as numerator and denominator, by ascending power of s; common
 /// factors of s cancelled (`s/(s*(1+s))`).
 fn coefficients(expr: &str) -> Result<R, String> {
-    let mut p = P { s: expr.trim(), i: 0 };
+    let mut p = P { s: expr.trim(), i: 0, d: 0 };
     let R(mut num, mut den) = p.sum()?;
     if p.peek().is_some() {
         return Err(format!("cannot read `{}`", &p.s[p.i..]));
@@ -307,15 +325,18 @@ fn coefficients(expr: &str) -> Result<R, String> {
     if den.iter().all(C::zero) {
         return Err("its denominator is 0".into());
     }
+    if num.iter().chain(&den).any(|c| matches!(c, C::N(v) if !v.is_finite())) {
+        return Err("a coefficient is not a number (a division by 0, a root of a negative number)".into());
+    }
     Ok(R(num, den))
 }
 
 /// H(s) = num/den as plain elements, in the controllable canonical form: a state per power of s
-/// below, each a capacitor's voltage `<name>_lapzk` fed by G sources; the output an E (or G) of
-/// their sum, `<name>_lapy` (`i(E1)` still a current; results do not list these nodes). Time is scaled by w (s = w·p, capacitors of 1/w) and
+/// below, each a capacitor's voltage `<name>#lapzk` fed by G sources; the output an E (or G) of
+/// their sum, `<name>#lapy` (`i(E1)` still a current; results do not list these nodes). Time is scaled by w (s = w·p, capacitors of 1/w) and
 /// the states by the lowest power below, so they stay near the input's size (ngspice's voltage
 /// tolerance is 1 µV: unscaled, a 1 MHz pole's state would be ~1e-13 V). Integrators (no s⁰
-/// below) leak through 1 GΩ, so the operating point exists without a loop around them too.
+/// below) leak through 1 nS, so the operating point exists without a loop around them too.
 fn realise(name: &str, n: &[&str], h: &R) -> String {
     let R(num, den) = h;
     let ord = den.len() - 1;
@@ -346,8 +367,9 @@ fn realise(name: &str, n: &[&str], h: &R) -> String {
     let b: Vec<C> = (0..=ord).map(|k| num.get(k).map_or(C::N(0.0), |c| scaled(c, k))).collect();
     // (all linear G: node names like `in+` are no operators here, and .pz takes them)
     let low = name.to_ascii_lowercase();
-    let z = |k: usize| format!("{low}_lapz{k}");
-    let y = format!("{low}_lapy");
+    // ('#': no net of a schematic has it, so results can leave these out by name)
+    let z = |k: usize| format!("{low}#lapz{k}");
+    let y = format!("{low}#lapy");
     let mut lines = vec![];
     let mut g = |tag: String, to: &str, from: &str, c: C| {
         if !c.zero() {
@@ -360,7 +382,8 @@ fn realise(name: &str, n: &[&str], h: &R) -> String {
     for j in 0..ord {
         g(format!("a{j}"), &z(ord), &format!("{} 0", z(j + 1)), a[j].div(&a[ord]).neg());
     }
-    // y = Σ (b_k - b_ord a_k / a_ord) z_(k+1) + b_ord / a_ord u, as a current through 1 Ω
+    // y = Σ (b_k - b_ord a_k / a_ord) z_(k+1) + b_ord / a_ord u, as a current through 1 S
+    // (conductances as G sources of their own voltage: noiseless, unlike resistors)
     let feed = b[ord].div(&a[ord]);
     for k in 0..ord {
         g(format!("b{k}"), &y, &format!("{} 0", z(k + 1)), b[k].add(&feed.mul(&a[k]).neg()));
@@ -369,13 +392,13 @@ fn realise(name: &str, n: &[&str], h: &R) -> String {
     for k in 1..=ord {
         lines.push(format!("C{name}_z{k} {} 0 {}", z(k), C::N(1.0).div(&w).spice()));
         if k <= r {
-            lines.push(format!("R{name}_z{k} {} 0 1e9", z(k)));
+            lines.push(format!("G{name}_l{k} {} 0 {} 0 1e-9", z(k), z(k)));
         }
         if k < ord {
             lines.push(format!("G{name}_z{k} 0 {} {} 0 1", z(k), z(k + 1)));
         }
     }
-    lines.push(format!("R{name}_y {y} 0 1"));
+    lines.push(format!("G{name}_y {y} 0 {y} 0 1"));
     lines.push(format!("{name} {out} {y} 0 1"));
     lines.join("\n")
 }
@@ -390,6 +413,11 @@ pub fn rewrite(text: &str, warnings: &mut Vec<String>) -> String {
     let mut out = String::with_capacity(text.len());
     let mut k = 0;
     while k < lines.len() {
+        if !lines[k].trim_start().starts_with(['E', 'e', 'G', 'g']) {
+            out.push_str(lines[k]);
+            k += 1;
+            continue;
+        }
         // a line and its `+` continuations, as one (comments and blank lines between them
         // skipped, as ngspice does); each without its inline comment
         let (mut j, mut end) = (k + 1, k + 1);
@@ -482,7 +510,10 @@ mod tests {
         assert!(coefficients("2^s").unwrap_err().contains("exponent"));
         assert!(coefficients("1/(1+s*tau/20)^20").unwrap_err().contains("20,000"));
         assert!(!mentions_s("tau") && mentions_s("2*s+1") && !mentions_s("sigma"));
-        assert!(internal("e1_lapz1") && internal("x1.e1_lapy") && !internal("out") && !internal("_lapz") && !internal("a_lapz1x"));
+        assert!(internal("e1#lapz1") && internal("x1.e1#lapy") && !internal("out") && !internal("clk_lapz1") && !internal("a#lapz1x"));
+        assert_eq!(c("(1/(s-1))/(1+10/(s-1))"), (v(&["1e0"]), v(&["9e0", "1e0"])), "G/(1+G): no hidden pole at +1");
+        assert!(coefficients("(-2)^0.5/(1+s)").unwrap_err().contains("not a number"));
+        assert!(coefficients(&format!("{}1{}", "(".repeat(100_000), ")".repeat(100_000))).unwrap_err().contains("deep"));
     }
 
     #[test]
@@ -490,10 +521,10 @@ mod tests {
         let mut w = vec![];
         let t = rewrite("E1 out 0 in 0 Laplace=1/(1+s*1µ) ; a pole\nG2 a b c d laplace = {gm}/(1+s*{tau})\twindow=1 // as LTspice\nR1 a 0 1k\nE3 laplace_out 0 in 0\n* between\n\n+ Laplace=2\nE4 o 0 i 0 Laplace=3\n+ window=1\nE5 o 0 i 0 Laplace=1/(1+\u{a0}s)\n", &mut w);
         assert!(w.is_empty(), "{w:?}");
-        assert!(t.contains("GE1_u 0 e1_lapz1 in 0 1e0\nGE1_a0 0 e1_lapz1 e1_lapz1 0 -1e0\nGE1_b0 0 e1_lapy e1_lapz1 0 1e0\nCE1_z1 e1_lapz1 0 1e-6\nRE1_y e1_lapy 0 1\nE1 out 0 e1_lapy 0 1\n"), "{t}");
-        assert!(t.contains("G2 a b g2_lapy 0 1") && t.contains("{gm}") && t.contains("R1 a 0 1k") && !t.contains("pole") && !t.contains("window") && !t.contains("LTspice"), "{t}");
+        assert!(t.contains("GE1_u 0 e1#lapz1 in 0 1e0\nGE1_a0 0 e1#lapz1 e1#lapz1 0 -1e0\nGE1_b0 0 e1#lapy e1#lapz1 0 1e0\nCE1_z1 e1#lapz1 0 1e-6\nGE1_y e1#lapy 0 e1#lapy 0 1\nE1 out 0 e1#lapy 0 1\n"), "{t}");
+        assert!(t.contains("G2 a b g2#lapy 0 1") && t.contains("{gm}") && t.contains("R1 a 0 1k") && !t.contains("pole") && !t.contains("window") && !t.contains("LTspice"), "{t}");
         assert!(t.contains("E3 laplace_out 0 in 0 2e0\nE4 o 0 i 0 3e0\n") && !t.contains("between"), "continuations: {t}");
-        assert!(t.contains("E5 o 0 e5_lapy 0 1"), "a no-break space: {t}");
+        assert!(t.contains("E5 o 0 e5#lapy 0 1"), "a no-break space: {t}");
         let t = rewrite("E1 out 0 Laplace=1/s\n", &mut w);
         assert!(w[0].contains("two output and two input") && t.contains("Laplace"), "left as it was, said");
     }
