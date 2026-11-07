@@ -464,7 +464,7 @@ export const Schematic = memo(function Schematic() {
       : [...(own ? [{ label: `Plot ${own}`, run: () => probe(it) }] : []),
         ...(nets?.pin_currents?.[i] ?? []).flatMap((c, k) => (c && c !== own ? [{ label: `Plot ${c}`, run: () => probe(it, false, k) }] : []))];
     // two-pin parts: their power too (LTspice: alt-click)
-    if (own && powerMode(sim) && it?.t === "sym" && nets?.nets[i]?.length === 2) plot.push({ label: `Plot power P(${nets.insts[i] || "?"})`, run: () => probe(it, true) });
+    if (own && powerMode(sim) && it?.t === "sym" && nets?.nets[i]?.length === 2) plot.push({ label: `Plot power ${own.replace(/^I/, "P")}`, run: () => probe(it, true) });
     const arrange: MenuItem[] = [
       { label: "Rotate", hint: "⌃R", run: () => transform(rotate) },
       { label: "Mirror", hint: "⌃E", run: () => transform(mirror) },

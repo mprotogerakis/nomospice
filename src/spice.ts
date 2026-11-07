@@ -577,6 +577,7 @@ export const xUnitOf = (scale: string) =>
 
 /** The unit of a product of two units (an integral over x: W·s = J, A·s = C), "" for none. */
 export function unitTimes(a: string, b: string) {
+  if (a === "Hz" || b === "Hz") return [a, b].filter(Boolean).join("·"); // (over frequency: V·Hz, not V/s)
   const [x, y] = [dimOf(a), dimOf(b)];
   return x && y ? unitName(x.map((k, j) => k + y[j])) : [a, b].filter(Boolean).join("·");
 }
@@ -628,7 +629,8 @@ export function exprUnit(expr: string, vector: (name: string) => string = () => 
     const a = args()[0];
     if (/^(abs|mag|real|re|imag|im|mean|avg|rms|max|min|vecmax|vecmin)$/.test(name)) return a;
     if (name === "sqrt") return { d: a.d && a.d.map((x) => x / 2), n: a.n };
-    if (name === "integ" || name === "deriv") return x ? mul(a, dims(x), name === "integ" ? 1 : -1) : { d: null }; // (an x without a unit: unknown)
+    // (over an x without a unit, or frequency, where V·s would read wrong: unknown)
+    if (name === "integ" || name === "deriv") return x && x !== "Hz" ? mul(a, dims(x), name === "integ" ? 1 : -1) : { d: null };
     return { d: null }; // db(), ph(), exp() …: no unit of its own here
   }
   function power(): D {
