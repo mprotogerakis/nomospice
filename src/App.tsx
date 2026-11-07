@@ -16,7 +16,7 @@ import { PoleZero } from "./PoleZero";
 import { checkForUpdate, installUpdate, useUpdate } from "./updater";
 import { Dialogs } from "./Dialogs";
 import { Boundary } from "./Boundary";
-import { analysesOf, closeTab, currentTab, dirOf, fileName, docId, viewOf, loadDoc, loadSymbols, placeSymbol, plotKind, redo, refreshGit, refreshNets, relToDoc, selectTab, simulate, undo, useS, useStatus } from "./store";
+import { analysesOf, closeTab, currentTab, dirOf, fileName, docId, viewOf, loadDoc, loadSymbols, placeSymbol, plotKind, probeMode, redo, refreshGit, refreshNets, relToDoc, selectTab, simulate, undo, useS, useStatus } from "./store";
 import { History } from "./History";
 import { mirror, rotate } from "./geom";
 import { ANALYSES, si, tokens } from "./spice";
@@ -322,7 +322,7 @@ export function App() {
         f5: () => (useS.getState().sel.length ? deleteSelection() : useS.setState({ tool: { k: "delete" } })),
         f6: duplicate, f9: e.shiftKey ? redo : undo,
         // (F7/F8 as LTspice has them; on a Mac they are media keys unless fn is held: M too)
-        f7: () => useS.setState({ tool: { k: "move" } }), m: () => useS.setState({ tool: { k: "move" } }), f8: () => useS.setState({ tool: { k: "select" } }),
+        f7: moveTool, m: moveTool, f8: () => useS.setState({ tool: { k: "select" } }),
         " ": () => window.dispatchEvent(new Event("nomospice:fit")),
       };
       if (map[k]) run(map[k]);
@@ -338,10 +338,10 @@ export function App() {
     : tool.k === "place" ? "Click to place · ⌃R rotate · ⌃E mirror · Esc / right-click done"
     : tool.k === "paste" ? "Click to paste · Esc / right-click cancel"
     : tool.k === "delete" ? "Click items to delete · Esc done"
-    : tool.k === "move" ? `Move: drag parts off their wires (wires and labels stay) · Esc / F8: drag with wires again${showWave ? " · click a wire or part to plot it" : ""}`
     : pz ? "Poles × and zeros ○ in the s-plane: hover for f₀ and damping · root locus in the panel on the right"
     : showWave && s.sim?.run?.plot.startsWith("noise") ? "Noise spectra: Add trace → onoise_spectrum / inoise_spectrum · totals in Results"
     : showWave && s.sim?.run?.plot.startsWith("sens") ? "Sensitivities: Add trace → a part name (e.g. r1) · right-click to edit"
+    : tool.k === "move" ? `Move: drag the selection off the rest (unselected wires and labels stay) · Esc / F8: drag with wires again${probeMode(s.sim) ? " · click a wire or part to plot it" : ""}`
     : showWave ? "Click a wire to plot V · click a part to plot I · right-click to edit"
     : "Drag to move · shift-drag box select · double/right-click to edit · ⌘↵ run";
 
@@ -375,7 +375,7 @@ export function App() {
         <ToolbarButton label="Live: re-run on every edit" icon={<Zap />} pressable active={s.live} onClick={() => useS.setState({ live: !s.live })} />
         <ToolbarSeparator />
         <ToolbarButton label="Select (drag: wires follow)" hotkey="Esc / F8" icon={<MousePointer2 />} pressable active={tool.k === "select"} onClick={() => useS.setState({ tool: { k: "select" } })} />
-        <ToolbarButton label="Move (wires stay)" hotkey="M / F7" icon={<Move />} pressable active={tool.k === "move"} onClick={() => useS.setState({ tool: { k: "move" } })} />
+        <ToolbarButton label="Move (wires stay)" hotkey="M / F7" icon={<Move />} pressable active={tool.k === "move"} onClick={moveTool} />
         <ToolbarButton label="Wire" hotkey="W / F3" icon={<Spline />} pressable active={tool.k === "wire"} onClick={() => useS.setState({ tool: { k: "wire" } })} />
         <ToolbarButton label="Ground" hotkey="G" icon={G.gnd} pressable active={tool.k === "place" && tool.item.t === "flag" && tool.item.name === "0"} onClick={() => placeFlag("0")} />
         <ToolbarButton label="Net label" hotkey="N / F4" icon={<Tag />} onClick={() => newItem({ t: "flag", x: 0, y: 0, name: "" })} />
@@ -530,6 +530,8 @@ function CursorStatus() {
     </>
   );
 }
+
+const moveTool = () => useS.setState({ tool: { k: "move" } });
 
 /** ⌘L: the bottom panel closed, or open again on the tab last shown (a run's results only while
  *  there are any). */

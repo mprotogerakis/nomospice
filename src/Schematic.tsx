@@ -631,8 +631,9 @@ export const Schematic = memo(function Schematic() {
   const cursorStyle =
     tool.k === "delete" ? "not-allowed"
     : !selecting ? "crosshair"
+    : drag.current?.k === "pan" ? "grabbing"
     : hoverProbe ? (hoverIsSym ? PROBE_I : PROBE_V)
-    : drag.current?.k === "pan" ? "grabbing" : hover >= 0 ? (tool.k === "move" ? "move" : "pointer") : "default";
+    : hover >= 0 ? (tool.k === "move" ? "move" : "pointer") : "default";
   const gap = GRID * view.k;
   const ghosts: Shape[] = tool.k === "paste" ? pasteNamed.map((it) => shifted(it, cursor[0], cursor[1])) : tool.k === "place" ? [placed(tool.item, cursor)].filter(isShape) : [];
 
