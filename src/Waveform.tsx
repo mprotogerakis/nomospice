@@ -464,7 +464,7 @@ export const Waveform = memo(function Waveform() {
           // (a loop gain's stability: where it passes -1)
           // (Nyquist/Nichols need a complex trace; without one, only the way back)
           ...(ac && (cplx || polar) ? ([[undefined, "Bode plot", "magnitude and phase"], ["nyquist", "Nyquist plot", "Im over Re"], ["nichols", "Nichols plot", "dB over phase"]] as const)
-            .filter(([m]) => m !== polar && ((cplx && !zero) || !m))
+            .filter(([m]) => m !== (polarOn ? polar : undefined) && ((cplx && !zero) || !m)) // (what is shown: a polar view set but not showable is the Bode plot)
             .map(([m, label, hint]) => ({ label, hint, run: () => setPlot({ polar: m }) })) : []),
           ...(tran ? [spec ? { label: "Back to the transient", run: () => showFft(null) }
             : { label: "FFT (spectrum)", hint: a != null && b != null && a !== b ? "of A–B" : zoom ? "of the shown range" : "of the whole run", disabled: !panes.length || !(range[1] > range[0]), run: () => showFft(range) }] : []),

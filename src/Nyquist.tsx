@@ -149,11 +149,15 @@ export const Polar = memo(function Polar({ curves, freqs, mode, onHover, others 
   // the cursors A and B (set in the Bode plot): where each curve is at their frequencies
   const fa = useS((s) => s.plot.a), fb = useS((s) => s.plot.b);
   // (outside the sweep: none, as the table shows none)
+  // (between two samples: where the curve is at that frequency, interpolated like the table's
+  // values; outside the sweep: none, as the table shows none)
   const marks = useMemo(() => {
-    // (nearest on a log scale when the sweep has one: as the Bode plot shows it)
-    const gap = freqs[0] > 0 ? (x: number, f: number) => Math.abs(Math.log(x / f)) : (x: number, f: number) => Math.abs(x - f);
-    const nearest = (f: number | null) => (f == null || !freqs.length || f < freqs[0] || f > freqs[freqs.length - 1] ? -1 : freqs.reduce((best, x, i) => (gap(x, f) < gap(freqs[best], f) ? i : best), 0));
-    return ([["A", nearest(fa)], ["B", nearest(fb)]] as const).filter(([, i]) => i >= 0);
+    const at = (f: number | null) => {
+      if (f == null || freqs.length < 2 || f < freqs[0] || f > freqs[freqs.length - 1]) return null;
+      const i = Math.max(0, Math.min(freqs.length - 2, freqs.findIndex((x) => x > f) - 1));
+      return { i, t: freqs[i + 1] === freqs[i] ? 0 : (f - freqs[i]) / (freqs[i + 1] - freqs[i]) };
+    };
+    return ([["A", at(fa)], ["B", at(fb)]] as const).flatMap(([name, p]) => (p ? [{ name, ...p }] : []));
   }, [fa, fb, freqs]);
   const h = hit && curves[hit.c];
   const hx = h ? h.x[hit!.i] : null, hy = h ? ((y) => (y != null && hit!.m ? -y : y))(h.y[hit!.i]) : null;
@@ -197,10 +201,10 @@ export const Polar = memo(function Polar({ curves, freqs, mode, onHover, others 
             const [X, Y] = px(c.x[k]!, c.y[k]!);
             return <circle key={`s${i}`} cx={X} cy={Y} r={3} fill={`var(--series-${c.slot + 1})`} />;
           })}
-          {marks.flatMap(([name, i]) => curves.map((c, j) => {
-            const [x, y] = [c.x[i], c.y[i]];
-            if (x == null || y == null) return null;
-            const [X, Y] = px(x, y);
+          {marks.flatMap(({ name, i, t }) => curves.map((c, j) => {
+            const [x0, y0, x1, y1] = [c.x[i], c.y[i], c.x[i + 1], c.y[i + 1]];
+            if (x0 == null || y0 == null || x1 == null || y1 == null) return null;
+            const [X, Y] = px(x0 + t * (x1 - x0), y0 + t * (y1 - y0));
             return <g key={`${name}${j}`} fill="var(--selection)"><circle cx={X} cy={Y} r={3} /><text x={X + 5} y={Y - 5} fontSize={10}>{name}</text></g>;
           }))}
           {h && hx != null && hy != null && (() => { const [X, Y] = px(hx, hy); return <circle cx={X} cy={Y} r={4} fill="none" stroke="var(--text-strong)" strokeWidth={1.5} />; })()}
@@ -214,7 +218,7 @@ export const Polar = memo(function Polar({ curves, freqs, mode, onHover, others 
         </div>
       )}
       {!!others.length && <div className="pointer-events-none absolute left-2 top-6 max-w-[60%] truncate text-2xs text-text-tertiary">Only in the Bode plot: {others.join(", ")}</div>}
-      <div className="pointer-events-none absolute bottom-6 right-2 text-2xs text-text-tertiary">● lowest frequency{nyq ? " · dashed: negative frequencies" : ""} · drag: pan · wheel: zoom · dbl-click: fit</div>
+      <div className="pointer-events-none absolute right-2 top-1 text-2xs text-text-tertiary">● lowest frequency{nyq ? " · dashed: negative frequencies" : ""} · drag: pan · wheel: zoom · dbl-click: fit</div>
     </div>
   );
 });
