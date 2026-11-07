@@ -49,6 +49,7 @@ const CLICK_DIST = 3;
 
 /** x under the plot crosshair (separate store: only the readout table re-renders on mouse moves). */
 const useHover = create(() => ({ x: null as number | null }));
+const hoverAt = (x: number | null) => useHover.setState({ x });
 
 const css = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 const color = (slot: number) => css(`--series-${slot + 1}`);
@@ -441,11 +442,11 @@ export const Waveform = memo(function Waveform() {
         const db = pane?.unit === "dB" || pane?.unit === "°";
         const pos = !!pane && positive(pane);
         openMenu(e.clientX, e.clientY, [
-          { label: "Reset zoom", hint: "dbl-click", disabled: !panes.length, run: () => { setPlot({ zoom: null }); plots.current[0]?.setScale("x", { min: xs[0], max: xs[xs.length - 1] }); } },
+          { label: "Reset zoom", hint: "dbl-click", disabled: !panes.length || polarOn, run: () => { setPlot({ zoom: null }); plots.current[0]?.setScale("x", { min: xs[0], max: xs[xs.length - 1] }); } },
           { label: "Clear cursors", run: () => setPlot({ a: null, b: null }) },
           { label: "Add trace…", disabled: !run, run: () => useS.setState({ dialog: { k: "trace" } }) },
           // (a loop gain's stability: where it passes -1)
-          ...(ac && signals.some((t) => t.data!.im) ? [
+          ...(ac && (signals.some((t) => t.data!.im) || polar) ? [
             { label: polar ? "Bode plot" : "Nyquist plot", hint: polar ? undefined : "Im over Re", run: () => setPlot({ polar: polar ? undefined : "nyquist" }) },
             ...(polar !== "nichols" ? [{ label: "Nichols plot", hint: "dB over phase", run: () => setPlot({ polar: "nichols" }) }] : polar ? [{ label: "Nyquist plot", hint: "Im over Re", run: () => setPlot({ polar: "nyquist" }) }] : []),
           ] : []),
@@ -457,12 +458,12 @@ export const Waveform = memo(function Waveform() {
             ...(ax.lo != null ? [{ label: "Automatic y range", run: () => setYAxis(key, { ...ax, lo: undefined, hi: undefined }) }] : []),
           ] : []),
           "-",
-          { label: "Copy data as CSV", disabled: !panes.length, run: () => navigator.clipboard.writeText(csv(xs, xUnit, panes, run?.steps ?? [])) },
+          { label: "Copy data as CSV", hint: polarOn ? "Bode plot only" : undefined, disabled: !panes.length || polarOn, run: () => navigator.clipboard.writeText(csv(xs, xUnit, panes, run?.steps ?? [])) },
           { label: "Export plot as SVG…", hint: polarOn ? "Bode plot only" : undefined, disabled: !panes.length || polarOn, run: () => void saveSvg(plotSvg(plots.current, panes, useS.getState().plot), "-plot") },
           { label: "Remove all traces", danger: true, disabled: !traces.length, run: () => useS.setState({ traces: [] }) },
         ]);
       }}>
-        {polarOn ? <Polar curves={curves} freqs={xs} mode={polar!} onHover={(x) => useHover.setState({ x })} />
+        {polarOn ? <Polar curves={curves} freqs={xs} mode={polar!} onHover={hoverAt} />
           : panes.map((p, i) => <div key={`${p.unit}-${i}`} ref={(el) => { paneEls.current[i] = el; }} />)}
         {!panes.length && (
           <div className="absolute inset-0 flex items-center justify-center text-xs text-text-tertiary">
