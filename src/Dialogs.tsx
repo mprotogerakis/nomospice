@@ -24,7 +24,7 @@ const MORE = ["Prefix", "SpiceLine2", "SpiceModel", "Description"];
 /** A semiconductor's common instance parameters, kept where LTspice keeps them, in Value2
  *  (`l=0.18u w=1u`): [key, label, unit, hint]. The rest stays as typed in Value2. */
 const INSTANCE: Record<string, [string, string, string, string][]> = {
-  M: [["l", "Length L", "m", "channel length, e.g. 180n"], ["w", "Width W", "m", "channel width, e.g. 1u"], ["m", "Multiplier", "", "devices in parallel"]],
+  M: [["l", "Length L", "m", "channel length, e.g. 180n (not for power MOSFETs: VDMOS)"], ["w", "Width W", "m", "channel width, e.g. 1u"], ["m", "Multiplier", "", "devices in parallel"]],
   Q: [["area", "Area factor", "", "relative to the model's"], ["m", "Multiplier", "", "devices in parallel"]],
   D: [["area", "Area factor", "", "relative to the model's"], ["m", "Multiplier", "", "devices in parallel"]],
 };
@@ -76,9 +76,15 @@ function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: 
                 {...(valueHelp ?? {})} hint={unit ? "e.g. 4.7k, 100n, 1Meg; LTspice extras like Rser=0.1 may follow" : undefined} />
               {/* (D, Q, M: their common instance parameters as fields; Value2 holds them, as SPICE reads them) */}
               {INSTANCE[prefix]?.map(([k, label, u, hint]) => {
-                const v = getParam(attr("Value2"), k), set = (x: string) => setAttr("Value2", setParam(attr("Value2"), k, x));
-                const dflt = getParam(it.attrs.SpiceLine ?? def?.spice_line ?? "", k); // (a symbol's default, in SpiceLine)
-                return <TextField key={k} label={label} value={v} set={set} unit={u} placeholder={dflt ? `${dflt} (SpiceLine)` : k === "m" || k === "area" ? "1" : "model default"} {...((h) => ({ info: h.info, warn: h.warn || undefined }))(numHelp(v, u, set))} hint={hint} />;
+                // edited where it takes effect: the netlist has Value2, then SpiceLine (the symbol's
+                // default if the part has none), then SpiceLine2, and SPICE takes the last of a key
+                const lines = { Value2: attr("Value2"), SpiceLine: it.attrs.SpiceLine ?? def?.spice_line ?? "", SpiceLine2: attr("SpiceLine2") };
+                const where = (["SpiceLine2", "SpiceLine", "Value2"] as const).find((a) => getParam(lines[a], k)) ?? "Value2";
+                // (a D's or Q's area also as SPICE's bare number after the model: `2`)
+                const bare = k === "area" && where === "Value2" && !getParam(lines.Value2, k) ? tokens(lines.Value2).find((x) => !x.includes("=") && spiceNum(x) != null) : undefined;
+                const v = bare ?? getParam(lines[where], k);
+                const set = (x: string) => setAttr(where, bare != null ? tokens(lines.Value2).map((y) => (y === bare ? x.trim() : y)).filter(Boolean).join(" ") : setParam(lines[where], k, x));
+                return <NumField key={k} label={label} value={v} set={set} unit={u} placeholder={k === "m" || k === "area" ? "1" : "model default"} hint={where === "Value2" ? hint : `${hint}; in ${where}`} />;
               })}
               <TextField label="Value2" value={attr("Value2")} set={(v) => setAttr("Value2", v)} hint={INSTANCE[prefix] ? "the instance parameters as SPICE reads them (others too: off, temp=…)" : undefined} />
               {/* the symbol's default shows as the value: emptying it visibly removes it (an empty attribute) */}

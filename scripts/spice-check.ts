@@ -254,5 +254,9 @@ assert.equal(setParam("l=0.18u w=1u", "w", "2u"), "l=0.18u w=2u");
 assert.equal(setParam("off", "m", "4"), "off m=4");
 assert.equal(setParam("l=1u m=2 off", "m", ""), "l=1u off");
 assert.equal(setParam("", "area", " 2 "), "area=2");
+assert.equal(getParam("l={2 * Lmin} w=1u", "l"), "{2 * Lmin}", "an expression whole");
+assert.equal(setParam("l={2 * Lmin} w=1u", "l", "3u"), "l=3u w=1u");
+assert.equal(getParam("m=2 off m=4", "m"), "4", "the last, as SPICE takes it");
+assert.equal(setParam("m=2 off m=4", "m", "8"), "m=8 off");
 
 console.log("spice-check: ok");

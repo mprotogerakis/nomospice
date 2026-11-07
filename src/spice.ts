@@ -770,12 +770,17 @@ export function spectrum(xs: number[], ys: (number | null)[], lo: number, hi: nu
   return db;
 }
 
-/** `key=value` in an instance line (blanks around = too), by key in any case. */
-const paramRe = (k: string) => new RegExp(`(^|\\s)${k}\\s*=\\s*(\\S+)`, "i");
-export const getParam = (line: string, k: string) => paramRe(k).exec(line)?.[2] ?? "";
-/** `line` with `k=v` set (replaced where it is, else appended); v empty: taken out. */
+/** An instance line's `key=value` items, by the brace- and quote-aware tokens (blanks around =
+ *  taken out): whether item `x` is `k=…` (any case). */
+const isParam = (x: string, k: string) => x.length > k.length && x[k.length] === "=" && x.slice(0, k.length).toLowerCase() === k.toLowerCase();
+const paramTokens = (line: string) => tokens(line.replace(/\s*=\s*/g, "="));
+/** The value of `k=…` in an instance line: the last one's, as SPICE takes it. */
+export const getParam = (line: string, k: string) => ((t) => t?.slice(k.length + 1) ?? "")(paramTokens(line).filter((x) => isParam(x, k)).pop());
+/** `line` with `k=v` set (in the first one's place, others of that key gone, else appended); v
+ *  empty: taken out. */
 export function setParam(line: string, k: string, v: string) {
-  const val = v.replace(/\s+/g, ""), re = paramRe(k);
-  if (!val) return line.replace(re, "").replace(/\s+/g, " ").trim();
-  return re.test(line) ? line.replace(re, (_m, pre: string) => `${pre}${k}=${val}`) : `${line.trim()} ${k}=${val}`.trim();
+  const val = v.replace(/\s+/g, ""), t = paramTokens(line);
+  const first = t.findIndex((x) => isParam(x, k));
+  const out = t.flatMap((x, i) => (!isParam(x, k) ? [x] : i === first && val ? [`${k}=${val}`] : []));
+  return (first < 0 && val ? [...out, `${k}=${val}`] : out).join(" ");
 }
