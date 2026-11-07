@@ -3,14 +3,14 @@ import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { open } from "@tauri-apps/plugin-dialog";
 import type { Item, LibEntry, LibSource } from "./types";
-import { addTrace, analysisItem, commit, currentTab, loadSymbols, placePart, placeSymbol, refreshLibrarySymbols, useS } from "./store";
+import { addTrace, analysisItem, commit, currentTab, loadSymbols, placePart, placeSymbol, refreshLibrarySymbols, setYAxis, useS } from "./store";
 import { defOf, prefixOf, vexpr } from "./geom";
 import { Button } from "./ui/button";
 import { closeDialog as close, Field, FIELD, Modal, numHelp, Rows, TextField } from "./ui/dialog";
 import { SourceEditor } from "./SourceEditor";
 import { SimDialog } from "./SimDialog";
 import { DirectiveDialog } from "./DirectiveDialog";
-import { analysisEditable, analysisEditableAt, analysisLine, analysisLineIndex, analysisOptions, exprUnit, tokens, xUnitOf } from "./spice";
+import { analysisEditable, analysisEditableAt, analysisLine, analysisLineIndex, analysisOptions, exprUnit, spiceNum, tokens, xUnitOf } from "./spice";
 import { cn } from "@/lib/utils";
 import thirdParty from "./third-party.json";
 import { checkForUpdate } from "./updater";
@@ -322,6 +322,27 @@ function TraceDialog() {
   );
 }
 
+/** A pane's fixed y range; both fields empty: automatic again. */
+function YRangeDialog({ pane, unit, log }: { pane: string; unit: string; log: boolean }) {
+  const y = useS((s) => s.plot.y[pane]);
+  const [lo, setLo] = useState(y?.lo == null ? "" : String(y.lo)), [hi, setHi] = useState(y?.hi == null ? "" : String(y.hi));
+  const [a, b] = [spiceNum(lo), spiceNum(hi)], empty = !lo.trim() && !hi.trim();
+  const bad = empty ? null : a == null || b == null ? "two numbers" : !(a < b) ? "the first the smaller" : log && a <= 0 ? "above 0 (a log axis)" : null;
+  const submit = () => {
+    if (bad) return;
+    close();
+    setYAxis(pane, { ...y, lo: empty ? undefined : a!, hi: empty ? undefined : b! });
+  };
+  const help = (v: string, set: (v: string) => void) => ((h) => ({ info: h.info, warn: h.warn || undefined }))(numHelp(v, unit, set));
+  return (
+    <Modal title="Y Range" onSubmit={submit}>
+      <TextField label="From" value={lo} set={setLo} unit={unit} autofocus {...help(lo, setLo)} />
+      <TextField label="To" value={hi} set={setHi} unit={unit} {...help(hi, setHi)} hint="both empty: automatic" />
+      {bad && <p className="text-2xs text-status-warning">⚠ {bad}</p>}
+    </Modal>
+  );
+}
+
 /** Version, license, and every third-party component with its license (same list as NOTICE.md). */
 function AboutDialog() {
   const [version, setVersion] = useState("");
@@ -407,6 +428,7 @@ export const Dialogs = memo(function Dialogs() {
     }
     case "parts": return <PartsDialog replace={dialog.replace} kind0={dialog.kind} libraries={dialog.libraries} />;
     case "trace": return <TraceDialog />;
+    case "yrange": return <YRangeDialog pane={dialog.pane} unit={dialog.unit} log={dialog.log} />;
     case "about": return <AboutDialog />;
   }
 });

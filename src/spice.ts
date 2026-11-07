@@ -672,3 +672,62 @@ export function exprUnit(expr: string, vector: (name: string) => string = () => 
   ws();
   return i < s.length || !r.d || r.n ? "" : unitName(r.d);
 }
+
+// The spectrum of a transient trace (the plot's FFT view).
+
+/** In place, radix 2: `re.length` a power of 2. */
+function fft(re: Float64Array, im: Float64Array) {
+  const n = re.length;
+  for (let i = 1, j = 0; i < n; i++) {
+    let bit = n >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) {
+      [re[i], re[j]] = [re[j], re[i]];
+      [im[i], im[j]] = [im[j], im[i]];
+    }
+  }
+  for (let len = 2; len <= n; len <<= 1) {
+    const a = (-2 * Math.PI) / len;
+    for (let i = 0; i < n; i += len) {
+      for (let k = 0; k < len / 2; k++) {
+        const [cr, ci] = [Math.cos(a * k), Math.sin(a * k)];
+        const p = i + k, q = p + len / 2;
+        const tr = re[q] * cr - im[q] * ci, ti = re[q] * ci + im[q] * cr;
+        re[q] = re[p] - tr;
+        im[q] = im[p] - ti;
+        re[p] += tr;
+        im[p] += ti;
+      }
+    }
+  }
+}
+
+/** Points of a spectrum of lo..hi: a power of 2, at least the samples there (the simulator's
+ *  time steps), 4096 to 65536. */
+export function fftSize(xs: number[], lo: number, hi: number) {
+  const m = xs.reduce((n, x) => n + (x >= lo && x <= hi ? 1 : 0), 0);
+  return Math.min(65536, Math.max(4096, 2 ** Math.ceil(Math.log2(Math.max(m, 2)))));
+}
+
+/** The amplitude spectrum of ys(xs) over lo..hi in dB (a sine of amplitude 1: 0 dB): resampled
+ *  at n even points (the time steps are not even), Hann window. Bins 1 … n/2, the frequencies
+ *  k/(hi-lo); DC left out (a log axis). */
+export function spectrum(xs: number[], ys: (number | null)[], lo: number, hi: number, n: number): { f: number[]; db: (number | null)[] } {
+  const re = new Float64Array(n), im = new Float64Array(n);
+  let sum = 0;
+  for (let i = 0; i < n; i++) {
+    const w = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / n);
+    const v = at(xs, ys, lo + ((hi - lo) * i) / n);
+    re[i] = (Number.isNaN(v) ? 0 : v) * w; // (a gap: a step halted early)
+    sum += w;
+  }
+  fft(re, im);
+  const f: number[] = [], db: (number | null)[] = [];
+  for (let k = 1; k <= n / 2; k++) {
+    f.push(k / (hi - lo));
+    const a = (2 * Math.hypot(re[k], im[k])) / sum;
+    db.push(a > 0 ? 20 * Math.log10(a) : null);
+  }
+  return { f, db };
+}

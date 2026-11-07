@@ -4,7 +4,7 @@ import { connectivity, dragPlan } from "../src/geom.ts";
 import {
   tokens, formatAnalysis, formatIc, formatInclude, formatMeas, formatModel, formatParams, formatSource, numInfo, parseAnalysis,
   parseIc, parseInclude, parseMeas, parseModel, parseParams, parseSource, sample, si, spiceNum, directiveKind, analysisRoundTrips, analysisEditable, analysisOptions, analysisLineIndex, at, integrate, stripAnalyses, portablePaths, sourceRoundTrips,
-  exprUnit, unitTimes,
+  exprUnit, unitTimes, fftSize, spectrum,
 } from "../src/spice.ts";
 
 // numbers and the classic pitfalls
@@ -224,6 +224,21 @@ assert.equal(numInfo("1Meg", "Hz")!.text, "= 1MegHz"); // not "1M", the milli tr
   assert.equal(exprUnit("integ(i(v1))", undefined, "V"), "");
   assert.equal(exprUnit("integ(v(a))", undefined, "°C"), "", "an x unit it does not know");
   assert.equal(exprUnit("integ(v(a))", undefined, ""), "", "a temperature or resistance sweep");
+}
+
+// the FFT view: a 1 kHz sine of amplitude 2 on uneven time steps reads 6 dB at 1 kHz, little elsewhere
+{
+  const xs: number[] = [];
+  for (let t = 0; t <= 10e-3; t += 1e-6 * (1 + 0.5 * Math.sin(t * 1e4))) xs.push(t);
+  const ys = xs.map((t) => 2 * Math.sin(2 * Math.PI * 1e3 * t) + 0.02 * Math.sin(2 * Math.PI * 3e3 * t));
+  const n = fftSize(xs, 0, 10e-3);
+  assert.equal(n, 16384); // (~10^4 time steps)
+  const { f, db } = spectrum(xs, ys, 0, 10e-3, n);
+  const bin = (hz: number) => db[f.findIndex((x) => Math.abs(x - hz) < 1)]!;
+  assert.ok(Math.abs(bin(1e3) - 6.02) < 0.05, `${bin(1e3)}`);
+  assert.ok(Math.abs(bin(3e3) + 33.98) < 0.5, `a harmonic at -34 dB: ${bin(3e3)}`);
+  assert.ok(bin(5e3) < -80, `${bin(5e3)}`);
+  assert.equal(f[0], 100);
 }
 
 console.log("spice-check: ok");

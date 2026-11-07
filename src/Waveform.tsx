@@ -4,19 +4,24 @@ import uPlot from "uplot";
 import { create } from "zustand";
 import { Plus, X } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
-import { removeTrace, setPlot, setTraceRight, useS } from "./store";
+import { removeTrace, setPlot, setTracePane, setTraceRight, setYAxis, showFft, useS } from "./store";
 import { openMenu } from "./Menu";
-import { at, integrate, si, unitTimes, xUnitOf } from "./spice";
+import { at, fftSize, integrate, si, spectrum, unitTimes, xUnitOf } from "./spice";
 import { keys } from "./lib/utils";
 import type { Trace } from "./types";
 import { saveSvg, withLightTheme, xmlEscape } from "./svgExport";
 
-/** A plotted curve: of trace `t`, curve `k` of its `n` in the pane (a .step or nested .dc family). */
-type Series = { t: Trace; y: (number | null)[]; k: number; n: number };
-/** A pane's scale for a series: "y2" (right axis) for a trace moved there, while the pane also has
+/** A plotted curve: of trace `t`, curve `k` of its `n` in the pane (a .step or nested .dc family);
+ *  its values in `u`, `r`: wanted on the right axis (moved there, or moved into a pane of
+ *  another unit). */
+type Series = { t: Trace; y: (number | null)[]; k: number; n: number; u: string; r: boolean };
+/** A pane's scale for a series: "y2" (right axis) for one wanted there, while the pane also has
  *  left ones (all on the right: the left axis serves). */
-const scaleOf = (pane: { series: Series[] }, s: Series) => (s.t.right && pane.series.some((o) => !o.t.right) ? "y2" : "y");
-type Pane = { unit: string; series: Series[] };
+const scaleOf = (pane: { series: Series[] }, s: Series) => (s.r && pane.series.some((o) => !o.r) ? "y2" : "y");
+/** `unit2`: its right axis's unit (one for all its series there, else none). */
+type Pane = { unit: string; unit2: string; series: Series[] };
+/** Settings of a pane's y axis, by its unit (the spectrum's apart). */
+const axisKey = (unit: string, fft: boolean) => `${fft ? "fft:" : ""}${unit}`;
 
 /** px a press may move and still count as a click (shared by uPlot's drag and our click rule). */
 const CLICK_DIST = 3;
@@ -56,7 +61,7 @@ const member = (s: Series, steps: string[]) => curveName(s.t, s.k, s.n, steps);
 
 /** The plotted data as CSV: x, then one column per series (family curves named by step or numbered). */
 function csv(xs: number[], xUnit: string, panes: Pane[], steps: string[]) {
-  const cols = panes.flatMap((p) => p.series.map((s) => ({ name: `${s.t.label}${((m) => (m ? ` ${m}` : ""))(member(s, steps))} [${p.unit}]`, y: s.y })));
+  const cols = panes.flatMap((p) => p.series.map((s) => ({ name: `${s.t.label}${((m) => (m ? ` ${m}` : ""))(member(s, steps))} [${s.u}]`, y: s.y })));
   const head = [`x [${xUnit}]`, ...cols.map((c) => `"${c.name.replace(/"/g, '""')}"`)].join(",");
   return [head, ...xs.map((x, i) => [x, ...cols.map((c) => c.y[i] ?? "")].join(","))].join("\n") + "\n";
 }
@@ -130,45 +135,66 @@ export const Waveform = memo(function Waveform() {
   const run = useS((s) => s.sim?.run);
   const traces = useS((s) => s.traces);
   const ac = !!run?.plot.startsWith("ac"); // complex: magnitude + phase panes
-  const freq = run?.scale === "frequency";
-  const xUnit = xUnitOf(run?.scale ?? "");
+  const fft = useS((s) => s.plot.fft);
+  const yAxes = useS((s) => s.plot.y);
+  const tran = run?.scale === "time";
+  const spec = !!fft && tran; // the spectrum view
+  const freq = run?.scale === "frequency" || spec;
+  const xUnit = spec ? "Hz" : xUnitOf(run?.scale ?? "");
   const ok = useMemo(() => traces.filter((t) => t.data?.x.length), [traces]);
+  // the spectrum view: each trace (each .step curve) as its spectrum over fft.lo..hi, in dB
+  const points = useMemo(() => (spec && ok[0] ? fftSize(ok[0].data!.x.slice(0, segment(ok[0].data!.x)), fft!.lo, fft!.hi) : 0), [spec, ok, fft]);
+  const shown = useMemo(() => {
+    if (!spec || !points) return ok;
+    return ok.filter((t) => !t.data!.constant && !t.data!.im).map((t): Trace => {
+      const { x, re } = t.data!, sg = segment(x);
+      const parts = Array.from({ length: Math.max(1, Math.floor(x.length / sg)) }, (_, k) => spectrum(x.slice(k * sg, (k + 1) * sg), re.slice(k * sg, (k + 1) * sg), fft!.lo, fft!.hi, points));
+      return { ...t, unit: "dB", right: undefined, pane: undefined, data: { ...t.data!, x: parts.flatMap((p) => p.f), re: parts.flatMap((p) => p.db) as number[], constant: undefined } };
+    });
+  }, [ok, spec, fft, points]);
   // constants (reference lines: 0.5, 500m) are drawn on the top pane's axis, whatever it is now:
   // volts first, the magnitude in a Bode plot
-  const [lines, signals] = useMemo(() => [ok.filter((t) => t.data!.constant), ok.filter((t) => !t.data!.constant)], [ok]);
+  const [lines, signals] = useMemo(() => [shown.filter((t) => t.data!.constant), shown.filter((t) => !t.data!.constant)], [shown]);
   // .ac without an AC source: every value is exactly 0 (no dB at all, phase flat) - say so instead
   const zero = useMemo(() => ac && signals.length > 0 && signals.every((t) => t.data!.re.every((v, i) => !v && !t.data!.im?.[i])), [ac, signals]);
-  const all = ok[0]?.data!.x ?? [];
+  const all = shown[0]?.data!.x ?? [];
   // nested .dc (family curves): one series per outer step over the first segment's x
   const seg = useMemo(() => segment(all), [all]);
   const xs = useMemo(() => all.slice(0, seg), [all, seg]);
   // frequency sweeps on a log axis, unless it is a linear sweep (evenly spaced, may start at 0 Hz)
   const linear = xs.length > 2 && Math.abs(xs[2] - 2 * xs[1] + xs[0]) <= 1e-9 * Math.abs(xs[1] - xs[0]);
-  const logX = freq && xs[0] > 0 && !linear;
+  const logX = freq && xs[0] > 0 && (!linear || spec);
   const panes = useMemo<Pane[]>(() => {
-    if (!ok.length || zero) return [];
-    const split = (t: Trace, y: (number | null)[]): Series[] => {
+    if (!shown.length || zero) return [];
+    const split = (t: Trace, y: (number | null)[], u: string, r: boolean): Series[] => {
       const n = Math.max(1, Math.floor(y.length / seg));
-      return Array.from({ length: n }, (_, k) => ({ t, y: y.slice(k * seg, (k + 1) * seg), k, n }));
+      return Array.from({ length: n }, (_, k) => ({ t, y: y.slice(k * seg, (k + 1) * seg), k, n, u, r }));
     };
     // complex vectors (.ac, AC .sens) -> magnitude (dB) + phase panes; real ones (db(), ph() ...) as they are
     const cplx = signals.filter((t) => t.data!.im);
     const real = signals.filter((t) => !t.data!.im);
     const panes: Pane[] = [];
-    if (cplx.length) panes.push({ unit: "dB", series: cplx.flatMap((t) => split(t, mag(t))) }, { unit: "°", series: cplx.flatMap((t) => split(t, phase(t, seg))) });
-    const units = [...new Set(real.map((t) => t.unit))].sort((a, b) => (a === "V" ? -1 : b === "V" ? 1 : a.localeCompare(b)));
+    if (cplx.length) panes.push({ unit: "dB", unit2: "", series: cplx.flatMap((t) => split(t, mag(t), "dB", !!t.right)) }, { unit: "°", unit2: "", series: cplx.flatMap((t) => split(t, phase(t, seg), "°", !!t.right)) });
+    // a trace moved to another unit's pane goes there while that pane has traces of its own
+    const own = new Set(real.filter((t) => !t.pane).map((t) => t.unit));
+    const home = (t: Trace) => (t.pane != null && own.has(t.pane) ? t.pane : t.unit);
+    const units = [...new Set(real.map(home))].sort((a, b) => (a === "V" ? -1 : b === "V" ? 1 : a.localeCompare(b)));
     for (const unit of units) {
-      const series = real.filter((t) => t.unit === unit).flatMap((t) => split(t, t.data!.re));
+      const series = real.filter((t) => home(t) === unit).flatMap((t) => split(t, t.data!.re, t.unit, !!t.right || t.unit !== unit));
       const same = panes.find((p) => p.unit === unit); // db(...) joins the dB pane
       if (same) same.series.push(...series);
-      else panes.push({ unit, series });
+      else panes.push({ unit, unit2: "", series });
     }
-    if (lines.length && !panes.length) panes.push({ unit: "", series: [] });
+    if (lines.length && !panes.length) panes.push({ unit: "", unit2: "", series: [] });
     // one series per level (not one per outer .dc step); in a Bode plot a magnitude, as in LTspice:
     // 1 at 0 dB, 0.707 at -3 dB
-    panes[0]?.series.push(...lines.map((t) => ({ t, y: (panes[0].unit === "dB" ? mag(t) : t.data!.re).slice(0, seg), k: 0, n: 1 })));
+    panes[0]?.series.push(...lines.map((t) => ({ t, y: (panes[0].unit === "dB" ? mag(t) : t.data!.re).slice(0, seg), k: 0, n: 1, u: panes[0].unit, r: false })));
+    for (const p of panes) {
+      const right = new Set(p.series.filter((s) => scaleOf(p, s) === "y2").map((s) => s.u));
+      p.unit2 = right.size === 1 ? [...right][0] : "";
+    }
     return panes;
-  }, [ok, lines, signals, zero, seg]);
+  }, [shown, lines, signals, zero, seg]);
 
   const host = useRef<HTMLDivElement>(null);
   const paneEls = useRef<(HTMLDivElement | null)[]>([]);
@@ -197,13 +223,20 @@ export const Waveform = memo(function Waveform() {
       const last = pi === panes.length - 1;
       const span = pane.unit === "dB" ? 20 : pane.unit === "°" ? 90 : 0;
       const twin = pane.series.some((s) => scaleOf(pane, s) === "y2");
-      // dB/phase: at least `span` tall, so 0.1 dB of ripple does not fill the pane like a resonance
+      // dB/phase: at least `span` tall, so 0.1 dB of ripple does not fill the pane like a resonance;
+      // a spectrum: at most 140 dB below its peak (rounding's floor at -300 dB is no signal)
       const yRange = span ? { range: (_u: uPlot, lo: number | null, hi: number | null): uPlot.Range.MinMax => {
         if (lo == null || hi == null) return [lo, hi];
+        if (spec && hi - lo > 140) lo = hi - 140;
         if (hi - lo < span) [lo, hi] = [(lo + hi - span) / 2, (lo + hi + span) / 2];
         return uPlot.rangeNum(lo, hi, 0.05, true);
       } } : {};
-      const yValues = (_u: uPlot, v: number[], _i: number, _s: number, incr: number) => v.map((y) => (span ? `${+y.toFixed(Math.max(0, Math.ceil(-Math.log10(incr))))}${pane.unit}` : si(y, pane.unit, 3)));
+      // the left axis as set: log, a fixed range
+      const ax = yAxes[axisKey(pane.unit, spec)] ?? {};
+      const logY = !!ax.log && !span;
+      const fixed = ax.lo != null && ax.hi != null ? { range: (): uPlot.Range.MinMax => [ax.lo!, ax.hi!] } : {};
+      const values = (unit: string) => (_u: uPlot, v: number[], _i: number, _s: number, incr: number) =>
+        v.map((y) => (unit === "dB" || unit === "°" ? `${+y.toFixed(Math.max(0, Math.ceil(-Math.log10(incr))))}${unit}` : si(y, unit, 3)));
       const opts: uPlot.Options = {
         width: size.w, height: h,
         legend: { show: false },
@@ -213,15 +246,15 @@ export const Waveform = memo(function Waveform() {
         scales: {
           // exactly the data: a log axis would otherwise round up to whole decades (1 MHz data -> 10 MHz)
           x: { time: false, distr: logX ? 3 : 1, ...(logX ? { range: (_u, lo, hi): uPlot.Range.MinMax => (lo < hi ? [lo, hi] : [lo / 2, hi * 2]) } : {}) },
-          y: yRange,
+          y: { ...yRange, ...(logY ? { distr: 3, log: 10 } : {}), ...fixed },
           ...(twin ? { y2: yRange } : {}),
         },
         axes: [
           { stroke: text, grid: { stroke: grid, width: 1 }, ticks: { stroke: grid, width: 1 }, size: last ? 36 : 8, values: last ? (_u, v) => v.map((x) => (x == null ? "" : si(x, xUnit, 3))) : () => [], font: "11px IBM Plex Mono" },
-          { stroke: text, grid: { stroke: grid, width: 1 }, ticks: { stroke: grid, width: 1 }, size: 72, values: yValues, font: "11px IBM Plex Mono", label: pane.unit === "" ? "expr" : undefined },
+          { stroke: text, grid: { stroke: grid, width: 1 }, ticks: { stroke: grid, width: 1 }, size: 72, values: values(pane.unit), font: "11px IBM Plex Mono", label: pane.unit === "" ? "expr" : undefined },
           // the right axis: its traces' own scale, in the color of its trace when it has one
           ...(!twin && anyTwin ? [{ side: 1, size: 72, values: () => [], grid: { show: false }, ticks: { show: false }, stroke: "transparent" }] : []),
-          ...(twin ? [{ scale: "y2", side: 1, stroke: (() => { const r = pane.series.filter((s) => scaleOf(pane, s) === "y2"); return new Set(r.map((s) => s.t)).size === 1 ? color(r[0].t.slot) : text; })() /* (a .dc family: one trace, several series) */, grid: { show: false }, ticks: { stroke: grid, width: 1 }, size: 72, values: yValues, font: "11px IBM Plex Mono" }] : []),
+          ...(twin ? [{ scale: "y2", side: 1, stroke: (() => { const r = pane.series.filter((s) => scaleOf(pane, s) === "y2"); return new Set(r.map((s) => s.t)).size === 1 ? color(r[0].t.slot) : text; })() /* (a .dc family: one trace, several series) */, grid: { show: false }, ticks: { stroke: grid, width: 1 }, size: 72, values: values(pane.unit2), font: "11px IBM Plex Mono" }] : []),
         ],
         series: [{}, ...pane.series.map((s) => ({ label: s.t.label, scale: scaleOf(pane, s), stroke: color(s.t.slot), width: 2, points: { show: false } }))],
         hooks: {
@@ -311,7 +344,9 @@ export const Waveform = memo(function Waveform() {
       // uPlot needs ascending x (descending .dc sweeps): reverse a copy; at() handles both orders
       const desc = xs.length > 1 && xs[0] > xs[xs.length - 1];
       const ord = <T,>(a: T[]) => (desc ? [...a].reverse() : a);
-      all.push(new uPlot(opts, [ord(xs), ...pane.series.map((s) => ord(s.y))] as uPlot.AlignedData, el));
+      // (a log axis: what is not above 0 is a gap)
+      const ys = (s: Series) => (logY && scaleOf(pane, s) === "y" ? s.y.map((v) => (v != null && v > 0 ? v : null)) : s.y);
+      all.push(new uPlot(opts, [ord(xs), ...pane.series.map((s) => ord(ys(s)))] as uPlot.AlignedData, el));
     });
     plots.current = all;
     const zoom = useS.getState().plot.zoom;
@@ -324,7 +359,7 @@ export const Waveform = memo(function Waveform() {
     };
     // size is read via sizeRef: resizing must not rebuild the plots
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [panes, ac, logX, xUnit, xs, size.w > 0]);
+  }, [panes, ac, logX, xUnit, xs, size.w > 0, yAxes, spec]);
 
   useEffect(() => {
     const h = Math.floor(size.h / Math.max(panes.length, 1));
@@ -338,10 +373,23 @@ export const Waveform = memo(function Waveform() {
     <div className="flex h-full min-h-0 bg-surface-schematic-canvas">
       <div ref={host} className="relative min-w-0 flex-1 overflow-hidden" onContextMenu={(e) => {
         e.preventDefault();
+        const { a, b, zoom } = useS.getState().plot;
+        // the spectrum of A–B, else of what is shown, else of the whole run
+        const range: [number, number] = a != null && b != null && a !== b ? [Math.min(a, b), Math.max(a, b)] : zoom ?? [Math.min(xs[0], xs[xs.length - 1]), Math.max(xs[0], xs[xs.length - 1])];
+        const pane = panes[paneEls.current.findIndex((el) => el?.contains(e.target as Node))];
+        const key = pane ? axisKey(pane.unit, spec) : "", ax = yAxes[key] ?? {};
+        const db = pane?.unit === "dB" || pane?.unit === "°";
         openMenu(e.clientX, e.clientY, [
           { label: "Reset zoom", hint: "dbl-click", disabled: !panes.length, run: () => { setPlot({ zoom: null }); plots.current[0]?.setScale("x", { min: xs[0], max: xs[xs.length - 1] }); } },
           { label: "Clear cursors", run: () => setPlot({ a: null, b: null }) },
           { label: "Add trace…", disabled: !run, run: () => useS.setState({ dialog: { k: "trace" } }) },
+          ...(tran ? [spec ? { label: "Back to the transient", run: () => showFft(null) }
+            : { label: "FFT (spectrum)", hint: a != null && b != null && a !== b ? "of A–B" : zoom ? "of the shown range" : "of the whole run", disabled: !panes.length || !(range[1] > range[0]), run: () => showFft(range) }] : []),
+          ...(pane ? ["-" as const,
+            { label: ax.log ? "Linear y axis" : "Log y axis", hint: db ? `${pane.unit}: no` : undefined, disabled: db, run: () => setYAxis(key, { ...ax, log: !ax.log || undefined, ...(!ax.log && ax.lo != null && ax.lo <= 0 ? { lo: undefined, hi: undefined } : {}) }) },
+            { label: "Y range…", hint: ax.lo != null && ax.hi != null ? `${si(ax.lo, pane.unit, 3)} … ${si(ax.hi, pane.unit, 3)}` : "automatic", run: () => useS.setState({ dialog: { k: "yrange", pane: key, unit: pane.unit, log: !!ax.log && !db } }) },
+            ...(ax.lo != null ? [{ label: "Automatic y range", run: () => setYAxis(key, { ...ax, lo: undefined, hi: undefined }) }] : []),
+          ] : []),
           "-",
           { label: "Copy data as CSV", disabled: !panes.length, run: () => navigator.clipboard.writeText(csv(xs, xUnit, panes, run?.steps ?? [])) },
           { label: "Export plot as SVG…", disabled: !panes.length, run: () => void saveSvg(plotSvg(plots.current, panes, useS.getState().plot), "-plot") },
@@ -356,7 +404,13 @@ export const Waveform = memo(function Waveform() {
         )}
       </div>
       <div className="flex w-[340px] shrink-0 flex-col border-l border-border bg-surface-panel text-xs">
-        <Readout traces={traces} panes={panes} xs={xs} xUnit={xUnit} plot={run?.plot ?? ""} steps={run?.steps ?? NO_STEPS} />
+        {spec && (
+          <div className="border-b border-border px-2 py-1 font-mono text-2xs text-text-secondary">
+            Spectrum of {si(fft!.lo, "s")} … {si(fft!.hi, "s")}: {points} points, Hann window, dB of the amplitude (a sine of 1 V: 0 dB) ·{" "}
+            <button className="underline hover:text-text-strong" onClick={() => showFft(null)}>back to the transient</button>
+          </div>
+        )}
+        <Readout traces={spec ? shown : traces} panes={panes} xs={xs} xUnit={xUnit} plot={spec ? "FFT" : run?.plot ?? ""} steps={run?.steps ?? NO_STEPS} />
         <Measurements xUnit={xUnit} />
         <button
           className="m-2 inline-flex h-[22px] items-center justify-center gap-1 rounded-control border border-border-control text-text-secondary hover:bg-surface-hover hover:text-text-strong disabled:opacity-40"
@@ -366,7 +420,7 @@ export const Waveform = memo(function Waveform() {
           <Plus className="h-3 w-3" /> Add trace
         </button>
         <p className="mt-auto px-2 pb-2 text-2xs leading-4 text-text-tertiary">
-          Drag: zoom · shift-drag: range A–B · click: A · shift-click: B · dbl-click: reset · right-click a trace: right axis
+          Drag: zoom · shift-drag: range A–B · click: A · shift-click: B · dbl-click: reset · right-click a trace: right axis, another pane · right-click the plot: FFT, y axis
         </p>
       </div>
     </div>
@@ -397,8 +451,10 @@ const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot, steps }:
   const { a, b } = useS(useShallow((s) => ({ a: s.plot.a, b: s.plot.b })));
   // a trace alone in its pane(s): a right axis would change nothing there
   const alone = (t: Trace) => !panes.some((p) => p.series.some((s) => s.t === t) && p.series.some((s) => s.t !== t));
+  // in another unit's pane (there on the right axis anyway)
+  const moved = (t: Trace) => panes.some((p) => p.series.some((s) => s.t === t && s.u !== p.unit));
   const rows = traces.map((t) => {
-    const ps = panes.flatMap((p) => p.series.filter((s) => s.t === t).map((s) => ({ s, unit: p.unit })));
+    const ps = panes.flatMap((p) => p.series.filter((s) => s.t === t).map((s) => ({ s, unit: s.u })));
     const fmt = (unit: string, v: number) => (Number.isNaN(v) ? "–" : unit === "dB" ? `${v.toFixed(2)} dB` : unit === "°" ? `∠${v.toFixed(1)}°` : si(v, unit));
     const val = (x: number | null) => (x == null || !ps.length ? "–" : ps.map(({ s, unit }) => fmt(unit, at(xs, s.y, x))).join(" "));
     // (a .step family: each value with its step, in a tooltip; each pane's series of this trace once)
@@ -418,7 +474,7 @@ const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot, steps }:
   // (time and DC sweeps: over a frequency axis an average or integral of a magnitude means little.
   // xs is one sweep segment, rising or falling: nested .dc families are separate series of it)
   const num = (v: number, u: string) => (Number.isNaN(v) ? "–" : si(v, u)); // (no data in the range)
-  const stats = useMemo(() => xUnit === "Hz" ? [] : traces.filter((t) => !t.data?.constant).flatMap((t) => panes.flatMap((p) => p.series.filter((s) => s.t === t && p.unit !== "dB" && p.unit !== "°").map((s) => ({ t, unit: p.unit, of: member(s, steps), ...integrate(xs, s.y, lo, hi) })))),
+  const stats = useMemo(() => xUnit === "Hz" ? [] : traces.filter((t) => !t.data?.constant).flatMap((t) => panes.flatMap((p) => p.series.filter((s) => s.t === t && p.unit !== "dB" && p.unit !== "°").map((s) => ({ t, unit: s.u, of: member(s, steps), ...integrate(xs, s.y, lo, hi) })))),
     [traces, panes, xs, lo, hi, xUnit, steps]); // not per hover move
   return (
     <>
@@ -435,7 +491,10 @@ const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot, steps }:
           {rows.map(({ t, val, delta, named }) => (
             <tr key={t.expr} className="group h-[22px] border-b border-border-subtle align-middle" title={t.error ?? t.expr}
               onContextMenu={(e) => (e.preventDefault(), openMenu(e.clientX, e.clientY, [
-                { label: t.right ? "Back to the left axis" : "Right axis (own scale)", hint: !t.right && alone(t) ? "alone in its pane" : undefined, disabled: !t.right && alone(t), run: () => setTraceRight(t.expr, !t.right) },
+                ...(moved(t) ? [] : [{ label: t.right ? "Back to the left axis" : "Right axis (own scale)", hint: !t.right && alone(t) ? "alone in its pane" : undefined, disabled: !t.right && alone(t), run: () => setTraceRight(t.expr, !t.right) }]),
+                // (into another unit's pane: on its right axis there; not the Bode panes, nor in a spectrum)
+                ...(t.data?.im || plot === "FFT" ? [] : panes.filter((p) => p.unit !== "dB" && p.unit !== "°" && !p.series.some((s) => s.t === t)).map((p) => ({ label: `Into the ${p.unit || "unitless"} pane`, hint: "its right axis", run: () => setTracePane(t.expr, p.unit) }))),
+                ...(t.pane != null && plot !== "FFT" ? [{ label: `Back to its own pane (${t.unit || "unitless"})`, run: () => setTracePane(t.expr, undefined) }] : []),
                 { label: "Copy expression", hint: t.expr, run: () => navigator.clipboard.writeText(t.expr) },
                 { label: `Remove ${t.label}`, danger: true, run: () => removeTrace(t.expr) },
               ]))}>

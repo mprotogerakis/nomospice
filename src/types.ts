@@ -119,4 +119,6 @@ export interface Trace {
   power?: boolean;
   /** drawn against its pane's right axis (own scale: shapes of different size compared) */
   right?: boolean;
+  /** drawn in the pane of this unit instead of its own (on the right axis there) */
+  pane?: string;
 }

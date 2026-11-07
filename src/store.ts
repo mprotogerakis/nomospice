@@ -21,6 +21,8 @@ export type Dialog =
   /** `replace`: choose a model for that part instead of placing a new one */
   | { k: "parts"; replace?: number; kind?: string; libraries?: boolean }
   | { k: "trace" }
+  /** a pane's fixed y range (`pane`: its key in PlotView.y) */
+  | { k: "yrange"; pane: string; unit: string; log: boolean }
   | { k: "about" };
 
 interface State {
@@ -64,9 +66,26 @@ interface State {
 interface TabState { sim: Sim | null; traces: Trace[]; plot: PlotView; stale: boolean; at: Item[] }
 
 /** `kind`: the analysis these belong to; a run of another kind starts fresh. */
-export interface PlotView { kind: string; zoom: [number, number] | null; a: number | null; b: number | null }
-const NO_PLOT: PlotView = { kind: "", zoom: null, a: null, b: null };
+export interface PlotView {
+  kind: string;
+  zoom: [number, number] | null;
+  a: number | null;
+  b: number | null;
+  /** the spectrum of lo..hi instead of the transient (zoom and cursors then in Hz; the time's
+   *  kept to go back to) */
+  fft: { lo: number; hi: number; time: { zoom: [number, number] | null; a: number | null; b: number | null } } | null;
+  /** per pane (by its unit; `fft:` in the spectrum): log scale, fixed range */
+  y: Record<string, { log?: boolean; lo?: number; hi?: number }>;
+}
+const NO_PLOT: PlotView = { kind: "", zoom: null, a: null, b: null, fft: null, y: {} };
 export const setPlot = (p: Partial<PlotView>) => useS.setState({ plot: { ...useS.getState().plot, ...p } });
+/** Show the spectrum of lo..hi (zoom and cursors start afresh, in Hz), or the transient again. */
+export function showFft(range: [number, number] | null) {
+  const p = useS.getState().plot;
+  if (range) setPlot({ fft: { lo: range[0], hi: range[1], time: p.fft?.time ?? { zoom: p.zoom, a: p.a, b: p.b } }, zoom: null, a: null, b: null });
+  else if (p.fft) setPlot({ ...p.fft.time, fft: null });
+}
+export const setYAxis = (key: string, y: { log?: boolean; lo?: number; hi?: number }) => setPlot({ y: { ...useS.getState().plot.y, [key]: y } });
 /** "tran:time", "ac:frequency" ... */
 export const plotKind = (sim: Sim | null) => `${sim?.run?.plot.replace(/\d+$/, "") ?? ""}:${sim?.run?.scale ?? ""}`;
 
@@ -467,6 +486,8 @@ async function addTraceNow(label: string, expr: string, unit: string, power = fa
 export const removeTrace = (expr: string) => set({ traces: get().traces.filter((t) => t.expr !== expr) });
 /** A trace onto its pane's right axis (own scale) or back to the left one. */
 export const setTraceRight = (expr: string, right: boolean) => set({ traces: get().traces.map((t) => (t.expr === expr ? { ...t, right: right || undefined } : t)) });
+/** Draw the trace in the pane of `unit` (on its right axis, its own unit there); undefined: its own pane. */
+export const setTracePane = (expr: string, unit: string | undefined) => set({ traces: get().traces.map((t) => (t.expr === expr ? { ...t, pane: unit } : t)) });
 
 /** Whether clicking `target` while probing can plot something (also picks the probe cursor). */
 /** Whether `target` is something a probe can plot (structure only; see `probeMode` for the results). */
