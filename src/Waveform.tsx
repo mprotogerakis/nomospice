@@ -18,8 +18,9 @@ type Series = { t: Trace; y: (number | null)[]; k: number; n: number; u: string;
 /** A pane's scale for a series: "y2" (right axis) for one wanted there, while the pane also has
  *  left ones (all on the right: the left axis serves). */
 const scaleOf = (pane: { series: Series[] }, s: Series) => (s.r && pane.series.some((o) => !o.r) ? "y2" : "y");
-/** `unit2`: its right axis's unit (one for all its series there, else none). */
-type Pane = { unit: string; unit2: string; series: Series[] };
+/** `unit2`: its right axis's unit (one for all its series there, else none); `own`: it has traces
+ *  of its own unit, not moved (only such a pane takes a trace moved in). */
+type Pane = { unit: string; unit2: string; series: Series[]; own?: boolean };
 /** The spectra of a trace's curves (each .step's) end to end, kept while its data and the window
  *  are the same (another trace added, an axis moved: not all transformed again); emptied when
  *  the transient is shown again. ponytail: on the UI thread; a worker if 2^20-point families lag. */
@@ -220,8 +221,8 @@ export const Waveform = memo(function Waveform() {
       const here = real.filter((t) => home(t) === unit), guest = here.some((t) => t.unit !== unit);
       const series = here.flatMap((t) => split(t, t.data!.re, t.unit, guest ? t.unit !== unit : !!t.right));
       const same = panes.find((p) => p.unit === unit); // db(...) joins the dB pane
-      if (same) same.series.push(...series);
-      else panes.push({ unit, unit2: "", series });
+      if (same) same.series.push(...series), (same.own = own.has(unit));
+      else panes.push({ unit, unit2: "", series, own: own.has(unit) });
     }
     if (lines.length && !panes.length) panes.push({ unit: "", unit2: "", series: [] });
     // one series per level (not one per outer .dc step); in a Bode plot a magnitude, as in LTspice:
@@ -429,7 +430,7 @@ export const Waveform = memo(function Waveform() {
             : { label: "FFT (spectrum)", hint: a != null && b != null && a !== b ? "of A–B" : zoom ? "of the shown range" : "of the whole run", disabled: !panes.length || !(range[1] > range[0]), run: () => showFft(range) }] : []),
           ...(pane ? ["-" as const,
             { label: ax.log ? "Linear y axis" : "Log y axis", hint: db ? `${pane.unit}: no` : !pos ? "nothing above 0" : undefined, disabled: db || (!ax.log && !pos), run: () => setYAxis(key, { ...ax, log: !ax.log || undefined, ...(!ax.log && ax.lo != null && ax.lo <= 0 ? { lo: undefined, hi: undefined } : {}) }) },
-            { label: "Y range…", hint: ax.lo != null && ax.hi != null ? `${level(ax.lo, pane.unit)} … ${level(ax.hi, pane.unit)}` : "automatic", run: () => useS.setState({ dialog: { k: "yrange", pane: key, unit: pane.unit, log: !!ax.log && !db && pos } }) },
+            { label: "Y range…", hint: ax.lo != null && ax.hi != null ? (ax.log && pos && ax.lo <= 0 ? "automatic (its range is not above 0: no log)" : `${level(ax.lo, pane.unit)} … ${level(ax.hi, pane.unit)}`) : "automatic", run: () => useS.setState({ dialog: { k: "yrange", pane: key, unit: pane.unit, log: !!ax.log && !db && pos } }) },
             ...(ax.lo != null ? [{ label: "Automatic y range", run: () => setYAxis(key, { ...ax, lo: undefined, hi: undefined }) }] : []),
           ] : []),
           "-",
@@ -538,7 +539,7 @@ const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot, spec, st
                 ...(moved(t) || spec ? [] : [{ label: t.right && !guest(t) ? "Back to the left axis" : "Right axis (own scale)", hint: guest(t) ? "it holds another unit here" : !t.right && alone(t) ? "alone in its pane" : undefined, disabled: guest(t) || (!t.right && alone(t)), run: () => setTraceRight(t.expr, !t.right) }]),
                 // (into another unit's pane: on its right axis there, unless that holds a third unit
                 // already; not the Bode panes, nor in a spectrum)
-                ...(t.data?.im || t.data?.constant || spec ? [] : panes.filter((p) => p.unit !== "dB" && p.unit !== "°" && p.unit !== t.unit && !p.series.some((s) => s.t === t) && p.series.every((s) => s.u === p.unit || s.u === t.unit)).map((p) => ({ label: `Into the ${p.unit || "unitless"} pane`, hint: "its right axis", run: () => setTracePane(t.expr, p.unit) }))),
+                ...(t.data?.im || t.data?.constant || spec ? [] : panes.filter((p) => p.own && p.unit !== "dB" && p.unit !== "°" && p.unit !== t.unit && !p.series.some((s) => s.t === t) && p.series.every((s) => s.u === p.unit || s.u === t.unit)).map((p) => ({ label: `Into the ${p.unit || "unitless"} pane`, hint: "its right axis", run: () => setTracePane(t.expr, p.unit) }))),
                 ...(t.pane != null && !spec ? [{ label: moved(t) ? `Back to its own pane (${t.unit || "unitless"})` : `Not into the ${t.pane || "unitless"} pane any more`, hint: moved(t) ? undefined : "it would go there with traces of its own", run: () => setTracePane(t.expr, undefined) }] : []),
                 { label: "Copy expression", hint: t.expr, run: () => navigator.clipboard.writeText(t.expr) },
                 { label: `Remove ${t.label}`, danger: true, run: () => removeTrace(t.expr) },

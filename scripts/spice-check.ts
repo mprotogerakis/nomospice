@@ -240,6 +240,7 @@ assert.equal(numInfo("1Meg", "Hz")!.text, "= 1MegHz"); // not "1M", the milli tr
   assert.ok(bin(5e3) < -80, `${bin(5e3)}`);
   assert.ok(db[0]! < -60, `the 5 V offset leaks into no bin (+14 dB with it): ${db[0]}`);
   assert.equal(f[0], 100);
+  assert.ok(spectrum(xs, ys.map((y, k) => (k > xs.length / 2 ? NaN : y)), 0, 10e-3, 4096).every((v) => v == null), "a halted step: none");
   // a breakpoint's femtosecond step among 15: not 2^20 points
   assert.equal(fftSize([0, 1e-3, 1e-3 + 1e-15, ...Array.from({ length: 13 }, (_, k) => 2e-3 + k * 1e-3)], 0, 14e-3), 4096);
 }

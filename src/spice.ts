@@ -697,6 +697,7 @@ function fft(re: Float64Array, im: Float64Array) {
   if (!tw) {
     tw = [new Float64Array(n / 2), new Float64Array(n / 2)];
     for (let k = 0; k < n / 2; k++) [tw[0][k], tw[1][k]] = [Math.cos((-2 * Math.PI * k) / n), Math.sin((-2 * Math.PI * k) / n)];
+    TWIDDLES.clear(); // (the current size's only)
     TWIDDLES.set(n, tw);
   }
   const [wr, wi] = tw;
@@ -739,15 +740,18 @@ export const fftFreqs = (lo: number, hi: number, n: number) => Array.from({ leng
  *  window would leak it into the lowest bins), Hann window. Bins 1 … n/2 (see `fftFreqs`). */
 export function spectrum(xs: number[], ys: (number | null)[], lo: number, hi: number, n: number): (number | null)[] {
   const re = new Float64Array(n), im = new Float64Array(n);
-  // (one pass: the sample times only rise; xs outside lo..hi or a gap (a step halted early): 0)
+  // (one pass: the sample times only rise. A curve not over all of lo..hi, a step halted early:
+  // no spectrum, rather than one of a fall to 0)
   let mean = 0;
   for (let i = 0, j = 0; i < n; i++) {
     const t = lo + ((hi - lo) * i) / n;
     while (j < xs.length - 2 && xs[j + 1] <= t) j++;
     const [a, b] = [ys[j], ys[j + 1]];
-    const v = t < xs[0] || t > xs[xs.length - 1] || a == null || b == null ? 0 : xs[j + 1] === xs[j] ? a : a + Math.min(1, Math.max(0, (t - xs[j]) / (xs[j + 1] - xs[j]))) * (b - a);
-    re[i] = Number.isFinite(v) ? v : 0;
-    mean += re[i] / n;
+    // (past either end, by a fraction of a step: the end's value, the interpolation clamped)
+    const v = a == null || b == null ? NaN : xs[j + 1] === xs[j] ? a : a + Math.min(1, Math.max(0, (t - xs[j]) / (xs[j + 1] - xs[j]))) * (b - a);
+    if (!Number.isFinite(v)) return new Array<number | null>(n / 2).fill(null);
+    re[i] = v;
+    mean += v / n;
   }
   let sum = 0;
   for (let i = 0; i < n; i++) {
