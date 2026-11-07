@@ -276,14 +276,7 @@ pub struct Run {
 /// The deck's `.meas` statements (their + lines joined): name (lowercase, as ngspice reports it) →
 /// whether the result is a point on the x axis (WHEN, not FIND/DERIV … WHEN).
 fn meas_names(deck: &str) -> std::collections::HashMap<String, bool> {
-    let mut stmts: Vec<String> = vec![];
-    for l in deck.lines().map(str::trim) {
-        match l.strip_prefix('+') {
-            Some(more) if !stmts.is_empty() => stmts.last_mut().unwrap().push_str(&format!(" {more}")),
-            _ => stmts.push(l.to_string()),
-        }
-    }
-    stmts.iter().filter_map(|l| {
+    crate::schematic::statements(deck, &[".meas", ".measure"]).iter().filter_map(|l| {
         let t: Vec<String> = l.split_whitespace().map(str::to_ascii_lowercase).collect();
         let typed = t.get(1).is_some_and(|w| crate::schematic::TYPES_MEAS.contains(&w.as_str()));
         let k = if typed { 2 } else { 1 };
@@ -401,13 +394,8 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
     }
     let sensors = &sensors[..];
     // ngspice makes a helper source per par() in its output lines, named pa_00, pa_01 …
-    let mut output = false; // in an output statement (its + lines count too)
-    let pars = netlist.lines().map(|l| crate::schematic::uncommented(l).trim_start().to_ascii_lowercase()).filter(|l| {
-        if !l.starts_with('+') && !l.is_empty() && !l.starts_with('*') {
-            output = [".meas", ".print", ".plot", ".four", ".save"].iter().any(|d| l.starts_with(d));
-        }
-        output
-    }).filter(|l| !l.starts_with('*')).map(|l| l.matches("par(").count()).sum(); // (not a commented-out one)
+    let pars = crate::schematic::statements(netlist, &[".meas", ".measure", ".print", ".plot", ".four", ".save"])
+        .iter().map(|l| l.to_ascii_lowercase().matches("par(").count()).sum();
     let (mut vectors, mut scale) = plot_vectors(api, &plot, sensors, pars);
     // one frequency (`.ac lin 1 50 50`): phasors, shown as a table like .op instead of a 1-point plot
     let phasors = scale == "frequency" && read(api, "frequency").is_some_and(|f| f.re.len() == 1);
@@ -518,7 +506,8 @@ mod tests {
     fn measurement_report() {
         let log: Vec<String> = ["Measurements for Transient Analysis", "error_pct           =  1.20000e-02", "Error: measure  w  (WHEN) : out of interval", "    Analysis is not possible.", " meas w failed!", ".meas tran p avg -i(v1) failed!", "tplh                =  5.4e-10 targ=  3.0e-08 trig=  3.0e-08", "tnom = 27"]
             .map(String::from).into();
-        let names = meas_names(".meas tran error_pct AVG x\n.meas tran\n+ w WHEN v(a)=1\n.MEAS p AVG -i(v1)\n.meas tran tplh TRIG …");
+        let names = meas_names(".meas tran error_pct AVG x ; when settled\n.meas tran\n* note\n+ w WHEN v(a)=1\n.MEAS p AVG -i(v1)\n.meas tran tplh TRIG …");
+        assert_eq!(names.get("error_pct"), Some(&false), "a comment's words do not count");
         assert_eq!(names.get("w"), Some(&true), "a name on a + line; WHEN is on the x axis");
         let m = measurements(&log, &names);
         let names: Vec<&str> = m.iter().map(|x| x.0.as_str()).collect();

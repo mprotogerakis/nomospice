@@ -807,6 +807,9 @@ impl Netlist {
 /// - `I(R1)` of a part with a current sensor becomes the sensor's current;
 /// - no analysis type (LTspice measures the simulation's) gets the deck's.
 fn ltspice_meas(text: &str, sensors: &[Sensor], warnings: &mut Vec<String>) -> String {
+    if !text.to_ascii_lowercase().contains(".meas") {
+        return text.to_string(); // nothing to rewrite: no pass over a big deck
+    }
     let lines = deck_lines(text);
     let an = lines.iter().find_map(|l| l.head.strip_prefix('.').filter(|h| !l.skip && TYPES_MEAS.contains(h))).unwrap_or("");
     let meas = |l: &DeckLine| l.head == ".meas" || l.head == ".measure";
@@ -853,6 +856,24 @@ fn ltspice_meas(text: &str, sensors: &[Sensor], warnings: &mut Vec<String>) -> S
         i = j;
     }
     out.join("\n") + "\n"
+}
+
+/// The deck's statements of the dot commands `heads` (lowercase, e.g. ".meas"), each with its `+`
+/// lines joined: comment and blank lines between them skipped, inline comments cut (deck_lines).
+pub fn statements(text: &str, heads: &[&str]) -> Vec<String> {
+    let mut out: Vec<String> = vec![];
+    for l in deck_lines(text).iter().filter(|l| !l.skip && heads.contains(&l.head.as_str())) {
+        let t = uncommented(l.line).trim();
+        match t.strip_prefix('+') {
+            Some(more) if !out.is_empty() => {
+                let last = out.last_mut().unwrap();
+                last.push(' ');
+                last.push_str(more.trim());
+            }
+            _ => out.push(t.to_string()),
+        }
+    }
+    out
 }
 
 /// A line without its inline comment (`;` LTspice, ` $` ngspice).

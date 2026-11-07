@@ -360,7 +360,10 @@ export const Schematic = memo(function Schematic() {
         if (e.shiftKey || e.metaKey || e.ctrlKey) next = selSet.has(i) ? sel.filter((j) => j !== i) : [...sel, i];
         else if (!selSet.has(i)) next = [i];
         useS.setState({ sel: next });
-        drag.current = { k: "move", start: g, plan: dragPlan(items, lib, new Set(next)), moved: false, index: i, at: [0, 0], base: items };
+        // the plan is built on the first move (a click or a probe never needs it)
+        let built: ReturnType<typeof dragPlan> | null = null;
+        const plan = (dx: number, dy: number) => (built ??= dragPlan(items, lib, new Set(next)))(dx, dy);
+        drag.current = { k: "move", start: g, plan, moved: false, index: i, at: [0, 0], base: items };
       } else if (e.shiftKey) {
         drag.current = { k: "box", start: p, end: p };
       } else {

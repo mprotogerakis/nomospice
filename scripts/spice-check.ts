@@ -156,5 +156,8 @@ assert.equal(numInfo("1Meg", "Hz")!.text, "= 1MegHz"); // not "1M", the milli tr
   const withPin = [...two, { t: "sym" as const, sym: "r", x: 50, y: 0, rot: "R0", attrs: {} }];
   const bent = dragPlan(withPin as never, lib as never, new Set([0, 1]))(0, 20);
   assert.ok(connectivity(bent as never, lib as never).dots.some(([x, y]) => x === 50 && y === 0), JSON.stringify(bent));
+  // the same wire selected alone: it stretches around the resting pin too
+  const selWire = dragPlan(withPin as never, lib as never, new Set([2]))(0, 20);
+  assert.ok(connectivity(selWire as never, lib as never).dots.some(([x, y]) => x === 50 && y === 0), JSON.stringify(selWire));
 }
 console.log("spice-check: ok");

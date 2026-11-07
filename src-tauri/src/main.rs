@@ -263,27 +263,40 @@ async fn root_locus(items: Vec<Item>, dir: Option<String>, target: String, value
 }
 
 /// Save As into another folder: the schematic's own symbols (`<name>.asy` next to it) that `names`
-/// use and the new folder lacks; `copy`: copy them there (else only list them).
+/// use, as (file, clash): clash when the new folder has a different file of that name (it would be
+/// used instead, and is not overwritten). `copy`: copy the others there (else only list them).
 #[tauri::command]
-async fn folder_symbols(from: String, to: String, names: Vec<String>, copy: bool) -> Result<Vec<String>, String> {
+async fn folder_symbols(from: String, to: String, names: Vec<String>, copy: bool) -> Result<Vec<(String, bool)>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         // the library's own rule for which .asy files are a folder's symbols
         let old: std::collections::HashMap<_, _> = schematic::folder_symbols(std::path::Path::new(&from)).into_iter().collect();
         let new: std::collections::HashMap<_, _> = schematic::folder_symbols(std::path::Path::new(&to)).into_iter().collect();
-        let mut out: Vec<String> = vec![];
+        let (mut out, mut failed): (Vec<(String, bool)>, Vec<String>) = (vec![], vec![]);
         for n in names {
             let key = schematic::sym_key(&n);
             let Some(src) = old.get(&key) else { continue };
             let file = src.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
-            let dst = std::path::Path::new(&to).join(&file);
-            if !new.contains_key(&key) && !out.contains(&file) {
-                if copy {
-                    std::fs::copy(src, &dst).map_err(|e| format!("{file}: {e}"))?;
+            if out.iter().any(|(f, _)| *f == file) {
+                continue;
+            }
+            match new.get(&key) {
+                Some(there) => {
+                    if std::fs::read(src).ok() != std::fs::read(there).ok() {
+                        out.push((file, true)); // the same symbol already there: nothing to tell
+                    }
                 }
-                out.push(file);
+                None => {
+                    // every file tried: one that fails does not keep the others back
+                    if copy {
+                        if let Err(e) = std::fs::copy(src, std::path::Path::new(&to).join(&file)) {
+                            failed.push(format!("{file}: {e}"));
+                        }
+                    }
+                    out.push((file, false));
+                }
             }
         }
-        Ok(out)
+        if failed.is_empty() { Ok(out) } else { Err(failed.join("; ")) }
     }).await.map_err(|e| e.to_string())?
 }
 

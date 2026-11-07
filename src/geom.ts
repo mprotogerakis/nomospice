@@ -179,7 +179,8 @@ export function dragPlan(items: Item[], lib: Lib, sel: Set<number>) {
   items.forEach((it, i) => it.t === "wire" && ends(it).forEach((p) => atEnd.set(key(...p), [...(atEnd.get(key(...p)) ?? []), i])));
   const join = (i: number) => {
     const it = items[i];
-    if (whole.has(i) || it.t !== "wire" || !(sel.has(i) || (ends(it).every((p) => moving.has(key(...p))) && !pinned(it)))) return;
+    // (selected or not: a wire with a resting part's pin on it stretches around the pin)
+    if (whole.has(i) || it.t !== "wire" || pinned(it) || !(sel.has(i) || ends(it).every((p) => moving.has(key(...p))))) return;
     whole.add(i), work.push(i);
   };
   items.forEach((_, i) => join(i));
@@ -226,7 +227,7 @@ export function dragPlan(items: Item[], lib: Lib, sel: Set<number>) {
   return (dx: number, dy: number): Item[] =>
     rejoin(all.map((it, i) => {
       if (it.t === "raw") return it;
-      if ((sel.has(i) || whole.has(i)) && i < items.length) {
+      if (i < items.length && (whole.has(i) || (sel.has(i) && items[i].t !== "wire"))) {
         return it.t === "wire" ? { ...it, x1: it.x1 + dx, y1: it.y1 + dy, x2: it.x2 + dx, y2: it.y2 + dy } : { ...it, x: it.x + dx, y: it.y + dy };
       }
       if (it.t === "wire") {

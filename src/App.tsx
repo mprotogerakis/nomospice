@@ -143,9 +143,13 @@ async function saveFile(as = false) {
   // another folder: symbols from next to the old file go along on request (else its parts lose
   // them). Asked before the path changes, so no run (live mode) meanwhile looks in the new folder.
   const [from, to] = [dirOf(prev), dirOf(path)], names = items.flatMap((it) => (it.t === "sym" ? [it.sym] : []));
-  const own = prev && from && to && from !== to ? await invoke<string[]>("folder_symbols", { from, to, names, copy: false }).catch(() => []) : [];
-  if (own.length && (await ask(`The schematic uses symbols from its old folder: ${own.join(", ")}. Copy them to the new folder?`, { title: "nomospice" })))
-    await invoke("folder_symbols", { from, to, names, copy: true }).catch(fail("Cannot copy the symbols"));
+  const found = prev && from && to && from !== to ? await invoke<[string, boolean][]>("folder_symbols", { from, to, names, copy: false }).catch(() => []) : [];
+  const [own, clash] = [found.filter(([, c]) => !c).map(([f]) => f), found.filter(([, c]) => c).map(([f]) => f)];
+  // a different file of the same name over there: it would be used instead (and is not overwritten)
+  const differ = clash.length ? `\n\nThe new folder has its own, different ${clash.join(", ")}: the schematic will use ${clash.length > 1 ? "those" : "that one"} there.` : "";
+  if (own.length && (await ask(`The schematic uses symbols from its old folder: ${own.join(", ")}. Copy them to the new folder?${differ}`, { title: "nomospice" })))
+    await invoke("folder_symbols", { from, to, names, copy: true }).catch(fail("Cannot copy all symbols"));
+  else if (!own.length && clash.length) await message(differ.trim(), { title: "nomospice" });
   if (doc !== docId()) return;
   try {
     // saves are written in the order they were requested: a newer snapshot never loses to an older one
