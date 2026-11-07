@@ -1145,13 +1145,14 @@ pub fn sensor_currents(s: &str, sensors: &[Sensor]) -> String {
 }
 
 /// A part current's name left in `s` after `sensor_currents` (`Ib(Q9)`, `Ix(U1:NC)`: a typo, a part
-/// without it): ngspice has no such functions, so these names are always ours.
+/// without it): ngspice has no such functions, so these names are always ours. (Not `ig(`: also
+/// ngspice's group delay of a source current, `ig(v1)`.)
 pub fn unknown_current(s: &str) -> Option<String> {
     // (bytes: the pattern is ASCII, so a match starts on a char boundary whatever else the text holds)
     let b = s.as_bytes();
     let word = |c: u8| c.is_ascii_alphanumeric() || c == b'_' || c >= 0x80;
     let k = (0..b.len().saturating_sub(2)).find(|&k| {
-        b[k].eq_ignore_ascii_case(&b'i') && b"xcbedgs".contains(&b[k + 1].to_ascii_lowercase()) && b[k + 2] == b'(' && (k == 0 || !word(b[k - 1]))
+        b[k].eq_ignore_ascii_case(&b'i') && b"xcbeds".contains(&b[k + 1].to_ascii_lowercase()) && b[k + 2] == b'(' && (k == 0 || !word(b[k - 1]))
     })?;
     Some(s[k..].split_inclusive(')').next().unwrap_or(&s[k..]).to_string())
 }
@@ -2080,6 +2081,7 @@ mod tests {
         assert_eq!(unknown_current("i(v1)+mix(1)+vin(a)"), None, "a source's i(), other words");
         assert_eq!(unknown_current("1µ*Ω°ib(q1)"), None, "non-ASCII before: a word, and no panic");
         assert_eq!(unknown_current("1µ* Ix(U1:a)"), Some("Ix(U1:a)".into()));
+        assert_eq!(unknown_current("ig(v1)"), None, "ngspice's group delay");
         assert_eq!(m(".meas tran p AVG 1µ*I(R1)"), ".meas tran p AVG par('1µ*i(vsense_r1)')", "multi-byte text: no panic");
         assert_eq!(m(".meas tran a AVG V(out) FROM = 1m TO =2m"), ".meas tran a AVG V(out) FROM=1m TO=2m", "blanks around =");
         assert_eq!(m(".meas tran w WHEN V(out) = 0.5 RISE = 1"), ".meas tran w WHEN V(out)=0.5 RISE=1");

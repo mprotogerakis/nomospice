@@ -627,7 +627,8 @@ export function exprUnit(expr: string, vector: (name: string) => string = () => 
     if (s[i] !== "(") return /^(pi|e)$/.test(name) ? { d: [0, 0, 0], n: true } : /^(boltz|echarge|kelvin|planck)$/.test(name) ? { d: null } : ((u) => (u ? dims(u) : { d: null }))(vector(id[0]));
     i++;
     if (/^v[mri]?$/.test(name)) return raw(), dims("V");
-    if (/^i[cbedgsx]?$/.test(name)) return raw(), dims("A");
+    // (not ig(): also ngspice's group delay of a source current, in seconds)
+    if (/^i[cbedsx]?$/.test(name)) return raw(), dims("A");
     const a = args()[0];
     if (/^(abs|mag|real|re|imag|im|mean|avg|rms|max|min|vecmax|vecmin)$/.test(name)) return a;
     if (name === "sqrt") return { d: a.d && a.d.map((x) => x / 2), n: a.n };

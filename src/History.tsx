@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { GitCommit, Item } from "./types";
-import { commit, loadSymbols, refreshGit, useS } from "./store";
+import { commit, fileName, loadSymbols, refreshGit, useS } from "./store";
 import { Button } from "./ui/button";
 import { FIELD_BASE, FIELD_FOCUS } from "./ui/focus";
 import { cn } from "@/lib/utils";
@@ -52,7 +52,7 @@ export function History() {
       <form className="flex items-center gap-2" onSubmit={(e) => (e.preventDefault(), doCommit())}>
         <input
           className={cn(FIELD_BASE, FIELD_FOCUS, "h-[24px] flex-1 px-2")}
-          placeholder={dirty ? "Save first, then commit" : clean ? "No changes to commit" : `Commit message for ${path.split(/[\\/]/).pop()}`}
+          placeholder={dirty ? "Save first, then commit" : clean ? "No changes to commit" : `Commit message for ${fileName(path)}`}
           value={msg} onChange={(e) => setMsg(e.target.value)} disabled={dirty || clean}
         />
         <Button type="submit" variant="primary" disabled={dirty || clean || !msg.trim()}>Commit</Button>
