@@ -501,7 +501,7 @@ function CursorStatus() {
 
 /** ⌘L: the bottom panel closed, or open again on the tab last shown (not a run's results: they
  *  may be gone by then). */
-let lastPanel: Exclude<ReturnType<typeof useS.getState>["panel"], null> = "log";
+let lastPanel: Exclude<ReturnType<typeof useS.getState>["panel"], null> = "netlist";
 useS.subscribe((s) => void (s.panel && s.panel !== "op" && (lastPanel = s.panel)));
 const togglePanel = () => useS.setState({ panel: useS.getState().panel ? null : lastPanel });
 
@@ -515,6 +515,7 @@ function drag(e: React.PointerEvent, move: (ev: PointerEvent) => void, done?: ()
   const mine = (ev: PointerEvent) => ev.pointerId === id && (ev.buttons ? move(ev) : end(ev));
   const end = (ev: PointerEvent) => {
     if (ev.pointerId !== id) return;
+    if (el.hasPointerCapture(id)) el.releasePointerCapture(id); // (released elsewhere: not by itself)
     el.removeEventListener("pointermove", mine);
     window.removeEventListener("pointerup", end);
     window.removeEventListener("pointercancel", end);
