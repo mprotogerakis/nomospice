@@ -465,7 +465,7 @@ export function canProbe(target: Item | undefined, pin?: number) {
   // parts: the backend says which have a current probe; without a fresh netlist, any known symbol
   // (without one: a subcircuit of more than two pins has currents per pin only)
   const def = target.t === "sym" ? defOf(s.lib, target) : undefined;
-  const part = target.t === "sym" && (nets ? !!partCurrent(nets, i, pin) : !!def && !(prefixOf(target, def) === "X" && def.pins.length > 2));
+  const part = target.t === "sym" && (nets ? !!partCurrent(nets, i, pin) : !!def && (pin != null || !(prefixOf(target, def) === "X" && def.pins.length > 2)));
   return ((target.t === "wire" || target.t === "flag") && !ground) || part;
 }
 

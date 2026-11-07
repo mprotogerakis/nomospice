@@ -57,7 +57,7 @@ async function discardOk() {
   if (!dirty) return true;
   const name = fileName(path);
   const r = await message("Your changes are lost if you don't save them.", { title: `Save the changes to “${name}”?`, kind: "warning", buttons: { yes: "Save", no: "Don't Save", cancel: "Cancel" } });
-  if (r === "Save" || r === "Yes") return (await saveFile(), !useS.getState().dirty); // (the save dialog cancelled: stay)
+  if (r === "Save" || r === "Yes") return saveFile(); // (written; the save dialog cancelled or a failure: stay)
   return r === "Don't Save" || r === "No";
 }
 /** Recovery mirror: debounce timer and the last save in flight (a clear must come after it). */
@@ -135,16 +135,16 @@ async function dropFiles(paths: string[]) {
   if (models.length) newItem({ t: "text", x: 0, y: 0, directive: true, text: models.map((p) => `.include "${relToDoc(p)}"`).join("\n") });
 }
 
-async function saveFile(as = false) {
+/** Save (as): true once the file is written. */
+async function saveFile(as = false): Promise<boolean> {
   const prev = useS.getState().path;
   let path = prev;
   if (as || !path) path = await save({ filters: FILTERS, defaultPath: path ?? "untitled.asc" });
-  if (!path) return;
+  if (!path) return false;
   if (!/\.asc$/i.test(path)) {
     // GTK save dialogs do not add the filter's extension, and checked for overwrite without it
     path += ".asc";
-    const name = path.split(/[\\/]/).pop();
-    if ((await invoke<boolean>("path_exists", { path })) && !(await ask(`${name} already exists. Replace it?`, { title: "nomospice", kind: "warning" }))) return;
+    if ((await invoke<boolean>("path_exists", { path })) && !(await ask(`${fileName(path)} already exists. Replace it?`, { title: "nomospice", kind: "warning" }))) return false;
   }
   const items = useS.getState().items;
   const doc = docId();
@@ -162,16 +162,16 @@ async function saveFile(as = false) {
   let carry = false;
   if (own.length) {
     const r = await message(`The schematic uses symbols from its old folder: ${own.join(", ")}. Copy them to the new folder?${differ}`, { title: "nomospice", buttons: { yes: "Copy", no: "Don't copy", cancel: "Cancel" } });
-    if (r === "Cancel") return;
+    if (r === "Cancel") return false;
     carry = r === "Copy" || r === "Yes";
   }
   if (!own.length && clash.length) await message(differ.trim(), { title: "nomospice" });
-  if (doc !== docId()) return;
+  if (doc !== docId()) return false;
   try {
     // saves are written in the order they were requested: a newer snapshot never loses to an older one
     const write = (saveQueue = saveQueue.catch(() => {}).then(() => invoke("save_asc", { path, items })));
     await write;
-    if (doc !== docId()) return; // another document was loaded meanwhile
+    if (doc !== docId()) return true; // (written; another document was loaded meanwhile)
     if (carry) await invoke("folder_symbols", { from, to, names, copy: true }).catch(fail("Cannot copy all symbols"));
     const moved = path !== useS.getState().path; // relative .include paths now resolve elsewhere
     // another folder: includes and folder symbols resolve elsewhere, for every tab's results
@@ -179,8 +179,10 @@ async function saveFile(as = false) {
     useS.setState({ path, dirty: useS.getState().items !== items, ...(moved && { tabs, ...(useS.getState().sim && { stale: true }) }) });
     if (moved) void loadSymbols(useS.getState().items).catch(() => {}).finally(refreshNets); // the new folder's symbols
     refreshGit();
+    return true;
   } catch (e) {
     await fail(`Cannot save ${path}`)(e);
+    return false;
   }
 }
 async function newFile() {

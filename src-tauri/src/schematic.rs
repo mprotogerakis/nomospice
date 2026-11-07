@@ -1559,6 +1559,14 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool) -> Netlist {
     }).collect();
     let mut seen = HashSet::new();
     let mut named: HashSet<String> = HashSet::new(); // current names given so far (lowercase)
+    // how many part pins each net reaches: a subcircuit pin alone on its net (an open NC pin) gets no
+    // sensor, which would float with a port the subcircuit may not use (singular matrix)
+    let mut pin_use: HashMap<String, usize> = HashMap::new();
+    for (it, nets) in items.iter().zip(&nl.nets) {
+        if matches!(it, Item::Sym { .. }) {
+            nets.iter().for_each(|n| *pin_use.entry(n.clone()).or_default() += 1);
+        }
+    }
     // drawn names more than one part has (T1 a diode and T1 a resistor): those parts go by their netlist names
     let mut drawn: HashMap<String, usize> = HashMap::new();
     for it in items {
@@ -1654,6 +1662,9 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool) -> Netlist {
             nl.pin_currents[i][0] = format!("I({inst})"); // a source's own branch current (ngspice: i(v1), by the netlist's name)
         }
         for k in sensed {
+            if prefix == 'X' && nl.nets[i][k] != "0" && pin_use.get(&nl.nets[i][k]).copied().unwrap_or(0) < 2 {
+                continue; // (open: no current to measure)
+            }
             // reserved in both builds (identical names), never clashing with the user's own
             let tail = if k == 0 { String::new() } else { format!("_{}", k + 1) };
             let mut src = format!("Vsense_{inst}{tail}");
