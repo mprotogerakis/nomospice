@@ -423,13 +423,14 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
                     break;
                 }
             }
-            Err(log) if done.is_empty() => return Err(unstepped.into_iter().chain(log).collect()),
+            Err(log) if steps.is_none() => return Err(unstepped.into_iter().chain(log).collect()),
             Err(log) if log == ["simulation halted"] => break, // (halted while it began: not a failure)
-            Err(log) => {
-                failed = std::iter::once(format!("--- .step {label} failed")).chain(log).collect();
-                break;
-            }
+            // a step that fails (R=0: singular): said, and the next ones still run, as in LTspice
+            Err(log) => failed.extend(std::iter::once(format!("--- .step {label} failed")).chain(log)),
         }
+    }
+    if done.is_empty() {
+        return Err(unstepped.into_iter().chain(failed).collect());
     }
     // .noise ends in its totals plot (noise2, noise4 …); the spectrum users plot is the one before it
     // (a step halted in its spectrum: that plot, it has a frequency scale)
@@ -457,6 +458,7 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
     }
     // no scale (.op, .tf, .pz, .noise totals ...): single values, shown as a table (per step, named)
     let mut op = vec![];
+    let mut truncated = false;
     if scale.is_empty() {
         'steps: for (label, plot, _) in &done {
             api.command(&format!("setplot {plot}"));
@@ -474,7 +476,9 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
                 if let Some(&re) = t.re.first() {
                     op.push((name, re, t.im.and_then(|im| im.first().copied()).unwrap_or(0.0), unit));
                 }
-                if op.len() >= MAX_ROWS {
+                if steps.is_some() && op.len() > MAX_ROWS {
+                    op.pop();
+                    truncated = true;
                     break 'steps;
                 }
             }
@@ -503,8 +507,10 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
     let mut vectors: Vec<String> = vectors.into_iter().map(|v| named.get(&v).map_or(v, |l| l.to_string())).collect();
     vectors.sort();
     let mut notes: Vec<String> = vec![];
-    if op.len() >= MAX_ROWS {
-        notes.push(format!("the results table shows its first {MAX_ROWS} values"));
+    let mut log = log;
+    if truncated {
+        notes.push(format!("Warning: the results table shows its first {MAX_ROWS} values (a value per node per step)"));
+        log.push(notes[0].clone());
     }
     notes.extend(log.iter().filter(|l| l.starts_with("Warning: .step") || l.starts_with("--- .step") && l.ends_with("failed")).cloned());
     Ok(Run { id, plot, scale, vectors, op, aborted, meas, log, steps: if steps.is_none() { vec![] } else { done.iter().map(|d| d.0.clone()).collect() }, notes })
@@ -599,6 +605,7 @@ pub fn trace(expr: &str, scale: &str, run: u64) -> Result<Trace, String> {
     }
     // the plot as it is, or (a .step run) each step's in turn
     let mut each = vec![];
+    let mut failure = None;
     for plot in steps.iter().map(Some).chain(steps.is_empty().then_some(None)) {
         if let Some(p) = plot {
             api.command(&format!("setplot {p}"));
@@ -606,10 +613,19 @@ pub fn trace(expr: &str, scale: &str, run: u64) -> Result<Trace, String> {
         api.command("unlet nmsp_trace"); // a failed `let` would otherwise leave the previous trace behind
         take_log(); // after unlet: it may print leftovers of the finished run ("Background thread stopped")
         api.command(&format!("let nmsp_trace = {expr}"));
-        let mut t = read(api, "nmsp_trace").ok_or_else(|| {
-            let log = take_log().join("\n");
-            if log.is_empty() { format!("cannot evaluate {shown}") } else { unname(log) }
-        })?;
+        let mut t = match read(api, "nmsp_trace") {
+            Some(t) => t,
+            None => {
+                let log = take_log().join("\n");
+                let why = if log.is_empty() { format!("cannot evaluate {shown}") } else { unname(log) };
+                if steps.is_empty() {
+                    return Err(why);
+                }
+                // one step of several (halted, aborted: no data there): a gap; all of them: the error
+                failure = Some(why);
+                Trace { x: vec![], re: vec![], im: None, constant: false, typ: 0, steps: None }
+            }
+        };
         if !scale.is_empty() {
             t.x = read(api, scale).map(|s| s.re).unwrap_or_default();
         }
@@ -628,12 +644,15 @@ pub fn trace(expr: &str, scale: &str, run: u64) -> Result<Trace, String> {
             let cap = 4 * (STEP_VALUES / steps.len()).clamp(200, 200_000);
             let sweep = t.x.windows(2).all(|w| w[1] >= w[0]) || t.x.windows(2).all(|w| w[1] <= w[0]); // (not a nested .dc)
             if t.x.len() > cap && t.re.len() == t.x.len() && sweep {
-                let keep: Vec<usize> = (0..cap).map(|k| k * (t.x.len() - 1) / (cap - 1)).collect();
+                let keep = even(t.x.len(), cap);
                 let pick = |v: &[f64]| keep.iter().map(|&k| v[k]).collect::<Vec<f64>>();
                 (t.x, t.re, t.im) = (pick(&t.x), pick(&t.re), t.im.as_deref().map(pick));
             }
         }
         each.push((each.len(), t));
+    }
+    if let Some(why) = failure.filter(|_| each.iter().all(|(_, t)| t.re.is_empty())) {
+        return Err(why);
     }
     if each.len() == 1 {
         let (k, mut t) = each.pop().unwrap();
@@ -649,6 +668,11 @@ pub fn trace(expr: &str, scale: &str, run: u64) -> Result<Trace, String> {
 /// interpolated onto it), so the plot shows them as a family like a nested .dc. At most
 /// `STEP_VALUES` values in all: many steps thin their curves (each keeps a share of its own samples).
 const STEP_VALUES: usize = 2_000_000;
+/// `n` indices spread evenly over `0..len` (the first and the last among them); all if `len <= n`.
+pub fn even(len: usize, n: usize) -> Vec<usize> {
+    if len <= n || n < 2 { (0..len).collect() } else { (0..n).map(|k| k * (len - 1) / (n - 1)).collect() }
+}
+
 /// The results table's rows at most (a stepped .op of a big circuit: a value per node per step).
 const MAX_ROWS: usize = 20_000;
 fn steps_joined(each: Vec<(usize, Trace)>) -> Result<Trace, String> {
@@ -669,7 +693,7 @@ fn steps_joined(each: Vec<(usize, Trace)>) -> Result<Trace, String> {
     }
     // (a curve's share of the budget; evenly by index, keeping the first and last)
     let cap = (STEP_VALUES / each.len()).clamp(200, 200_000);
-    let thin = |v: &[f64], n: usize| -> Vec<usize> { if v.len() <= n || n < 2 { (0..v.len()).collect() } else { (0..n).map(|k| k * (v.len() - 1) / (n - 1)).collect() } };
+    let thin = |v: &[f64], n: usize| even(v.len(), n);
     if same {
         // the same x for all (.ac, .dc): every curve at the same thinned indices, exact; a table
         // (.op: no x, a value per step) or a nested .dc (thinning would cut across its segments) whole

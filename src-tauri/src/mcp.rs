@@ -87,10 +87,7 @@ fn schematic_at(base: &Path, args: &Value) -> Result<(Vec<schematic::Item>, Opti
 }
 
 fn downsample(v: &[f64], n: usize) -> Vec<f64> {
-    if v.len() <= n || n < 2 {
-        return v.to_vec();
-    }
-    (0..n).map(|k| v[k * (v.len() - 1) / (n - 1)]).collect()
+    ngspice::even(v.len(), n).into_iter().map(|k| v[k]).collect()
 }
 
 fn call(base: &Path, name: &str, args: &Value) -> Result<Value, String> {
