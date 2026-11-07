@@ -909,8 +909,8 @@ pub const PAR_STATEMENTS: [&str; 6] = [".meas", ".measure", ".print", ".plot", "
 /// A line without its inline comment (`;` LTspice, ` $` ngspice).
 pub fn uncommented(l: &str) -> &str {
     let l = l.split(';').next().unwrap_or("");
-    // `$` after a blank (or at the start) begins an ngspice comment
-    let at = l.char_indices().find(|&(k, c)| c == '$' && (k == 0 || l[..k].ends_with(char::is_whitespace)));
+    // as ngspice strips them: `$` after a blank or a comma (or at the start), and `//`
+    let at = l.char_indices().find(|&(k, c)| (c == '$' && (k == 0 || l[..k].ends_with(|p: char| p.is_whitespace() || p == ','))) || l[k..].starts_with("//"));
     at.map_or(l, |(k, _)| &l[..k])
 }
 
@@ -1921,6 +1921,7 @@ mod tests {
         assert_eq!(m(".meas tran w WHEN V(out) = 0.5 RISE = 1"), ".meas tran w WHEN V(out)=0.5 RISE=1");
         assert_eq!(m(".meas tran p AVG -I(V1)*V(in) ; dynamic power"), ".meas tran p AVG par('-I(V1)*V(in)')", "a ; comment is not part of it");
         assert_eq!(m(".meas tran p AVG V(a)*2\t$ avg power"), ".meas tran p AVG par('V(a)*2')", "a $ comment after a tab");
+        assert_eq!(m(".meas tran p AVG V(a)*2 // note"), ".meas tran p AVG par('V(a)*2')", "a // comment");
         for same in [".meas tran x AVG par('v(a)*v(b)')", ".meas ac x WHEN vdb(out)=vdb(in)"] {
             assert_eq!(m(same), same, "ngspice's own forms stay");
         }

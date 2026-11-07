@@ -313,6 +313,9 @@ fn measurements(log: &[String], names: &std::collections::HashMap<String, bool>)
             let x = at_x(n.trim())?;
             let rest = rest.trim();
             let (v, info) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+            if v.eq_ignore_ascii_case("failed") {
+                return Some((n.trim().to_string(), None, "failed".into(), x)); // `name = failed` (PARAM, expressions)
+            }
             // a span (trig/targ) or a WHEN point lies on the x axis
             Some((n.trim().to_string(), Some(v.trim_end_matches(',').parse::<f64>().ok()?), info.trim().to_string(), x || info.contains("targ=")))
         });
@@ -511,16 +514,16 @@ mod tests {
 
     #[test]
     fn measurement_report() {
-        let log: Vec<String> = ["Measurements for Transient Analysis", "error_pct           =  1.20000e-02", "Error: measure  w  (WHEN) : out of interval", "    Analysis is not possible.", " meas w failed!", ".meas tran p avg -i(v1) failed!", "tplh                =  5.4e-10 targ=  3.0e-08 trig=  3.0e-08", "tnom = 27"]
+        let log: Vec<String> = ["Measurements for Transient Analysis", "ratio               =   failed", "error_pct           =  1.20000e-02", "Error: measure  w  (WHEN) : out of interval", "    Analysis is not possible.", " meas w failed!", ".meas tran p avg -i(v1) failed!", "tplh                =  5.4e-10 targ=  3.0e-08 trig=  3.0e-08", "tnom = 27"]
             .map(String::from).into();
-        let names = meas_names(".meas tran error_pct AVG x ; when settled\n.meas tran\n* note\n+ w WHEN v(a)=1\n.MEAS p AVG -i(v1)\n.meas tran tplh TRIG …");
+        let names = meas_names(".meas tran ratio PARAM a/b\n.meas tran error_pct AVG x ; when settled\n.meas tran\n* note\n+ w WHEN v(a)=1\n.MEAS p AVG -i(v1)\n.meas tran tplh TRIG …");
         assert_eq!(names.get("error_pct"), Some(&false), "a comment's words do not count");
         assert_eq!(names.get("w"), Some(&true), "a name on a + line; WHEN is on the x axis");
         let m = measurements(&log, &names);
         let names: Vec<&str> = m.iter().map(|x| x.0.as_str()).collect();
-        assert_eq!(names, ["error_pct", "w", "p", "tplh"], "{m:?}");
-        assert!(m[3].3 && !m[0].3, "trig/targ on the x axis, AVG not");
-        assert_eq!(m[3].2, "targ=  3.0e-08 trig=  3.0e-08");
+        assert_eq!(names, ["ratio", "error_pct", "w", "p", "tplh"], "{m:?}");
+        assert!(m[0].1.is_none() && m[4].3 && !m[1].3, "a failed PARAM listed; trig/targ on the x axis, AVG not");
+        assert_eq!(m[4].2, "targ=  3.0e-08 trig=  3.0e-08");
     }
 
     #[test]
