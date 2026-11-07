@@ -712,13 +712,15 @@ function fft(re: Float64Array, im: Float64Array) {
   }
 }
 
-/** Points of a spectrum of lo..hi: a power of 2, as fine as the simulator's finest time step
- *  there (coarser would fold what an edge has above the new Nyquist frequency back in), 4096 to 2^20.
+/** Points of a spectrum of lo..hi: a power of 2, as fine as the simulator's fine time steps there
+ *  (its edges: coarser would fold what they have above the new Nyquist frequency back in; the
+ *  5 % finest, not the very finest, which breakpoints cut to femtoseconds), 4096 to 2^20.
  *  ponytail: past 2^20 it folds; average down first if such runs matter. */
 export function fftSize(xs: number[], lo: number, hi: number) {
-  let dt = Infinity;
-  for (let i = 1; i < xs.length; i++) if (xs[i] > lo && xs[i - 1] < hi && xs[i] > xs[i - 1]) dt = Math.min(dt, xs[i] - xs[i - 1]);
-  const m = Math.min(2 ** 20, (hi - lo) / dt); // (Infinity without a step there: the most)
+  const steps: number[] = [];
+  for (let i = 1; i < xs.length; i++) if (xs[i] > lo && xs[i - 1] < hi && xs[i] > xs[i - 1]) steps.push(xs[i] - xs[i - 1]);
+  steps.sort((a, b) => a - b);
+  const m = Math.min(2 ** 20, (hi - lo) / (steps[Math.floor(steps.length * 0.05)] ?? 0)); // (no step there: the most)
   return Math.min(2 ** 20, Math.max(4096, 2 ** Math.ceil(Math.log2(Math.max(m, 2)))));
 }
 
