@@ -10,7 +10,8 @@ import { closeDialog as close, Field, FIELD, Modal, numHelp, Rows, TextField } f
 import { SourceEditor } from "./SourceEditor";
 import { SimDialog } from "./SimDialog";
 import { DirectiveDialog } from "./DirectiveDialog";
-import { analysisEditable, analysisEditableAt, analysisLine, analysisLineIndex, analysisOptions, tokens } from "./spice";
+import { analysisEditable, analysisEditableAt, analysisLine, analysisLineIndex, analysisOptions, spiceNum, tokens } from "./spice";
+import { paneOrder } from "./Waveform";
 import { cn } from "@/lib/utils";
 import thirdParty from "./third-party.json";
 import { checkForUpdate } from "./updater";
@@ -297,8 +298,9 @@ function TraceDialog() {
     // get none rather than a wrong one. ngspice ph()/cph()/vp() are in radians.
     const plain = (x: string) => (raw && !noise ? "" : /^v\([^()]*\)$/i.test(x) ? "V" : /^i\([^()]*\)$/i.test(x) ? "A" : noise && /^\w+$/.test(x) ? noiseUnit(x) : "");
     const f = e.match(/^(\w+)\((.*)\)$/);
-    // a constant (a reference line) joins the first real trace's pane, so it is drawn on its axis
-    const unit = /^[-+]?(\d+\.?\d*|\.\d+)(e[-+]?\d+)?$/i.test(e) ? (useS.getState().traces.find((t) => t.unit && !t.data?.im)?.unit ?? "")
+    // a constant (a reference line, 500m) joins the top real pane, so it is drawn on its axis
+    const top = useS.getState().traces.flatMap((t) => (t.unit && !t.data?.im ? [t.unit] : [])).sort(paneOrder)[0] ?? "";
+    const unit = spiceNum(e) !== null ? top
       : f && /^v?db$/i.test(f[1]) ? "dB" : f && /^(c?ph|vp)$/i.test(f[1]) ? "rad"
       : f && /^(mag|vm|real|imag|re|im|abs)$/i.test(f[1]) ? plain(f[2]) : plain(e);
     if (e) addTrace(e, e, unit);

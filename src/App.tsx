@@ -327,7 +327,8 @@ export function App() {
 
   const startSplit = (e: React.PointerEvent) => {
     const r = mainRef.current!.getBoundingClientRect(), max = Math.min(0.8, roomFor(e.currentTarget.previousElementSibling as HTMLElement) / r.height);
-    drag(e, (ev) => setSplit(Math.min(max, Math.max(0.15, (ev.clientY - r.top) / r.height))));
+    const grab = e.clientY - e.currentTarget.getBoundingClientRect().top; // (where in the handle: no jump)
+    drag(e, (ev) => setSplit(Math.min(max, Math.max(0.15, (ev.clientY - grab - r.top) / r.height))));
   };
 
   const run = s.sim?.run;
@@ -537,12 +538,16 @@ function BottomPanel() {
   const tabs: [typeof panel, string][] = [["log", "Log"], ["netlist", "Netlist"], ...(sim?.run?.op.length ? [["op", isOpPlot ? "Operating point" : phasors ? "Phasors" : "Results"] as [typeof panel, string]] : []), ["history", "History"]];
   // its share of the area (it scales with the window, like the plot's split): dragged at the top
   // edge, kept across sessions
-  const [share, setShare] = useState(() => Number(localStorage.getItem("nomospice.panelShare")) || PANEL_SHARE);
+  const [share, setShare] = useState(() => {
+    const v = Number(localStorage.getItem("nomospice.panelShare"));
+    return v > 0 && v <= 1 - FILL_MIN ? v : PANEL_SHARE;
+  });
   const ref = useRef<HTMLDivElement>(null);
   const resize = (e: React.PointerEvent) => {
     const el = ref.current!, room = el.parentElement!.clientHeight, bottom = el.getBoundingClientRect().bottom, max = roomFor(el);
+    const grab = e.clientY - (bottom - el.offsetHeight); // (where in the handle: no jump)
     let f = 0;
-    drag(e, (ev) => setShare((f = Math.max(PANEL_MIN, Math.min(max, bottom - ev.clientY)) / room)),
+    drag(e, (ev) => setShare((f = Math.max(PANEL_MIN, Math.min(max, bottom - ev.clientY + grab)) / room)),
       () => f && localStorage.setItem("nomospice.panelShare", String(f)));
   };
   return (

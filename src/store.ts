@@ -347,9 +347,9 @@ export async function simulate() {
       // the live netlist only from a run of the schematic as it is (a tab's run swaps its analysis)
       sim, shown, stale: changed, ...(!changed && deck === items && { nets: sim.netlist, netsItems: items }),
       // another analysis: fresh zoom/cursors, and old-kind data never drawn on the new axes
-      // (a power trace (unit W, only the power probe's) only where V·I is real power: not in the .ac,
+      // (a power probe's trace only where V·I is real power: not in the .ac,
       // .noise … the tab's analysis became)
-      ...(newKind && { plot: { ...NO_PLOT, kind: plotKind(sim) }, traces: get().traces.flatMap((t) => (t.unit === "W" && !powerMode(sim) ? [] : [{ ...t, data: undefined }])) }),
+      ...(newKind && { plot: { ...NO_PLOT, kind: plotKind(sim) }, traces: get().traces.flatMap((t) => (t.unit === "W" && t.label.startsWith("P(") && !powerMode(sim) ? [] : [{ ...t, data: undefined }])) }),
       panel: !sim.run || sim.run.aborted ? "log" : op ? "op" : get().panel === "op" && !sim.run.op.length ? null : get().panel,
     });
     if (sim.run && !op) {

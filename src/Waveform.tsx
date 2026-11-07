@@ -13,6 +13,8 @@ import { saveSvg, withLightTheme, xmlEscape } from "./svgExport";
 
 type Series = { t: Trace; y: (number | null)[] };
 type Pane = { unit: string; series: Series[] };
+/** The real panes from the top: volts first, then by unit. */
+export const paneOrder = (a: string, b: string) => (a === "V" ? -1 : b === "V" ? 1 : a.localeCompare(b));
 
 /** px a press may move and still count as a click (shared by uPlot's drag and our click rule). */
 const CLICK_DIST = 3;
@@ -136,7 +138,7 @@ export const Waveform = memo(function Waveform() {
     const real = ok.filter((t) => !cplx.includes(t));
     const panes: Pane[] = [];
     if (cplx.length) panes.push({ unit: "dB", series: cplx.flatMap((t) => split(t, mag(t))) }, { unit: "°", series: cplx.flatMap((t) => split(t, phase(t))) });
-    const units = [...new Set(real.map((t) => t.unit))].sort((a, b) => (a === "V" ? -1 : b === "V" ? 1 : a.localeCompare(b)));
+    const units = [...new Set(real.map((t) => t.unit))].sort(paneOrder);
     for (const unit of units) {
       const series = real.filter((t) => t.unit === unit).flatMap((t) => split(t, t.data!.re));
       const same = panes.find((p) => p.unit === unit); // db(...) joins the dB pane
