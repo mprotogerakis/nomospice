@@ -1971,7 +1971,7 @@ dependencies = [
 
 [[package]]
 name = "nomospice"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "libloading 0.8.9",
  "serde",
