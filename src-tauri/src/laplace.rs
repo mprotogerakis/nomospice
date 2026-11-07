@@ -270,9 +270,11 @@ impl P<'_> {
                 if mentions_s(text) {
                     return Err(format!("`{text}`: only a ratio of polynomials in s runs (no delay exp(-s*T), no sqrt(s))"));
                 }
-                if calls(text, &["mc", "flat", "gauss", "unif", "aunif", "agauss"]) {
+                // (not limit: LTspice's is a clamp)
+                if calls(text, &crate::schematic::RANDOM) || calls(text, &crate::schematic::NG_RANDOM[..4]) {
                     // (kept as text, it would be drawn anew in each coefficient it lands in; a
-                    // .param of one too: ngspice draws it at each use)
+                    // .param of one too: ngspice draws it at each use. ponytail: such a .param
+                    // used by name here is not seen; look the names up if it occurs)
                     return Err(format!("`{text}`: no random values in a Laplace expression (each of its coefficients would draw its own); step the value instead (.step param tau list 0.9m 1m 1.1m)"));
                 }
                 if probes(text) {

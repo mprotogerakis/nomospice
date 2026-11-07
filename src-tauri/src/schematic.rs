@@ -1410,8 +1410,11 @@ pub fn prepare(text: &str, dir: Option<&std::path::Path>, warnings: &mut Vec<Str
     x.warn_behavioural();
     // (also in included files; Laplace first: a random call there is said by its own name)
     let out = crate::laplace::rewrite(&x.out, x.warnings);
-    let out = lt_random(&out, x.warnings).into_owned();
-    Prepared(out, vec![], vec![])
+    let translated = match lt_random(&out, x.warnings) {
+        std::borrow::Cow::Owned(t) => Some(t),
+        std::borrow::Cow::Borrowed(_) => None, // (nothing to translate: not copied)
+    };
+    Prepared(translated.unwrap_or(out), vec![], vec![])
 }
 
 /// LTspice's random functions as ngspice's, which draw anew each time a deck is read (so each run
@@ -1459,7 +1462,7 @@ fn lt_random<'a>(text: &'a str, warnings: &mut Vec<String>) -> std::borrow::Cow<
     std::borrow::Cow::Owned(out)
 }
 
-const RANDOM: [&str; 3] = ["mc", "flat", "gauss"];
+pub const RANDOM: [&str; 3] = ["mc", "flat", "gauss"];
 /// ngspice's random functions (what `RANDOM` becomes, and its own).
 pub const NG_RANDOM: [&str; 5] = ["agauss", "gauss", "aunif", "unif", "limit"];
 
@@ -1495,7 +1498,7 @@ fn random_calls(s: &str, all: bool, own: &[String], warnings: &mut Vec<String>) 
             continue;
         };
         let inner = random_calls(&s[open + 1..close], true, own, warnings);
-        let args = {
+        let args = if inner.trim().is_empty() { 0 } else {
             let mut d = 0;
             inner.chars().filter(|&c| {
                 d += match c { '(' | '{' => 1, ')' | '}' => -1, _ => 0 };
@@ -1526,7 +1529,7 @@ pub fn prepare_warnings(text: &str, dir: Option<&std::path::Path>, warnings: &mu
     x.expand(text, dir, None, 0);
     x.warn_behavioural();
     let expanded = crate::laplace::rewrite(&std::mem::take(&mut x.out), x.warnings);
-    let expanded = lt_random(&expanded, x.warnings).into_owned(); // (mc(1k): said while editing too)
+    lt_random(&expanded, x.warnings); // (mc(1k): said while editing too)
     ltspice_meas(&expanded, &[], warnings); // a .meas left out is said before a run too (the schematic's own: included files are read only by a run)
 }
 
@@ -2633,6 +2636,8 @@ mod tests {
         let mut w = vec![];
         assert_eq!(lt_random("R1 a b {mc(1k)} 'flat(1)'\n.func f(x) gauss(x)\n", &mut w), "R1 a b {mc(1k)} 'aunif(0,1)'\n.func f(x) agauss(0,x,1)\n");
         assert!(w.len() == 1 && w[0].contains("two arguments"), "{w:?}");
+        assert_eq!(lt_random("R1 a b {flat()}\n", &mut w), "R1 a b {flat()}\n");
+        assert!(w.len() == 2 && w[1].contains("one argument"), "{w:?}");
         assert_eq!(lt_random_t(".param a=1\n+ b=flat(1) f=\"gauss(1).csv\"\nR1 a b } {mc (1k,0.1)}\n.function flat(x) x\nR2 a b {flat(2)}\n"), ".param a=1\n+ b=flat(1) f=\"gauss(1).csv\"\nR1 a b } {unif(1k,0.1)}\n.function flat(x) x\nR2 a b {flat(2)}\n", "the deck's own .function flat");
         assert_eq!(lt_random_t("* Größe\nR1 a b {mc\t(1k,0.1)}\nV1 a 0 PWL file=\"r{a.csv\" flat(1)\n"), "* Größe\nR1 a b {unif(1k,0.1)}\nV1 a 0 PWL file=\"r{a.csv\" flat(1)\n", "no panic at a ö; a tab; a quoted {{");
         // each step of `.step param run …` another sample, within the tolerance
