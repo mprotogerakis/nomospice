@@ -16,7 +16,8 @@ files — with a modern UI, ngspice as the engine, a Rust core and a React front
   every analysis, `.param`, `.model` (parameters explained), `.meas`, `.ic`, `.temp`, `.include` are edited
   in forms that show the SPICE text they write; number fields show how SPICE reads them and catch
   `1M` (milli, not mega) and `10F` (femto). Typing SPICE directly still works everywhere.
-- **Analyses**: `.tran`, `.ac` (Bode: magnitude + phase panes), `.dc` (nested sweeps as curve
+- **Analyses**: `.tran`, `.ac` (Bode: magnitude + phase panes; Nyquist and Nichols plots, group
+  delay), `.dc` (nested sweeps as curve
   families), `.op`, `.noise` (spectrum + totals), `.tf`, `.pz`, `.sens`; Live mode re-runs on every edit.
   **A result tab per analysis**: keep e.g. a transient and an AC analysis in one schematic, each tab with its own traces, zoom and cursors.
 - **Parameter sweeps**: `.step param C list 47n 100n 220n` (also lin/oct/dec, a source's DC value,
