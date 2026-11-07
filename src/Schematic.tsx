@@ -248,6 +248,7 @@ export const Schematic = memo(function Schematic() {
   const conn = useMemo(() => connectivity(shown, lib), [shown, lib]);
   // the select tool and the move tool (dragging parts off their wires) select alike
   const selecting = tool.k === "select" || tool.k === "move";
+  const [, ended] = useState(0);
   const probing = probeMode(sim) && selecting;
   const defs = useMemo(() => Object.values(lib), [lib]);
 
@@ -442,8 +443,9 @@ export const Schematic = memo(function Schematic() {
         // the selection alone, its wires left where they are
         let built: ReturnType<typeof dragPlan> | null = null;
         const chosen = new Set(next);
-        const alone = (dx: number, dy: number) => items.map((it, j) => (chosen.has(j) && isShape(it) ? shifted(it, dx, dy) : it));
-        const plan = tool.k === "move" ? alone : (dx: number, dy: number) => (built ??= dragPlan(items, lib, new Set(next)))(dx, dy);
+        const plan = tool.k === "move"
+          ? (dx: number, dy: number) => items.map((it, j) => (chosen.has(j) && isShape(it) ? shifted(it, dx, dy) : it))
+          : (dx: number, dy: number) => (built ??= dragPlan(items, lib, chosen))(dx, dy);
         drag.current = { k: "move", start: g, plan, moved: false, index: i, at: [0, 0], base: items, pin: probing ? pinAt(items[i], p) : undefined };
       } else if (e.shiftKey) {
         drag.current = { k: "box", start: p, end: p };
@@ -480,6 +482,7 @@ export const Schematic = memo(function Schematic() {
   const onPointerUp = () => {
     const d = drag.current;
     drag.current = null;
+    if (d?.k === "pan") ended((n) => n + 1); // (the grabbing hand comes from the ref: a render puts it back)
     if (d?.k === "move") {
       // dragged back to the start: nothing changed; edited by keyboard meanwhile (⌃R, Delete, ⌘Z):
       // that edit wins, the drag (planned on the old items) is dropped

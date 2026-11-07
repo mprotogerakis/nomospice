@@ -389,7 +389,7 @@ function FindDialog() {
   }, [all, q]);
   const show = (idx: number[]) => {
     close();
-    useS.setState({ sel: idx, tool: { k: "select" } }); // (not a part still being placed)
+    useS.setState({ sel: idx, tool: useS.getState().tool.k === "move" ? { k: "move" } : { k: "select" } }); // (not a part still being placed)
     setTimeout(() => window.dispatchEvent(new CustomEvent("nomospice:show", { detail: idx })));
   };
   return (
