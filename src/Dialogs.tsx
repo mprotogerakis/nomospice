@@ -16,8 +16,10 @@ import thirdParty from "./third-party.json";
 import { checkForUpdate } from "./updater";
 
 
-/** The attributes the part form shows as fields (the rest: "Other attributes"). */
+/** The attributes the part form shows as fields (the rest: "Other attributes"), and the other
+ *  LTspice attributes in their spelling (rows typed in another case are saved so). */
 const SHOWN = ["InstName", "Value", "Value2", "SpiceLine"];
+const MORE = ["Prefix", "SpiceLine2", "SpiceModel", "Description"];
 
 /** Edits a part or a net label; `onDone` receives the result (commit in place, or start placing it).
  *  Comments and directives use DirectiveDialog. */
@@ -36,7 +38,7 @@ function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: 
       const own = Object.entries(it.attrs).filter(([k, v]) => SHOWN.includes(k) && (v.trim() || (k === "SpiceLine" && def?.spice_line)));
       // a row naming one of the fields above (Value …) sets it: rows come last and win; LTspice's
       // attribute names in their own spelling (`prefix` is Prefix), as the netlister reads them
-      const canon = (k: string) => [...SHOWN, "Prefix", "SpiceLine2", "SpiceModel", "Description"].find((n) => n.toLowerCase() === k.toLowerCase()) ?? k;
+      const canon = (k: string) => [...SHOWN, ...MORE].find((n) => n.toLowerCase() === k.toLowerCase()) ?? k;
       const more = extra.map(([k, v]) => [canon(k.trim()), v] as [string, string]).filter(([k, v]) => k && v.trim());
       onDone({ ...it, attrs: Object.fromEntries([...new Map([...own, ...more])].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) });
     }
@@ -70,7 +72,7 @@ function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: 
           <Field label="Other attributes" hint={`e.g. Prefix X to call a subcircuit model instead of the ${def?.prefix || "symbol's"} device`}>
             <Rows rows={extra} set={setExtra} a="attribute" b="value" list="sym-attrs" add="Add attribute" autofocus={false} />
           </Field>
-          <datalist id="sym-attrs">{["Prefix", "SpiceLine2"].map((n) => <option key={n} value={n} />)}</datalist>
+          <datalist id="sym-attrs">{MORE.slice(0, 2).map((n) => <option key={n} value={n} />)}</datalist>
         </>
       )}
       {it.t === "flag" && (

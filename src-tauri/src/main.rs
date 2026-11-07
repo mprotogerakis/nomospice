@@ -275,13 +275,11 @@ async fn folder_symbols(from: String, to: String, names: Vec<String>, copy: bool
         let old: std::collections::HashMap<_, _> = schematic::folder_symbols(std::path::Path::new(&from)).into_iter().collect();
         let new: std::collections::HashMap<_, _> = schematic::folder_symbols(std::path::Path::new(&to)).into_iter().collect();
         let (mut out, mut failed): (Vec<(String, bool)>, Vec<String>) = (vec![], vec![]);
+        let mut seen = std::collections::HashSet::new(); // (many parts share a symbol)
         for n in names {
             let key = schematic::sym_key(&n);
-            let Some(src) = old.get(&key) else { continue };
+            let Some(src) = old.get(&key).filter(|_| seen.insert(key.clone())) else { continue };
             let file = src.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
-            if out.iter().any(|(f, _)| *f == file) {
-                continue;
-            }
             match new.get(&key) {
                 Some(there) => {
                     // a different file of that name there: it would be used instead (an identical
@@ -323,6 +321,12 @@ static ARGS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
 #[tauri::command]
 fn cli_args() -> Vec<String> {
     ARGS.get().cloned().unwrap_or_default()
+}
+
+/// The id of the run whose results ngspice holds (a result tab brought back may hold an older one).
+#[tauri::command]
+fn run_id() -> u64 {
+    ngspice::current_run()
 }
 
 #[tauri::command]
@@ -677,7 +681,7 @@ fn main() {
         // updates from the GitHub releases (latest.json, signed with the key in ~/.tauri; see scripts/publish-release.sh)
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .invoke_handler(tauri::generate_handler![symbols, examples, path_exists, open_asc, save_asc, export_svg, netlist, simulate, root_locus, cancel_locus, folder_symbols, trace, halt, cli_args, quit, recovery_save, recovery_take, recovery_resolve, recovery_clear,
+        .invoke_handler(tauri::generate_handler![symbols, examples, path_exists, open_asc, save_asc, export_svg, netlist, simulate, root_locus, cancel_locus, folder_symbols, trace, run_id, halt, cli_args, quit, recovery_save, recovery_take, recovery_resolve, recovery_clear,
             library_sources, library_set_sources, library_search, library_text, library_fetch_microcap,
             git_status, git_log, git_show, git_commit, git_init])
         .setup(|app| {

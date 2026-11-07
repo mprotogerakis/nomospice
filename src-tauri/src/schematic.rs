@@ -165,12 +165,12 @@ pub fn folder_symbols(dir: &std::path::Path) -> Vec<(String, std::path::PathBuf)
 /// (count, a sum over names, modification times and sizes) of a folder's symbol files (the list
 /// `folder_symbols` gave).
 fn asy_stamp(list: &[(String, std::path::PathBuf)]) -> Option<(usize, u128)> {
-    let each = list.iter().filter_map(|(_, p)| Some((p.file_name()?.to_os_string(), p.metadata().ok()?))).map(|(name, m)| {
-        let t = m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos());
-        let n = name.as_encoded_bytes().iter().fold(0u128, |h, &b| h.wrapping_mul(131).wrapping_add(b as u128)); // a rename counts too
-        t.wrapping_add((m.len() as u128).wrapping_mul(1_000_003)).wrapping_add(n)
-    });
-    Some(each.fold((0, 0u128), |(n, s), x| (n + 1, s.wrapping_add(x))))
+    use std::hash::{Hash, Hasher};
+    let mut files: Vec<_> = list.iter().filter_map(|(_, p)| Some((p.file_name()?.to_os_string(), p.metadata().ok()?))).map(|(name, m)| (name, m.modified().ok(), m.len())).collect();
+    files.sort(); // (the listing's order is not fixed)
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    files.hash(&mut h); // names (a rename counts), mtimes, sizes
+    Some((files.len(), h.finish() as u128))
 }
 
 impl Library {
@@ -1135,7 +1135,7 @@ pub fn prepare_warnings(text: &str, dir: Option<&std::path::Path>, warnings: &mu
     x.expand(text, dir, None, 0);
     x.warn_behavioural();
     let expanded = std::mem::take(&mut x.out);
-    ltspice_meas(&expanded, &[], warnings); // a .meas left out is said before a run too (included files' as well)
+    ltspice_meas(&expanded, &[], warnings); // a .meas left out is said before a run too (the schematic's own: included files are read only by a run)
 }
 
 /// `.lib "path with spaces.lib" section` -> (path, section)

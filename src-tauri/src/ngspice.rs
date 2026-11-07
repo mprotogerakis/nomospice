@@ -491,6 +491,11 @@ pub fn trace(expr: &str, scale: &str, run: u64) -> Result<Trace, String> {
     Ok(t)
 }
 
+/// The latest run's id: the one whose results ngspice holds (a trace of another fails).
+pub fn current_run() -> u64 {
+    RUNS.load(Ordering::SeqCst)
+}
+
 /// Request a stop of whatever runs now; `run_until` sends `bg_halt` from its own thread.
 pub fn halt() {
     HALTS.fetch_add(1, Ordering::SeqCst);

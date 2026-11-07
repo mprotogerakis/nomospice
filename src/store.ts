@@ -234,8 +234,14 @@ let runSeq = 0;
 
 // ---------------------------------------------------------------- result tabs
 
-/** The analyses of the schematic, one per kind: the result tabs (see `analysisOptions`). */
-export const analysesOf = (items: Item[]) => analysisOptions(items.flatMap((it) => (it.t === "text" ? [it] : [])));
+/** The analyses of the schematic, one per kind: the result tabs (see `analysisOptions`); parsed
+ *  once per items array (the tab bar, the store and the dialogs all ask). */
+const analysesCache = new WeakMap<Item[], ReturnType<typeof analysisOptions>>();
+export const analysesOf = (items: Item[]) => {
+  let o = analysesCache.get(items);
+  if (!o) analysesCache.set(items, (o = analysisOptions(items.flatMap((it) => (it.t === "text" ? [it] : [])))));
+  return o;
+};
 
 /** The tab shown: the chosen one while the schematic still has it, else its active analysis. */
 export function currentTab(s: { tab: Analysis | null; items: Item[] }, o = analysesOf(s.items)): Analysis | null {
@@ -368,16 +374,13 @@ async function addTraceNow(label: string, expr: string, unit: string) {
   const { traces, sim } = get();
   if (!sim?.run || isOp(sim) || traces.some((t) => t.expr === expr)) return;
   const gen = docGen;
-  let seq: number, t: Trace, rerun = true;
+  // a result tab brought back may hold a run ngspice no longer has (another tab or a root locus ran
+  // since): run it again first (not from inside a run, e.g. simulate's auto-plot)
+  if (!get().running && get().sim?.run && get().sim!.run!.id !== (await invoke<number>("run_id"))) await simulate();
+  let seq: number, t: Trace;
   do {
     seq = runSeq;
     t = await fetchTrace({ label, expr, unit, slot: 0 });
-    // this tab's results are no longer in ngspice (another tab or a root locus ran since): run it again, once
-    // (not from inside a run, e.g. simulate's auto-plot: waiting for it to end would never end)
-    if (rerun && seq === runSeq && !get().running && /replaced by a later run/.test(t.error ?? "")) {
-      rerun = false;
-      await simulate();
-    }
     if (seq !== runSeq) await idle(); // a run started meanwhile: evaluate again on its result
   } while (seq !== runSeq);
   if (gen !== docGen || !get().sim?.run || isOp(get().sim)) return;
