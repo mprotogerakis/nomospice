@@ -277,6 +277,6 @@ export const prefixOf = (it: Sym, def?: SymbolDef) => ((it.attrs.Prefix?.trim() 
 /** ngspice voltage expression. Always quoted: ngspice misparses 3V3/5V and reads gt/and/not as operators. */
 export const vexpr = (net: string) => (net === "0" ? "0" : `v("${net}")`); // (ground: no vector)
 
-/** A source's current by name (`v1#branch` -> I(V1)); parts' come named from the backend. */
-export const currentLabel = (inst: string) => `I(${inst.toUpperCase()})`;
+/** A source's current by name (`vin#branch` -> I(vin); pass the drawn spelling where known). */
+export const currentLabel = (inst: string) => `I(${inst})`;
 

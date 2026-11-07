@@ -642,7 +642,7 @@ function BottomPanel() {
                 // ngspice's vector type gives the unit; @dev[...] and the like stay as written
                 const named = tf && tfName(n, tf);
                 const unit = named ? named[1] : unit0;
-                const name = named ? named[0] : !isOpPlot && !phasors ? n : unit === "A" && n.endsWith("#branch") ? currentLabel(n.replace("#branch", "")) : unit === "V" && !/[@(]/.test(n) ? `V(${n})` : n;
+                const name = named ? named[0] : !isOpPlot && !phasors ? n : unit === "A" && n.endsWith("#branch") ? currentLabel(((b) => nets?.insts.find((x) => x.toLowerCase() === b) ?? b)(n.replace("#branch", ""))) : unit === "V" && !/[@(]/.test(n) ? `V(${n})` : n;
                 return (
                   <tr key={n}>
                     <td className="pr-6 text-text-secondary">{name}</td>

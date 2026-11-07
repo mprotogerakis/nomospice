@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import type { GitStatus, Item, Netlist, Sim, SymbolDef, Trace, TraceData } from "./types";
 import { defOf, prefixOf, symKey, vexpr, type Lib } from "./geom";
-import { ANALYSIS, ANY_ANALYSIS, analysisLineIndex, analysisOptions, continuation, stripAnalyses, type Analysis } from "./spice";
+import { ANALYSIS, ANY_ANALYSIS, analysisLineIndex, analysisOptions, continuation, parseAnalysis, stripAnalyses, type Analysis } from "./spice";
 
 export type Tool =
   | { k: "select" }
@@ -333,10 +333,14 @@ export function closeTab(kind: Analysis) {
       kept = cut[0].length === next.length ? (cut[0][cut[1]] as Extract<Item, { t: "text" }>).text.split("\n").length : 0;
     }
   }
-  // the first alternative as written in the file
-  const first = next.flatMap((it) => (it.t === "text" && !it.directive ? analysisOptions([it]) : []))[0];
-  // (an active analysis of ngspice's own left, .pss: it runs as it is, none is added beside it)
-  if (at && first && !analysesOf(next).some((x) => x.active) && !activeLines(next, ANY_ANALYSIS)) {
+  // the first alternative as written in the file (by line, also within one comment)
+  const first = next.flatMap((it) => {
+    if (it.t !== "text" || it.directive || !analysisOptions([it]).length) return [];
+    const lines = it.text.split("\n"), li = analysisLineIndex(lines, null, false), kind = parseAnalysis(lines[li].trim()).kind;
+    return analysisOptions([it]).filter((o) => o.kind === kind);
+  })[0];
+  // (an active analysis left, also ngspice's own .pss: it runs as it is, none is added beside it)
+  if (at && first && !activeLines(next, ANY_ANALYSIS)) {
     const moved = withoutAnalysis(next, first.kind, false);
     if (moved) next = [...moved[0], { t: "text", x: at.x, y: at.y + 32 * kept, text: first.line, directive: true }];
   }
