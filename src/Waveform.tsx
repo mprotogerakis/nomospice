@@ -6,7 +6,7 @@ import { Plus, X } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { addTrace, removeTrace, setPlot, setTracePane, setTraceRight, setYAxis, showFft, useS } from "./store";
 import { openMenu } from "./Menu";
-import { at, fftFreqs, fftSize, integrate, si, spectrum, unitTimes, xUnitOf } from "./spice";
+import { at, exprUnit, fftFreqs, fftSize, integrate, si, spectrum, unitTimes, xUnitOf } from "./spice";
 import { keys } from "./lib/utils";
 import type { Trace } from "./types";
 import { saveSvg, withLightTheme, xmlEscape } from "./svgExport";
@@ -257,11 +257,11 @@ export const Waveform = memo(function Waveform() {
     if (!polarOn) return [];
     if (polar === "nichols") {
       const ph = panes[1]?.series ?? [];
-      return (panes[0]?.series ?? []).filter((s) => s.t.data!.im).map((s, j) => ({ label: curveLabel(s.t, s.k, s.n, steps), slot: s.t.slot, x: ph[j]?.y ?? [], y: s.y }));
+      return (panes[0]?.series ?? []).filter((s) => s.t.data!.im).map((s) => ({ label: curveLabel(s.t, s.k, s.n, steps), slot: s.t.slot, x: ph.find((p) => p.t === s.t && p.k === s.k)?.y ?? [], y: s.y }));
     }
     return signals.filter((t) => t.data!.im).flatMap((t) => {
       const n = Math.max(1, Math.floor(t.data!.re.length / seg));
-      const part = <T,>(a: T[], k: number) => (n === 1 ? a : a.slice(k * seg, (k + 1) * seg));
+      const part = <T,>(a: T[], k: number) => (a.length === seg ? a : a.slice(k * seg, (k + 1) * seg)); // (a halted step's part: left out, as split does)
       return Array.from({ length: n }, (_, k) => ({ label: curveLabel(t, k, n, steps), slot: t.slot, x: part(t.data!.re, k), y: part(t.data!.im!, k) }));
     });
   }, [polarOn, polar, signals, seg, steps, panes]);
@@ -460,10 +460,9 @@ export const Waveform = memo(function Waveform() {
           { label: "Add trace…", disabled: !run, run: () => useS.setState({ dialog: { k: "trace" } }) },
           // (a loop gain's stability: where it passes -1)
           // (Nyquist/Nichols need a complex trace; without one, only the way back)
-          ...(ac && (cplx || polar) ? [
-            { label: polar ? "Bode plot" : "Nyquist plot", hint: polar ? undefined : "Im over Re", run: () => setPlot({ polar: polar ? undefined : "nyquist" }) },
-            ...(!cplx ? [] : polar === "nichols" ? [{ label: "Nyquist plot", hint: "Im over Re", run: () => setPlot({ polar: "nyquist" }) }] : [{ label: "Nichols plot", hint: "dB over phase", run: () => setPlot({ polar: "nichols" }) }]),
-          ] : []),
+          ...(ac && (cplx || polar) ? ([[undefined, "Bode plot", "magnitude and phase"], ["nyquist", "Nyquist plot", "Im over Re"], ["nichols", "Nichols plot", "dB over phase"]] as const)
+            .filter(([m]) => m !== polar && (cplx || !m))
+            .map(([m, label, hint]) => ({ label, hint, run: () => setPlot({ polar: m }) })) : []),
           ...(tran ? [spec ? { label: "Back to the transient", run: () => showFft(null) }
             : { label: "FFT (spectrum)", hint: a != null && b != null && a !== b ? "of A–B" : zoom ? "of the shown range" : "of the whole run", disabled: !panes.length || !(range[1] > range[0]), run: () => showFft(range) }] : []),
           ...(pane ? ["-" as const,
@@ -581,7 +580,7 @@ const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot, spec, st
                 ...(t.data?.im || t.data?.constant || spec ? [] : panes.filter((p) => p.own && p.unit !== "dB" && p.unit !== "°" && p.unit !== t.unit && !p.series.some((s) => s.t === t) && p.series.every((s) => s.u === p.unit || s.u === t.unit)).map((p) => ({ label: `Into the ${p.unit || "unitless"} pane`, hint: "its right axis", run: () => setTracePane(t.expr, p.unit) }))),
                 ...(t.pane != null && !spec && !t.data?.im ? [{ label: moved(t) ? `Back to its own pane (${t.unit || "unitless"})` : `Not into the ${t.pane || "unitless"} pane any more`, hint: moved(t) ? undefined : "it would go there with traces of its own", run: () => setTracePane(t.expr, undefined) }] : []),
                 // (an .ac result: -dφ/dω, how long a band of frequencies takes through it)
-                ...(t.data?.im && plot.startsWith("ac") ? [{ label: "Plot group delay", hint: `τg(${t.label})`, run: () => void addTrace(`τg(${t.label})`, `group_delay(${t.expr})`, "s") }] : []),
+                ...(t.data?.im && plot.startsWith("ac") ? [{ label: "Plot group delay", hint: `τg(${t.label})`, run: () => void addTrace(`τg(${t.label})`, `group_delay(${t.expr})`, exprUnit(`group_delay(${t.expr})`, undefined, xUnit)) }] : []),
                 { label: "Copy expression", hint: t.expr, run: () => navigator.clipboard.writeText(t.expr) },
                 { label: `Remove ${t.label}`, danger: true, run: () => removeTrace(t.expr) },
               ]))}>

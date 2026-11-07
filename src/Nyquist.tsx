@@ -10,7 +10,8 @@ import { useSize } from "./lib/useSize";
 
 /** A curve: its points (x, y) at the frequencies `freqs` (null: a gap). */
 export type Curve = { label: string; slot: number; x: (number | null)[]; y: (number | null)[] };
-type Hit = { c: number; i: number };
+/** A point under the pointer: curve c, frequency index i; m: on the mirror (the negative frequency). */
+type Hit = { c: number; i: number; m?: boolean };
 
 export const Polar = memo(function Polar({ curves, freqs, mode, onHover }: { curves: Curve[]; freqs: number[]; mode: "nyquist" | "nichols"; onHover: (f: number | null) => void }) {
   const host = useRef<HTMLDivElement>(null);
@@ -46,6 +47,7 @@ export const Polar = memo(function Polar({ curves, freqs, mode, onHover }: { cur
     onHover(null);
   }, [which]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => onHover(null), [onHover]); // (gone: the table's hover value with it)
+  useEffect(() => (setHit(null), onHover(null)), [curves]); // eslint-disable-line react-hooks/exhaustive-deps -- (a re-run: its points are others)
   const margin = 32;
   const base = useMemo(() => {
     const kx = Math.max((size.w - 2 * margin) / (fit.x1 - fit.x0), 1e-30), ky = Math.max((size.h - 2 * margin) / (fit.y1 - fit.y0), 1e-30);
@@ -80,6 +82,7 @@ export const Polar = memo(function Polar({ curves, freqs, mode, onHover }: { cur
       const d = drag.current;
       return setView({ ...v, cx: d.cx - (X - d.X) / v.kx, cy: d.cy + (Y - d.Y) / v.ky });
     }
+    drag.current = null; // (released elsewhere)
     // (inline, no arrays: a .step family may hold a million points)
     let best: Hit | null = null, bd = 14 * 14;
     const [w2, h2] = [size.w / 2, size.h / 2];
@@ -89,10 +92,14 @@ export const Polar = memo(function Polar({ curves, freqs, mode, onHover }: { cur
         if (x == null || y == null) continue;
         const dx = w2 + (x - v.cx) * v.kx - X, dy = h2 - (y - v.cy) * v.ky - Y, d = dx * dx + dy * dy;
         if (d < bd) (best = { c: ci, i }), (bd = d);
+        if (nyq) { // (the mirror: -f, the conjugate)
+          const dm = h2 - (-y - v.cy) * v.ky - Y, e2 = dx * dx + dm * dm;
+          if (e2 < bd) (best = { c: ci, i, m: true }), (bd = e2);
+        }
       }
     });
     const h = best as Hit | null;
-    if (h?.c !== hit?.c || h?.i !== hit?.i) {
+    if (h?.c !== hit?.c || h?.i !== hit?.i || h?.m !== hit?.m) {
       setHit(h);
       onHover(h ? freqs[h.i] ?? null : null);
     }
@@ -120,8 +127,10 @@ export const Polar = memo(function Polar({ curves, freqs, mode, onHover }: { cur
 
   // grid
   const lo = val(0, size.h), hi = val(size.w, 0);
+  // (Nyquist: one step on both axes, square cells at its one scale)
+  const square = tickStep(Math.max(hi.x - lo.x, hi.y - lo.y));
   const ticks = (a: number, b: number) => {
-    const step = tickStep(b - a), first = Math.ceil(a / step), n = Math.floor(b / step) - first;
+    const step = nyq ? square : tickStep(b - a), first = Math.ceil(a / step), n = Math.floor(b / step) - first;
     if (!isFinite(n) || n < 0 || n > 200) return [];
     return Array.from({ length: n + 1 }, (_, i) => { const x = (first + i) * step; return Math.abs(x) < step * 1e-9 ? 0 : x; });
   };
@@ -132,11 +141,11 @@ export const Polar = memo(function Polar({ curves, freqs, mode, onHover }: { cur
   const k0 = Math.ceil((lo.x + 180) / 360), nk = Math.floor((hi.x + 180) / 360) - k0 + 1;
   const crits = nyq ? [-1] : Number.isFinite(nk) && nk > 0 && nk <= 50 ? Array.from({ length: nk }, (_, k) => -180 + 360 * (k0 + k)) : [];
   const h = hit && curves[hit.c];
-  const hx = h ? h.x[hit!.i] : null, hy = h ? h.y[hit!.i] : null;
+  const hx = h ? h.x[hit!.i] : null, hy = h ? ((y) => (y != null && hit!.m ? -y : y))(h.y[hit!.i]) : null;
 
   return (
     <div ref={host} className="relative h-full min-w-0 flex-1 cursor-grab overflow-hidden active:cursor-grabbing" onMouseMove={onMove} onMouseLeave={() => ((drag.current = null), setHit(null), onHover(null))} onDoubleClick={() => setView(null)}
-      onMouseDown={(e) => { const r = host.current!.getBoundingClientRect(); drag.current = { X: e.clientX - r.left, Y: e.clientY - r.top, cx: v.cx, cy: v.cy }; }} onMouseUp={() => (drag.current = null)}>
+      onMouseDown={(e) => { if (e.button !== 0) return; const r = host.current!.getBoundingClientRect(); drag.current = { X: e.clientX - r.left, Y: e.clientY - r.top, cx: v.cx, cy: v.cy }; }} onMouseUp={() => (drag.current = null)}>
       {size.w > 0 && (
         <svg width={size.w} height={size.h} className="block text-text-secondary">
           {ticks(lo.x, hi.x).map((t) => { const [x] = px(t, 0); return <g key={`x${t}`}><line x1={x} x2={x} y1={0} y2={size.h} stroke="var(--border)" /><text x={x + 3} y={size.h - 6} fontSize={10} fill="currentColor" className="font-mono">{fmt(t, xu)}</text></g>; })}
@@ -178,7 +187,7 @@ export const Polar = memo(function Polar({ curves, freqs, mode, onHover }: { cur
       {h && hx != null && hy != null && (
         <div className="pointer-events-none absolute rounded-control border border-border bg-surface-panel px-2 py-1 font-mono text-2xs text-text shadow-float" style={{ left: Math.min(px(hx, hy)[0] + 12, size.w - 200), top: Math.max(px(hx, hy)[1] - 56, 4) }}>
           <div className="text-text-tertiary">{h.label}</div>
-          <div>f = {si(freqs[hit!.i], "Hz", 4)}</div>
+          <div>f = {hit!.m ? "−" : ""}{si(freqs[hit!.i], "Hz", 4)}</div>
           <div>{nyq ? `${si(hx, "", 4)} ${hy < 0 ? "−" : "+"} j${si(Math.abs(hy), "", 4)}` : `${hy.toFixed(2)} dB ∠ ${hx.toFixed(1)}°`}</div>
         </div>
       )}
