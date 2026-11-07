@@ -395,6 +395,9 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
     let mut done: Vec<(String, String, Vec<String>)> = vec![];
     let mut failed = vec![];
     for k in 0..total {
+        if k > 0 && stop() {
+            break; // (halted between steps: not a failure)
+        }
         // each step's deck when it runs (a big deck: not a thousand copies at once)
         let step = steps.as_ref().map(|s| s.at(k)).transpose().map_err(|e| vec![format!(".step: {e}")]);
         let (label, deck) = match &step {
@@ -614,9 +617,10 @@ pub fn trace(expr: &str, scale: &str, run: u64) -> Result<Trace, String> {
 }
 
 /// The steps' curves of one trace as one, end to end over a shared x (each step's own where they
-/// agree, a .ac or .dc; else, .tran picking its own time points, the union of their x, or the
-/// densest step's where that would grow past three times it: steps × points stays bounded), each
-/// step interpolated onto it, so the plot shows them as a family like a nested .dc.
+/// agree, a .ac or .dc; else, .tran picking its own time points, the union of their x, each step
+/// interpolated onto it), so the plot shows them as a family like a nested .dc. At most
+/// `STEP_VALUES` values in all: many steps thin their curves (each keeps a share of its own samples).
+const STEP_VALUES: usize = 2_000_000;
 fn steps_joined(each: Vec<(usize, Trace)>) -> Result<Trace, String> {
     let (index, each): (Vec<usize>, Vec<Trace>) = each.into_iter().unzip();
     let same = each.windows(2).all(|w| w[0].x.len() == w[1].x.len() && w[0].x.iter().zip(&w[1].x).all(|(a, b)| (a - b).abs() <= 1e-12 * a.abs().max(b.abs())));
@@ -633,23 +637,31 @@ fn steps_joined(each: Vec<(usize, Trace)>) -> Result<Trace, String> {
         let whole: Vec<(usize, Trace)> = index.into_iter().zip(each).filter(|(_, t)| t.x == first).collect();
         return if whole.len() > 1 { steps_joined(whole) } else { whole.into_iter().next().map(|(k, mut t)| (t.steps = Some(vec![k]), t).1).ok_or_else(|| "no step to show".to_string()) };
     }
-    let grid: Vec<f64> = if same {
-        each[0].x.clone()
-    } else {
-        // (all steps' curves together at most 20M values, a curve at most 200k)
-        let cap = (20_000_000 / each.len()).clamp(1000, 200_000);
-        let mut g: Vec<f64> = each.iter().flat_map(|t| t.x.iter().copied()).collect();
-        g.sort_by(|a, b| (dir * a).total_cmp(&(dir * b)));
-        g.dedup_by(|a, b| (*a - *b).abs() <= 1e-12 * a.abs().max(b.abs()));
-        // (many steps: thinned evenly to 3x the longest step, still from the first x to the last)
-        if g.len() > cap && cap > 1 { (0..cap).map(|k| g[k * (g.len() - 1) / (cap - 1)]).collect() } else { g }
-    };
+    // (a curve's share of the budget; evenly by index, keeping the first and last)
+    let cap = (STEP_VALUES / each.len()).clamp(200, 200_000);
+    let thin = |v: &[f64], n: usize| -> Vec<usize> { if v.len() <= n || n < 2 { (0..v.len()).collect() } else { (0..n).map(|k| k * (v.len() - 1) / (n - 1)).collect() } };
+    if same {
+        // the same x for all (.ac, .dc): every curve at the same thinned indices, exact
+        let keep = thin(&each[0].x, cap);
+        let pick = |v: &[f64]| keep.iter().map(|&k| v[k]).collect::<Vec<f64>>();
+        let complex = each.iter().all(|t| t.im.is_some());
+        return Ok(Trace {
+            x: each.iter().flat_map(|t| pick(&t.x)).collect(),
+            re: each.iter().flat_map(|t| pick(&t.re)).collect(),
+            im: complex.then(|| each.iter().flat_map(|t| pick(t.im.as_deref().unwrap_or_default())).collect()),
+            constant: each.iter().all(|t| t.constant),
+            typ: each[0].typ,
+            steps: Some(index),
+        });
+    }
+    // the union of the steps' x, each thinned to its share first: every curve keeps samples of its own
+    let per = (cap / each.len()).max(2);
+    let mut grid: Vec<f64> = each.iter().flat_map(|t| thin(&t.x, per).into_iter().map(|k| t.x[k])).collect();
+    grid.sort_by(|a, b| (dir * a).total_cmp(&(dir * b)));
+    grid.dedup_by(|a, b| (*a - *b).abs() <= 1e-12 * a.abs().max(b.abs()));
     // linear between samples, the end value beyond (a step that stopped early), none where a step
     // has no data (a gap)
     let onto = |x: &[f64], y: &[f64]| -> Vec<f64> {
-        if same {
-            return y.to_vec();
-        }
         if x.len() < 2 || y.len() < x.len() {
             return vec![f64::NAN; grid.len()]; // (no curve: a gap; NaN reaches the UI as null)
         }

@@ -11,7 +11,8 @@ import { keys } from "./lib/utils";
 import type { Trace } from "./types";
 import { saveSvg, withLightTheme, xmlEscape } from "./svgExport";
 
-type Series = { t: Trace; y: (number | null)[] };
+/** A plotted curve: of trace `t`, curve `k` of its `n` in the pane (a .step or nested .dc family). */
+type Series = { t: Trace; y: (number | null)[]; k: number; n: number };
 /** A pane's scale for a series: "y2" (right axis) for a trace moved there, while the pane also has
  *  left ones (all on the right: the left axis serves). */
 const scaleOf = (pane: { series: Series[] }, s: Series) => (s.t.right && pane.series.some((o) => !o.t.right) ? "y2" : "y");
@@ -51,14 +52,11 @@ function segment(xs: number[]) {
  *  number (a nested .dc), nothing for a single curve. */
 const curveName = (t: Trace, k: number, n: number, steps: string[]) =>
   n < 2 ? "" : t.data?.steps?.length === n ? steps[t.data.steps[k]] ?? `#${k + 1}` : `#${k + 1}`;
-function member(p: Pane, s: Series, steps: string[]) {
-  const mine = p.series.filter((o) => o.t === s.t);
-  return curveName(s.t, mine.indexOf(s), mine.length, steps);
-}
+const member = (s: Series, steps: string[]) => curveName(s.t, s.k, s.n, steps);
 
 /** The plotted data as CSV: x, then one column per series (family curves named by step or numbered). */
 function csv(xs: number[], xUnit: string, panes: Pane[], steps: string[]) {
-  const cols = panes.flatMap((p) => p.series.map((s) => ({ name: `${s.t.label}${((m) => (m ? ` ${m}` : ""))(member(p, s, steps))} [${p.unit}]`, y: s.y })));
+  const cols = panes.flatMap((p) => p.series.map((s) => ({ name: `${s.t.label}${((m) => (m ? ` ${m}` : ""))(member(s, steps))} [${p.unit}]`, y: s.y })));
   const head = [`x [${xUnit}]`, ...cols.map((c) => `"${c.name.replace(/"/g, '""')}"`)].join(",");
   return [head, ...xs.map((x, i) => [x, ...cols.map((c) => c.y[i] ?? "")].join(","))].join("\n") + "\n";
 }
@@ -149,8 +147,10 @@ export const Waveform = memo(function Waveform() {
   const logX = freq && xs[0] > 0 && !linear;
   const panes = useMemo<Pane[]>(() => {
     if (!ok.length || zero) return [];
-    const split = (t: Trace, y: (number | null)[]): Series[] =>
-      Array.from({ length: Math.max(1, Math.floor(y.length / seg)) }, (_, k) => ({ t, y: y.slice(k * seg, (k + 1) * seg) }));
+    const split = (t: Trace, y: (number | null)[]): Series[] => {
+      const n = Math.max(1, Math.floor(y.length / seg));
+      return Array.from({ length: n }, (_, k) => ({ t, y: y.slice(k * seg, (k + 1) * seg), k, n }));
+    };
     // complex vectors (.ac, AC .sens) -> magnitude (dB) + phase panes; real ones (db(), ph() ...) as they are
     const cplx = signals.filter((t) => t.data!.im);
     const real = signals.filter((t) => !t.data!.im);
@@ -166,7 +166,7 @@ export const Waveform = memo(function Waveform() {
     if (lines.length && !panes.length) panes.push({ unit: "", series: [] });
     // one series per level (not one per outer .dc step); in a Bode plot a magnitude, as in LTspice:
     // 1 at 0 dB, 0.707 at -3 dB
-    panes[0]?.series.push(...lines.map((t) => ({ t, y: (panes[0].unit === "dB" ? mag(t) : t.data!.re).slice(0, seg) })));
+    panes[0]?.series.push(...lines.map((t) => ({ t, y: (panes[0].unit === "dB" ? mag(t) : t.data!.re).slice(0, seg), k: 0, n: 1 })));
     return panes;
   }, [ok, lines, signals, zero, seg]);
 
@@ -421,7 +421,7 @@ const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot, steps }:
   // (time and DC sweeps: over a frequency axis an average or integral of a magnitude means little.
   // xs is one sweep segment, rising or falling: nested .dc families are separate series of it)
   const num = (v: number, u: string) => (Number.isNaN(v) ? "–" : si(v, u)); // (no data in the range)
-  const stats = useMemo(() => xUnit === "Hz" ? [] : traces.filter((t) => !t.data?.constant).flatMap((t) => panes.flatMap((p) => p.series.filter((s) => s.t === t && p.unit !== "dB" && p.unit !== "°").map((s) => ({ t, unit: p.unit, of: member(p, s, steps), ...integrate(xs, s.y, lo, hi) })))),
+  const stats = useMemo(() => xUnit === "Hz" ? [] : traces.filter((t) => !t.data?.constant).flatMap((t) => panes.flatMap((p) => p.series.filter((s) => s.t === t && p.unit !== "dB" && p.unit !== "°").map((s) => ({ t, unit: p.unit, of: member(s, steps), ...integrate(xs, s.y, lo, hi) })))),
     [traces, panes, xs, lo, hi, xUnit, steps]); // not per hover move
   return (
     <>

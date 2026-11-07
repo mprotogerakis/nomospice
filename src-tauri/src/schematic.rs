@@ -820,7 +820,9 @@ impl Prepared {
             k /= s.values.len();
             format!("{}={}", s.name(), short_num(v))
         }).collect::<Vec<_>>().join(" ")).collect();
-        let shared: Vec<bool> = labels.iter().map(|l| labels.iter().filter(|m| *m == l).count() > 1).collect(); // (counted before any is changed)
+        let mut count: HashMap<&str, usize> = HashMap::new();
+        labels.iter().for_each(|l| *count.entry(l).or_default() += 1);
+        let shared: Vec<bool> = labels.iter().map(|l| count[l.as_str()] > 1).collect(); // (counted before any is changed)
         for (k, l) in labels.iter_mut().enumerate() {
             if shared[k] {
                 l.push_str(&format!(" #{}", k + 1));
@@ -886,24 +888,28 @@ impl Step {
             }
             Stepped::Temp => {
                 // the deck's own `.temp 50` / `.options … temp=50` set, else one added
+                // (every one: one left over would set the temperature after the stepped one)
                 let lines = deck_lines(text);
-                let own = lines.iter().filter(|l| l.top && !l.skip).find_map(|l| {
+                let own: Vec<(usize, usize)> = lines.iter().filter(|l| l.top && !l.skip).filter_map(|l| {
                     let sp = token_spans(l.line);
                     match l.head.as_str() {
                         ".temp" => sp.get(1).copied(),
                         ".options" | ".option" | ".opt" => sp.iter().find(|&&(a, e)| l.low[a..e].starts_with("temp=") && e > a + 5).map(|&(a, e)| (a + 5, e)),
                         _ => None,
                     }.map(|(a, e)| (l.start + a, l.start + e))
-                });
-                Ok(match own {
-                    Some(span) => splice(text, &[span], v),
-                    None => before_end(text, &format!(".options temp={v:e}")),
-                })
+                }).collect();
+                Ok(if own.is_empty() { before_end(text, &format!(".options temp={v:e}")) } else { splice(text, &own, v) })
             }
             Stepped::Source(n) => {
                 let low = n.to_ascii_lowercase();
-                let line = deck_lines(text).into_iter().find(|l| l.top && l.low.split_whitespace().next() == Some(low.as_str()))
+                let lines = deck_lines(text);
+                let at = lines.iter().position(|l| l.top && l.low.split_whitespace().next() == Some(low.as_str()))
                     .ok_or_else(|| format!("`.step {n}`: there is no source {n}"))?;
+                // (written over + lines: its DC value may be on one of them, which this would miss)
+                if lines[at + 1..].iter().find(|l| !l.skip).is_some_and(|l| l.line.trim_start().starts_with('+')) {
+                    return Err(format!("`.step {n}`: {n} is written over several lines: step a .param in its value instead"));
+                }
+                let line = &lines[at];
                 // `V1 a b 5` or `V1 a b DC 5 …`: the DC value (a SINE or PULSE has none to step)
                 let sp = token_spans(line.line);
                 // (the DC value where it is written: right after the nodes, or after a `DC` anywhere)
@@ -1745,7 +1751,7 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool) -> Netlist {
                 let l = line.to_lowercase();
                 // (each line without its inline comment: a `;` must not swallow the next line's values;
                 // comment lines between a .step and its + lines skipped, as SPICE does)
-                if stepping && l.starts_with('*') {
+                if stepping && (l.starts_with('*') || l.starts_with(';')) {
                     continue;
                 }
                 if stepping && l.starts_with('+') {

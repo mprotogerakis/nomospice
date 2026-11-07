@@ -15,7 +15,7 @@ fn tools() -> Value {
     json!([
         {
             "name": "simulate",
-            "description": "Simulate a schematic with ngspice. Returns the analysis (plot, scale), all vector names, operating-point/result values, .meas results (LTspice syntax works), netlist warnings, the ngspice log tail on failure, and the requested traces downsampled to `points` samples. Trace expressions use ngspice syntax plus part currents by name: v(\"net\"), v(\"a\")-v(\"b\"), I(R1) for the current into R1's pin 1, Ic(Q1)/Ib(Q1)/Ie(Q1), Id(M1)/Ig(M1)/Is(M1), Ix(U1:OUT) for a subcircuit's pin (the netlist tool lists them per part as pin_currents), i(v1) for sources, db(v(\"out\")).",
+            "description": "Simulate a schematic with ngspice. Returns the analysis (plot, scale), all vector names, operating-point/result values, .meas results (LTspice syntax works), netlist warnings, the ngspice log tail on failure, and the requested traces downsampled to `points` samples. A .step run lists its steps; each trace then comes as {steps: [{step, x, re, im}]}, one curve per step, `points` shared by them. Trace expressions use ngspice syntax plus part currents by name: v(\"net\"), v(\"a\")-v(\"b\"), I(R1) for the current into R1's pin 1, Ic(Q1)/Ib(Q1)/Ie(Q1), Id(M1)/Ig(M1)/Is(M1), Ix(U1:OUT) for a subcircuit's pin (the netlist tool lists them per part as pin_currents), i(v1) for sources, db(v(\"out\")).",
             "inputSchema": { "type": "object", "properties": {
                 "path": path, "asc": asc,
                 "traces": { "type": "array", "items": { "type": "string" }, "description": "ngspice expressions to return as waveforms" },
