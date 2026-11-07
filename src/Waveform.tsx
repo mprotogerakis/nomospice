@@ -6,7 +6,7 @@ import { Plus, X } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { removeTrace, setPlot, useS } from "./store";
 import { openMenu } from "./Menu";
-import { at, integrate, si, spiceNum } from "./spice";
+import { at, integrate, si } from "./spice";
 import { keys } from "./lib/utils";
 import type { Trace } from "./types";
 import { saveSvg, withLightTheme, xmlEscape } from "./svgExport";
@@ -120,7 +120,7 @@ export const Waveform = memo(function Waveform() {
   const ok = useMemo(() => traces.filter((t) => t.data?.x.length), [traces]);
   // constants (reference lines: 0.5, 500m, -3) are drawn on the top pane's axis, whatever it is
   // now: dB in a Bode plot, else volts first
-  const [lines, signals] = useMemo(() => [ok.filter((t) => spiceNum(t.expr) !== null), ok.filter((t) => spiceNum(t.expr) === null)], [ok]);
+  const [lines, signals] = useMemo(() => [ok.filter((t) => t.data!.constant), ok.filter((t) => !t.data!.constant)], [ok]);
   // .ac without an AC source: every value is exactly 0 (no dB at all, phase flat) - say so instead
   const zero = useMemo(() => ac && signals.length > 0 && signals.every((t) => t.data!.re.every((v, i) => !v && !t.data!.im?.[i])), [ac, signals]);
   const all = ok[0]?.data!.x ?? [];

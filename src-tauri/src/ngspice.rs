@@ -330,6 +330,8 @@ pub struct Trace {
     pub x: Vec<f64>,
     pub re: Vec<f64>,
     pub im: Option<Vec<f64>>,
+    /// one value spread over the x range (`0.5`, `vdd/2`): a reference line, drawn on the top pane
+    pub constant: bool,
     /// ngspice vector type (sim.h): 3 = voltage, 4 = current
     #[serde(skip)]
     pub typ: i32,
@@ -341,11 +343,11 @@ fn read(api: &Api, name: &str) -> Option<Trace> {
     let n = v.len.max(0) as usize;
     if !v.real.is_null() {
         let re = unsafe { std::slice::from_raw_parts(v.real, n) }.to_vec();
-        return Some(Trace { x: vec![], re, im: None, typ: v.typ });
+        return Some(Trace { x: vec![], re, im: None, constant: false, typ: v.typ });
     }
     if !v.comp.is_null() {
         let c = unsafe { std::slice::from_raw_parts(v.comp, n) };
-        return Some(Trace { x: vec![], re: c.iter().map(|z| z.re).collect(), im: Some(c.iter().map(|z| z.im).collect()), typ: v.typ });
+        return Some(Trace { x: vec![], re: c.iter().map(|z| z.re).collect(), im: Some(c.iter().map(|z| z.im).collect()), constant: false, typ: v.typ });
     }
     None
 }
@@ -486,6 +488,7 @@ pub fn trace(expr: &str, scale: &str, run: u64) -> Result<Trace, String> {
     // a constant (`1`, a reference level) is one value: a line across the x range
     if t.re.len() == 1 && t.x.len() > 1 {
         let n = t.x.len();
+        t.constant = true;
         t.re = vec![t.re[0]; n];
         if let Some(im) = &mut t.im {
             *im = vec![im[0]; n];

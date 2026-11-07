@@ -509,7 +509,6 @@ const togglePanel = () => useS.setState({ panel: useS.getState().panel ? null : 
  *  none once it is unmounted) until the button is up or the gesture cancelled; then `done`. */
 function drag(e: React.PointerEvent, move: (ev: PointerEvent) => void, done?: () => void) {
   if (e.button !== 0) return;
-  e.preventDefault(); // (no text selection on the way)
   const el = e.currentTarget as HTMLElement, id = e.pointerId;
   el.setPointerCapture(id);
   // (not a second finger's; no button held: the release went elsewhere, e.g. another window)

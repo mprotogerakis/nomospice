@@ -1971,6 +1971,9 @@ mod tests {
         assert!(!run.vectors.iter().any(|v| v.contains("pa_")), "par() helpers hidden: {:?}", run.vectors);
         let one = crate::ngspice::trace("1", &run.scale, run.id).unwrap();
         assert!(one.re.len() == one.x.len() && one.x.len() > 10 && one.re.iter().all(|&v| v == 1.0), "a constant spans the x axis");
+        let half = crate::ngspice::trace("2*0.5/2", &run.scale, run.id).unwrap(); // a constant expression too
+        assert!(one.constant && half.constant && half.re[0] == 0.5, "constants are flagged");
+        assert!(!crate::ngspice::trace("v(in)", &run.scale, run.id).unwrap().constant);
     }
 
     #[test]
@@ -2154,7 +2157,9 @@ mod tests {
                     for alt in [".tran", ".noise"] {
                         let src = src.replace("!.ac dec", ";.ac dec").replace(&format!("Left 2 ;{alt}"), &format!("Left 2 !{alt}"));
                         let nl = netlist_for_sim(&parse_asc(&src), &mut Library::builtin());
-                        let r = crate::ngspice::run(&nl.prepared(None, &mut vec![])).unwrap_or_else(|log| panic!("{name} {alt}: {}", log.join("\n")));
+                        let mut warnings = vec![];
+                        let r = crate::ngspice::run(&nl.prepared(None, &mut warnings)).unwrap_or_else(|log| panic!("{name} {alt}: {}", log.join("\n")));
+                        assert!(warnings.is_empty() && nl.warnings.is_empty(), "{name} {alt}: {warnings:?} {:?}", nl.warnings);
                         assert!(r.plot.starts_with(&alt[1..]) && !r.aborted && !r.scale.is_empty(), "{name} {alt}: {} {}", r.plot, r.scale);
                     }
                 }

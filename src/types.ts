@@ -96,6 +96,8 @@ export interface TraceData {
   x: number[];
   re: number[];
   im: number[] | null;
+  /** one value over the whole x range (0.5, vdd/2): a reference line on the top pane */
+  constant?: boolean;
 }
 
 export interface Trace {
