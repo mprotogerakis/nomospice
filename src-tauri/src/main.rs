@@ -204,9 +204,12 @@ async fn simulate(items: Vec<Item>, dir: Option<String>, lib: tauri::State<'_, L
         // for the s-plane view's root locus; from the user's deck, not the libraries
         let pz = res.as_ref().is_ok_and(|r| r.plot.starts_with("pz"));
         // (with the parameters only a .step sets: the locus runs on the first step's deck, where they are)
+        let stepped = res.as_ref().is_ok_and(|r| !r.steps.is_empty()); // (its .step ran: the locus runs its first step)
         let sweepable = if pz {
             let mut s = schematic::sweepable(&netlist.text, &netlist.insts);
-            s.extend(schematic::step_params(&netlist.steps).into_iter().filter(|p| !s.iter().any(|x| x.eq_ignore_ascii_case(p))).collect::<Vec<_>>());
+            if stepped {
+                s.extend(schematic::step_params(&netlist.steps).into_iter().filter(|p| !s.iter().any(|x| x.eq_ignore_ascii_case(p))).collect::<Vec<_>>());
+            }
             s
         } else {
             vec![]

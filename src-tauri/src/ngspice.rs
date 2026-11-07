@@ -276,6 +276,8 @@ pub struct Run {
     pub log: Vec<String>,
     /// A `.step` run: each step's label (`R=1k`), in order; traces hold one curve per step.
     pub steps: Vec<String>,
+    /// Said about the run beyond ngspice's log (a `.step` it could not run, so it ran once).
+    pub notes: Vec<String>,
 }
 
 /// The deck's `.meas` statements (their + lines joined): name (lowercase, as ngspice reports it) →
@@ -422,6 +424,7 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
                 }
             }
             Err(log) if done.is_empty() => return Err(unstepped.into_iter().chain(log).collect()),
+            Err(log) if log == ["simulation halted"] => break, // (halted while it began: not a failure)
             Err(log) => {
                 failed = std::iter::once(format!("--- .step {label} failed")).chain(log).collect();
                 break;
@@ -496,7 +499,8 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
     // sensor currents listed by their names, which trace expressions take (`I(R1)`, not `vsense_r1#branch`)
     let mut vectors: Vec<String> = vectors.into_iter().map(|v| named.get(&v).map_or(v, |l| l.to_string())).collect();
     vectors.sort();
-    Ok(Run { id, plot, scale, vectors, op, aborted, meas, log, steps: if steps.is_none() { vec![] } else { done.iter().map(|d| d.0.clone()).collect() } })
+    let notes = log.iter().filter(|l| l.starts_with("Warning: .step") || l.starts_with("--- .step") && l.ends_with("failed")).cloned().collect();
+    Ok(Run { id, plot, scale, vectors, op, aborted, meas, log, steps: if steps.is_none() { vec![] } else { done.iter().map(|d| d.0.clone()).collect() }, notes })
 }
 
 /// Load `deck`, run it (background thread, so `halt` can stop it): its plot, its log, whether it
@@ -641,9 +645,10 @@ fn steps_joined(each: Vec<(usize, Trace)>) -> Result<Trace, String> {
     let cap = (STEP_VALUES / each.len()).clamp(200, 200_000);
     let thin = |v: &[f64], n: usize| -> Vec<usize> { if v.len() <= n || n < 2 { (0..v.len()).collect() } else { (0..n).map(|k| k * (v.len() - 1) / (n - 1)).collect() } };
     if same {
-        // the same x for all (.ac, .dc): every curve at the same thinned indices, exact
-        let keep = thin(&each[0].x, cap);
-        let pick = |v: &[f64]| keep.iter().map(|&k| v[k]).collect::<Vec<f64>>();
+        // the same x for all (.ac, .dc): every curve at the same thinned indices, exact; a table
+        // (.op: no x, a value per step) or a nested .dc (thinning would cut across its segments) whole
+        let keep = if each[0].x.is_empty() || !rising(&each[0].x) { (0..each[0].re.len()).collect() } else { thin(&each[0].x, cap) };
+        let pick = |v: &[f64]| if v.is_empty() { vec![] } else { keep.iter().map(|&k| v[k]).collect::<Vec<f64>>() };
         let complex = each.iter().all(|t| t.im.is_some());
         return Ok(Trace {
             x: each.iter().flat_map(|t| pick(&t.x)).collect(),

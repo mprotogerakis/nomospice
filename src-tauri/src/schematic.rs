@@ -884,7 +884,8 @@ impl Step {
         match &self.what {
             Stepped::Param(n) => {
                 let spans = param_spans(text, n);
-                Ok(if spans.is_empty() { before_end(text, &format!(".param {n}={v:e}")) } else { splice(text, &spans, v) })
+                // (added first: a .param that uses it, `.param Rtot={R+100}`, is read after it)
+                Ok(if spans.is_empty() { after_title(text, &format!(".param {n}={v:e}")) } else { splice(text, &spans, v) })
             }
             Stepped::Temp => {
                 // the deck's own `.temp 50` / `.options … temp=50` set, else one added
@@ -988,6 +989,12 @@ fn param_spans(text: &str, name: &str) -> Vec<(usize, usize)> {
     deck_lines(text).iter().filter(|l| l.top && l.param())
         .flat_map(|l| param_defs(l.line, &l.low).into_iter().filter(|(n, _)| n.eq_ignore_ascii_case(name)).map(move |(_, (a, e))| (l.start + a, l.start + e)))
         .collect()
+}
+
+/// `text` with `line` added after its first (title) line.
+fn after_title(text: &str, line: &str) -> String {
+    let at = text.find('\n').map_or(text.len(), |k| k + 1);
+    format!("{}{}{line}\n{}", &text[..at], if at == text.len() && !text.ends_with('\n') && !text.is_empty() { "\n" } else { "" }, &text[at..])
 }
 
 /// `text` with `line` added before its `.end` (or at its end).
@@ -1752,6 +1759,7 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool) -> Netlist {
                 // (each line without its inline comment: a `;` must not swallow the next line's values;
                 // comment lines between a .step and its + lines skipped, as SPICE does)
                 if stepping && (l.starts_with('*') || l.starts_with(';')) {
+                    directives.push(format!("* {}", line.trim_start_matches(['*', ';']).trim())); // (kept, as a comment)
                     continue;
                 }
                 if stepping && l.starts_with('+') {
@@ -2450,7 +2458,7 @@ mod tests {
         let st = p.steps().unwrap().unwrap();
         let s: Vec<(String, Prepared)> = (0..st.total).map(|k| st.at(k).unwrap()).collect();
         assert_eq!(s.iter().map(|x| x.0.as_str()).collect::<Vec<_>>(), ["R=1k V1=1", "R=2k V1=1", "R=1k V1=2", "R=2k V1=2"]);
-        assert!(s[1].1.text().contains(".param R=2e3\n.end") && s[3].1.text().contains("V1 a 0 DC 2e0"), "{}", s[3].1.text());
+        assert!(s[1].1.text().starts_with("* t\n.param R=2e3\n") && s[3].1.text().contains("V1 a 0 DC 2e0"), "{}", s[3].1.text());
         // a source without a DC value gets one; the deck's own .temp is the one stepped
         let p = Prepared("* t\nV1 a 0 AC 1\n.temp 50\n.end\n".into(), vec![], vec![".step V1 list 3".into(), ".step temp list -40".into()]);
         let t = p.steps().unwrap().unwrap().at(0).unwrap().1;
@@ -2478,6 +2486,11 @@ mod tests {
         let n = out.x.len() / 2;
         assert!(n > 10 && out.x[..n] == out.x[n..] && out.re.len() == 2 * n, "a family of two on one time grid");
         assert_eq!(out.steps, Some(vec![0, 1]), "which steps its curves are");
+        // a table (.op): one value per step, no x
+        let op = netlist_for_sim(&parse_asc(&src.replace("!.tran 3m", "!.op")), &mut Library::builtin());
+        let r = crate::ngspice::run(&op.prepared(None, &mut vec![])).unwrap();
+        let v = crate::ngspice::trace("V(out)", &r.scale, r.id).unwrap();
+        assert!(v.x.is_empty() && v.re.len() == 2 && v.steps == Some(vec![0, 1]), "{v:?}");
         let m = |k: &str| run.meas.iter().find(|x| x.0 == format!("vmax [{k}]")).and_then(|x| x.1).unwrap_or_else(|| panic!("{:?}", run.meas));
         assert!(m("Cx=1u") < 0.5 * m("Cx=100n"), "the larger C filters more: {:?}", run.meas);
         // .noise: each step's spectrum to plot, each step's totals in the table (sqrt(kT/C))
