@@ -164,12 +164,13 @@ export function dragPlan(items: Item[], lib: Lib, sel: Set<number>) {
   const moving = new Set<string>(), movingPts: Pt[] = [];
   const move = (p: Pt) => moving.has(key(...p)) || (moving.add(key(...p)), movingPts.push(p));
   // pins of parts that stay: a wire must not take a connection away from them (a selected wire's
-  // end on one stays there: the wire stretches)
+  // end on one stays there: the wire stretches; with both ends on such pins it moves whole and is
+  // bridged back to them, below)
   const fixed = new Set(items.flatMap((it, i) => (it.t === "sym" && !sel.has(i) ? pins(it, defOf(lib, it)).map((p) => key(...p)) : [])));
   items.forEach((it, i) => {
     const ps: Pt[] = it.t === "wire" ? [[it.x1, it.y1], [it.x2, it.y2]] : it.t === "flag" ? [[it.x, it.y]] : it.t === "sym" ? pins(it, defOf(lib, it)) : [];
     conn.push(...ps);
-    if (sel.has(i)) ps.forEach((p) => (it.t === "sym" || !fixed.has(key(...p))) && move(p));
+    if (sel.has(i)) ps.forEach((p) => (it.t !== "wire" || !fixed.has(key(...p))) && move(p));
   });
   const ends = (w: Wire): Pt[] => [[w.x1, w.y1], [w.x2, w.y2]];
   const pinned = (w: Wire) => conn.some((p) => inside(p, w) && fixed.has(key(...p))); // (cheap test first)
@@ -196,6 +197,8 @@ export function dragPlan(items: Item[], lib: Lib, sel: Set<number>) {
       (atEnd.get(key(...p)) ?? []).forEach(join); // its wire may now move whole too
     }
   }
+  // a selected wire between two resting pins: it moves whole, and new wires keep both pins on it
+  const bridged = items.flatMap((it, i): Wire[] => (sel.has(i) && it.t === "wire" && !pinned(it) && ends(it).every((p) => fixed.has(key(...p))) ? (whole.add(i), [it]) : []));
   const all: Item[] = [], pieces: Item[] = [], groups: number[][] = []; // groups: a cut wire's pieces, in order
   items.forEach((it, i) => {
     if (it.t !== "wire" || whole.has(i) || !(ends(it).some((p) => moving.has(key(...p))) || movingPts.some((p) => inside(p, it)))) return void all.push(it);
@@ -226,8 +229,10 @@ export function dragPlan(items: Item[], lib: Lib, sel: Set<number>) {
     }
     return gone.size ? out.filter((_, i) => !gone.has(i)) : out; // only appended pieces go: indices below stay
   };
-  return (dx: number, dy: number): Item[] =>
-    rejoin(all.map((it, i) => {
+  const bridges = (dx: number, dy: number): Item[] =>
+    bridged.flatMap((w) => ends(w).map(([x, y]) => ({ ...w, x1: x, y1: y, x2: x + dx, y2: y + dy })));
+  return (dx: number, dy: number): Item[] => [
+    ...rejoin(all.map((it, i) => {
       if (it.t === "raw") return it;
       if (i < items.length && (whole.has(i) || (sel.has(i) && items[i].t !== "wire"))) {
         return it.t === "wire" ? { ...it, x1: it.x1 + dx, y1: it.y1 + dy, x2: it.x2 + dx, y2: it.y2 + dy } : { ...it, x: it.x + dx, y: it.y + dy };
@@ -238,7 +243,9 @@ export function dragPlan(items: Item[], lib: Lib, sel: Set<number>) {
       }
       if (it.t === "flag" && moving.has(key(it.x, it.y))) return { ...it, x: it.x + dx, y: it.y + dy };
       return it;
-    }));
+    })),
+    ...bridges(dx, dy), // (zero-length while not moved: dropped on commit)
+  ];
 }
 
 const zeroWire = (it: Item) => it.t === "wire" && it.x1 === it.x2 && it.y1 === it.y2;

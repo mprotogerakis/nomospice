@@ -177,8 +177,6 @@ async function saveFile(as = false) {
 async function newFile() {
   if (await discardOk()) await loadDoc([], null);
 }
-
-
 async function openExample(items: Item[]) {
   if (await discardOk()) await loadDoc(items, null);
 }
@@ -288,7 +286,7 @@ export function App() {
         if (k === "n") return run(newFile);
         if (k === "k") return run(() => useS.setState({ dialog: { k: "parts" } }));
         if (k === ",") return run(openLibraries); // macOS: the app menu's item has it
-        if (k === "w" && !MAC) return run(newFile); // Ctrl+W closes the document // macOS: File → Close (the menu item takes ⌘W)
+        if (k === "w" && !MAC) return run(newFile); // Ctrl+W closes the document (macOS: File → Close takes ⌘W)
         if (k === "l") return run(() => useS.setState({ panel: useS.getState().panel ? null : "log" }));
         if (k === "enter") return run(simulate);
         return;

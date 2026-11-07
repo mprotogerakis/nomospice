@@ -45,7 +45,7 @@ function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: 
   };
   // independent sources (V, I; not the controlled E/G/F/H) get the waveform form
   // the part's own Prefix wins, as in the netlist — as typed in the rows below, live
-  const prefixRow = extra.find(([k]) => k.trim().toLowerCase() === "prefix")?.[1] ?? "";
+  const prefixRow = extra.filter(([k]) => k.trim().toLowerCase() === "prefix").at(-1)?.[1] ?? ""; // the last row wins, as saved
   const prefix = it.t === "sym" ? prefixOf({ ...it, attrs: { ...it.attrs, Prefix: prefixRow } }, def) : "";
   const source = prefix === "V" || prefix === "I";
   // R, C, L: show how SPICE reads a single value (1M is a milliohm, 10F ten femtofarad)
@@ -377,7 +377,8 @@ export const Dialogs = memo(function Dialogs() {
       const it = items[dialog.index];
       if (!it) return null;
       // an alternative analysis (a comment of nothing but analyses: the tabs offer it) opens the form
-      if (it.t === "text" && !it.directive && !dialog.raw && analysisOptions([it]).length && analysisEditableAt(it.text.split("\n"), analysisLineIndex(it.text.split("\n"), null, false))) return <SimDialog key={dialog.index} index={dialog.index} />;
+      const lines = it.t === "text" ? it.text.split("\n") : [];
+      if (it.t === "text" && !it.directive && !dialog.raw && analysisOptions([it]).length && analysisEditableAt(lines, analysisLineIndex(lines, null, false))) return <SimDialog key={dialog.index} index={dialog.index} />;
       if (it.t === "text") return it.directive ? directive(dialog.index, dialog.raw, dialog.draft) : <DirectiveDialog key={dialog.index} item={dialog.draft === undefined ? it : { ...it, text: dialog.draft }} title="Comment" raw onDone={commitAt(dialog.index)} />;
       return <ItemForm key={dialog.index} item={it} title={it.t === "sym" ? `Edit ${it.attrs.InstName ?? it.sym}` : "Net Name"} onDone={commitAt(dialog.index)} />;
     }

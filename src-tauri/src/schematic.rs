@@ -154,12 +154,10 @@ pub fn folder_symbols(dir: &std::path::Path) -> Vec<(String, std::path::PathBuf)
         .collect()
 }
 
-/// (count, a sum over names, modification times and sizes) of the folder's symbol files (the same
-/// ones `folder_symbols` gives).
-fn asy_stamp(dir: &std::path::Path) -> Option<(usize, u128)> {
-    std::fs::metadata(dir).ok()?;
-    let asy = folder_symbols(dir).into_iter().map(|(_, p)| p);
-    let each = asy.filter_map(|p| Some((p.file_name()?.to_os_string(), p.metadata().ok()?))).map(|(name, m)| {
+/// (count, a sum over names, modification times and sizes) of a folder's symbol files (the list
+/// `folder_symbols` gave).
+fn asy_stamp(list: &[(String, std::path::PathBuf)]) -> Option<(usize, u128)> {
+    let each = list.iter().filter_map(|(_, p)| Some((p.file_name()?.to_os_string(), p.metadata().ok()?))).map(|(name, m)| {
         let t = m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos());
         let n = name.as_encoded_bytes().iter().fold(0u128, |h, &b| h.wrapping_mul(131).wrapping_add(b as u128)); // a rename counts too
         t.wrapping_add((m.len() as u128).wrapping_mul(1_000_003)).wrapping_add(n)
@@ -181,7 +179,8 @@ impl Library {
         if !moved && !rescan {
             return; // netlisting: no disk access
         }
-        let stamp = dir.and_then(asy_stamp);
+        let list = dir.map(folder_symbols).unwrap_or_default(); // one listing for the stamp and the load
+        let stamp = dir.and_then(|d| std::fs::metadata(d).ok()).and_then(|_| asy_stamp(&list));
         if !moved && stamp == self.3.stamp {
             return;
         }
@@ -193,8 +192,7 @@ impl Library {
             self.1.clear(); // a name missing before may be in the new folder (a rescan keeps the misses: they cost disk scans)
         }
         self.3.dir = dir.map(std::path::Path::to_path_buf);
-        let Some(dir) = dir else { return };
-        for (key, p) in folder_symbols(dir) {
+        for (key, p) in list {
             if let Ok(bytes) = std::fs::read(&p) {
                 self.0.insert(key.clone(), parse_asy(&key, &decode(&bytes)));
                 self.1.remove(&key);
@@ -814,7 +812,8 @@ fn ltspice_meas(text: &str, sensors: &[Sensor], warnings: &mut Vec<String>) -> S
         return text.to_string(); // nothing to rewrite: no pass over a big deck
     }
     let lines = deck_lines(text);
-    let an = lines.iter().find_map(|l| l.head.strip_prefix('.').filter(|h| !l.skip && TYPES_MEAS.contains(h))).unwrap_or("");
+    // the deck's first analysis ngspice can measure (an .op before a .tran: the .tran)
+    let an = lines.iter().find_map(|l| l.head.strip_prefix('.').filter(|h| !l.skip && ["tran", "ac", "dc", "sp"].contains(h))).unwrap_or("");
     let meas = |l: &DeckLine| l.head == ".meas" || l.head == ".measure";
     // ngspice allows 99 par() calls per deck and exits past that: rewrites stop before
     let mut budget = 99usize.saturating_sub(statements(text, &PAR_STATEMENTS).iter().map(|s| par_calls(s)).sum());
@@ -888,7 +887,9 @@ pub const PAR_STATEMENTS: [&str; 6] = [".meas", ".measure", ".print", ".plot", "
 /// A line without its inline comment (`;` LTspice, ` $` ngspice).
 pub fn uncommented(l: &str) -> &str {
     let l = l.split(';').next().unwrap_or("");
-    l.find(" $").map_or(l, |k| &l[..k])
+    // `$` after a blank (or at the start) begins an ngspice comment
+    let at = l.char_indices().find(|&(k, c)| c == '$' && (k == 0 || l[..k].ends_with(char::is_whitespace)));
+    at.map_or(l, |(k, _)| &l[..k])
 }
 
 /// One `.meas` statement (see [`ltspice_meas`]); Err: what ngspice would silently get wrong.
@@ -1883,6 +1884,7 @@ mod tests {
         assert_eq!(m(".meas tran a AVG V(out) FROM = 1m TO =2m"), ".meas tran a AVG V(out) FROM=1m TO=2m", "blanks around =");
         assert_eq!(m(".meas tran w WHEN V(out) = 0.5 RISE = 1"), ".meas tran w WHEN V(out)=0.5 RISE=1");
         assert_eq!(m(".meas tran p AVG -I(V1)*V(in) ; dynamic power"), ".meas tran p AVG par('-I(V1)*V(in)')", "a ; comment is not part of it");
+        assert_eq!(m(".meas tran p AVG V(a)*2\t$ avg power"), ".meas tran p AVG par('V(a)*2')", "a $ comment after a tab");
         for same in [".meas tran x AVG par('v(a)*v(b)')", ".meas ac x WHEN vdb(out)=vdb(in)"] {
             assert_eq!(m(same), same, "ngspice's own forms stay");
         }
