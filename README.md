@@ -6,7 +6,8 @@ files — with a modern UI, ngspice as the engine, a Rust core and a React front
 ## What it does
 
 - **Workflow**: `R C L D V I G W N S T` place parts, wires, labels and directives; `⌃R`/`⌃E`
-  rotate and mirror; `F2`/`P`/`⌘K` opens the component library; `⌘↵` runs. After a run, click a wire
+  rotate and mirror; `⌘C`/`⌘X`/`⌘V` copy, cut and paste (also from one schematic into another);
+  `F2`/`P`/`⌘K` opens the component library; `⌘↵` runs. After a run, click a wire
   to plot its voltage, a part to plot its current — in `.tran`, `.dc` **and `.ac`** (0 V current
   sensors in the simulated netlist, so currents have phase). Near a pin, its own current: `Ib(Q1)`,
   `Ig(M1)`, `Ix(U1:OUT)`. Expressions take these names: `I(R1)-I(R2)`, `V(in)*I(R1)`.

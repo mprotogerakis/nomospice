@@ -5,11 +5,11 @@ import { useShallow } from "zustand/react/shallow";
 import { Maximize, Minus, Plus } from "lucide-react";
 import type { Item, Shape, SymbolDef } from "./types";
 import {
-  box, connectivity, defOf, dragPlan, mirror, pins, prefixOf, rotate, dropZeroWires, dropZeroWiresKeepSel, GRID, hit, isShape, labelRect, leftLabels, matrix, snap, symBox,
+  box, connectivity, defOf, dragPlan, mirror, pins, prefixOf, rotate, dropZeroWires, dropZeroWiresKeepSel, GRID, hit, isShape, labelRect, leftLabels, matrix, shifted, snap, symBox,
   textLines, union, xform, type Box, type Lib, type Pt,
 } from "./geom";
 import { canProbe, commit, currentNets, nextInst, partCurrent, powerMode, powerName, probe, probeMode, simulate, useS, useStatus } from "./store";
-import { deleteSelection, duplicate, newItem, transform } from "./actions";
+import { copySelection, deleteSelection, duplicate, newItem, pasteClipboard, transform } from "./actions";
 import { openMenu, type MenuItem } from "./Menu";
 import { useSize } from "./lib/useSize";
 import { cn } from "@/lib/utils";
@@ -371,6 +371,19 @@ export const Schematic = memo(function Schematic() {
       setHFirst(null);
     } else if (tool.k === "place") {
       commit([...items, placed(tool.item, g)]);
+    } else if (tool.k === "paste") {
+      // here, selected; a part whose name is taken (or pasted twice) renumbered, as LTspice does
+      const out: Shape[] = [], taken = new Set(items.flatMap((it) => (it.t === "sym" && it.attrs.InstName ? [it.attrs.InstName.toUpperCase()] : [])));
+      for (const it of tool.items) {
+        let s = shifted(it, g[0], g[1]);
+        if (s.t === "sym") {
+          if (!s.attrs.InstName || taken.has(s.attrs.InstName.toUpperCase())) s = { ...s, attrs: { ...s.attrs, InstName: nextInst([...items, ...out], prefixOf(s, defOf(lib, s)) || "X") } };
+          taken.add(s.attrs.InstName.toUpperCase());
+        }
+        out.push(s);
+      }
+      commit([...items, ...out], out.map((_, k) => items.length + k));
+      useS.setState({ tool: { k: "select" } });
     } else if (tool.k === "delete") {
       const i = hit(items, lib, p, 6 / view.k);
       if (i >= 0) commit(items.filter((_, j) => j !== i), []), setHover(-1);
@@ -402,7 +415,7 @@ export const Schematic = memo(function Schematic() {
       setHFirst(Math.abs(g[0] - wireStart[0]) >= Math.abs(g[1] - wireStart[1]));
     const d = drag.current;
     if (!d) {
-      const h = tool.k === "place" || tool.k === "wire" ? -1 : hit(items, lib, p, 6 / view.k);
+      const h = tool.k === "place" || tool.k === "paste" || tool.k === "wire" ? -1 : hit(items, lib, p, 6 / view.k);
       setHover(h);
       return setHoverPin(probing && h >= 0 ? pinAt(items[h], p) : undefined);
     }
@@ -477,6 +490,7 @@ export const Schematic = memo(function Schematic() {
       { label: "Mirror", hint: "⌃E", run: () => transform(mirror) },
     ];
     const del: MenuItem = { label: count > 1 ? `Delete ${count} items` : "Delete", hint: "⌫", danger: true, run: deleteSelection };
+    const clip: MenuItem[] = [{ label: "Copy", hint: "⌘C", run: () => copySelection() }, { label: "Cut", hint: "⌘X", run: () => copySelection(true) }];
     if (!it) return [
       { label: "Place component…", hint: "P", run: () => set({ dialog: { k: "parts" } }) },
       { label: "Wire", hint: "W", run: () => set({ tool: { k: "wire" } }) },
@@ -488,12 +502,13 @@ export const Schematic = memo(function Schematic() {
       { label: "Edit simulation command…", run: () => set({ dialog: { k: "sim" } }) },
       { label: "Run", hint: "⌘↵", run: simulate },
       "-",
+      { label: "Paste", hint: "⌘V", run: pasteClipboard },
       { label: "Select all", hint: "⌘A", run: () => set({ sel: items.flatMap((x, j) => (x.t === "raw" ? [] : [j])) }) },
       { label: "Fit view", hint: "Space", run: fit },
       "-",
       { label: "Export schematic as SVG…", disabled: !items.some(isShape), run: () => void saveSvg(schematicSvg(items, lib), "") },
     ];
-    if (count > 1) return [...arrange, "-", del];
+    if (count > 1) return [...arrange, "-", ...clip, del];
     switch (it.t) {
       case "sym": {
         const prefix = prefixOf(it, defOf(lib, it)); // the part's own Prefix wins, as in the netlist
@@ -504,18 +519,18 @@ export const Schematic = memo(function Schematic() {
           ...plot,
           "-", ...arrange,
           { label: "Duplicate", hint: "⌘D", run: duplicate },
-          "-", del,
+          "-", ...clip, del,
         ];
       }
       case "wire":
-        return [...plot, { label: "Net label here…", run: () => newItem({ t: "flag", x: 0, y: 0, name: "" }, g) }, { label: "Select net", disabled: !net, run: selectNet }, "-", del];
+        return [...plot, { label: "Net label here…", run: () => newItem({ t: "flag", x: 0, y: 0, name: "" }, g) }, { label: "Select net", disabled: !net, run: selectNet }, "-", ...clip, del];
       case "flag":
-        return [{ label: it.name === "0" ? "Ground" : "Rename…", disabled: it.name === "0", run: edit }, ...plot, { label: "Select net", disabled: !net, run: selectNet }, "-", ...(it.name === "0" ? [] : [{ label: "Make ground", run: () => commit(items.map((x) => (x === it ? { ...it, name: "0" } : x))) }]), del];
+        return [{ label: it.name === "0" ? "Ground" : "Rename…", disabled: it.name === "0", run: edit }, ...plot, { label: "Select net", disabled: !net, run: selectNet }, "-", ...(it.name === "0" ? [] : [{ label: "Make ground", run: () => commit(items.map((x) => (x === it ? { ...it, name: "0" } : x))) }]), ...clip, del];
       case "text":
         return [
           { label: "Edit…", run: edit },
           { label: it.directive ? "Turn into comment" : "Turn into SPICE directive", run: () => commit(items.map((x) => (x === it ? { ...it, directive: !it.directive } : x))) },
-          "-", del,
+          "-", ...clip, del,
         ];
       default:
         return [];
@@ -566,6 +581,7 @@ export const Schematic = memo(function Schematic() {
     : drag.current?.k === "pan" ? "grabbing" : hover >= 0 ? "pointer" : "default";
   const gap = GRID * view.k;
   const ghost = tool.k === "place" ? placed(tool.item, cursor) : null;
+  const ghosts = tool.k === "paste" ? tool.items.map((it) => shifted(it, cursor[0], cursor[1])) : [];
 
   return (
     <div className="relative h-full w-full overflow-hidden bg-surface-schematic-canvas">
@@ -616,6 +632,11 @@ export const Schematic = memo(function Schematic() {
           {ghost && isShape(ghost) && (
             <g color="var(--selection)" stroke="currentColor" strokeWidth={1.6} opacity={0.7} className="[&_*]:[vector-effect:non-scaling-stroke]">
               <ItemView it={ghost} lib={lib} />
+            </g>
+          )}
+          {!!ghosts.length && (
+            <g color="var(--selection)" stroke="currentColor" strokeWidth={1.6} opacity={0.7} className="[&_*]:[vector-effect:non-scaling-stroke]">
+              {ghosts.map((it, k) => <ItemView key={k} it={it} lib={lib} />)}
             </g>
           )}
           {wireStart && (

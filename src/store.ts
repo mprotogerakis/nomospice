@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
-import type { GitStatus, Item, Netlist, Sim, SymbolDef, Trace, TraceData } from "./types";
+import type { GitStatus, Item, Netlist, Shape, Sim, SymbolDef, Trace, TraceData } from "./types";
 import { defOf, prefixOf, symKey, vexpr, type Lib } from "./geom";
 import { ANALYSIS, ANY_ANALYSIS, analysisLineIndex, analysisOptions, continuation, parseAnalysis, stripAnalyses, type Analysis } from "./spice";
 
@@ -8,6 +8,8 @@ export type Tool =
   | { k: "select" }
   | { k: "wire" }
   | { k: "place"; item: Item }
+  /** pasted items following the cursor (positions relative to it), placed with a click */
+  | { k: "paste"; items: Shape[] }
   | { k: "delete" };
 
 export type Dialog =

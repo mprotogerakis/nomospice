@@ -20,7 +20,7 @@ import { analysesOf, closeTab, currentTab, dirOf, fileName, docId, viewOf, loadD
 import { History } from "./History";
 import { mirror, rotate } from "./geom";
 import { ANALYSES, si, tokens } from "./spice";
-import { deleteSelection, duplicate, newItem, placeFlag, transform } from "./actions";
+import { copySelection, deleteSelection, duplicate, newItem, pasteClipboard, pasteText, placeFlag, transform } from "./actions";
 import { ContextMenu, openMenu } from "./Menu";
 import { Toolbar, ToolbarButton, ToolbarSeparator, ToolbarSpacer } from "./ui/toolbar";
 import { StatusBar, StatusSegment } from "./ui/status-bar";
@@ -83,6 +83,15 @@ export function installGuards() {
   // a mouse click must not leave focus on a button (Windows/Linux webviews focus it): Space/Enter
   // would then "click" it again instead of reaching the app hotkeys (e.g. Run turned Halt).
   // Keyboard (Tab) focus is unaffected; dialogs keep normal focus handling.
+  // copy, cut, paste of schematic items: the clipboard events (⌘C/⌘X/⌘V and the Edit menu alike),
+  // unless a text field or selected text (the log, the netlist) has them
+  const forItems = (e: ClipboardEvent) => !typing(e as unknown as KeyboardEvent) && !window.getSelection()?.toString() && !useS.getState().dialog;
+  const copy = (cut: boolean) => (e: ClipboardEvent) => void (forItems(e) && e.clipboardData && copySelection(cut, e.clipboardData) && e.preventDefault());
+  document.addEventListener("copy", copy(false));
+  document.addEventListener("cut", copy(true));
+  document.addEventListener("paste", (e) => {
+    if (forItems(e) && pasteText(e.clipboardData?.getData("text/plain") ?? "")) e.preventDefault();
+  });
   document.addEventListener("mousedown", (e) => {
     const t = e.target as Element | null;
     if (t?.closest?.("button, input[type=checkbox], input[type=radio]") && !t.closest("dialog")) e.preventDefault();
@@ -293,6 +302,10 @@ export function App() {
         if (k === "e") return run(() => transform(mirror));
         if (k === "a") return run(() => useS.setState({ sel: useS.getState().items.flatMap((it, i) => (it.t === "raw" ? [] : [i])) }));
         if (k === "d") return run(duplicate);
+        // copy, cut, paste of items (text selected in a panel: its own copy). By key, not only the
+        // clipboard events: WebKit sends no copy event without a text selection
+        if ((k === "c" || k === "x") && !panelText) return void (copySelection(k === "x") && e.preventDefault());
+        if (k === "v" && !panelText) return e.preventDefault(), pasteClipboard();
         if (k === "s") return run(() => saveFile(e.shiftKey));
         if (k === "o") return run(openFile);
         if (k === "n") return run(newFile);
@@ -328,6 +341,7 @@ export function App() {
   const hint =
     tool.k === "wire" ? "Wire: click to start / add corner · ends on pins and wires · right-click cancels · Esc done"
     : tool.k === "place" ? "Click to place · ⌃R rotate · ⌃E mirror · Esc / right-click done"
+    : tool.k === "paste" ? "Click to paste · Esc cancel"
     : tool.k === "delete" ? "Click items to delete · Esc done"
     : pz ? "Poles × and zeros ○ in the s-plane: hover for f₀ and damping · root locus in the panel on the right"
     : showWave && s.sim?.run?.plot.startsWith("noise") ? "Noise spectra: Add trace → onoise_spectrum / inoise_spectrum · totals in Results"

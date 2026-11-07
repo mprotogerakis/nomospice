@@ -1,7 +1,7 @@
 // Editing actions shared by the toolbar, hotkeys and context menus.
-import type { Item } from "./types";
+import type { Item, Shape } from "./types";
 import { commit, useS } from "./store";
-import { rotateInPlace } from "./geom";
+import { rotateInPlace, shifted, snap } from "./geom";
 
 export function deleteSelection() {
   const { items, sel } = useS.getState();
@@ -24,6 +24,71 @@ export function duplicate() {
   if (!it || it.t === "wire" || it.t === "raw") return;
   const copy: Item = it.t === "sym" ? { ...it, attrs: Object.fromEntries(Object.entries(it.attrs).filter(([k]) => k !== "InstName")) } : { ...it };
   useS.setState({ tool: { k: "place", item: copy }, sel: [] });
+}
+
+/** Clipboard text of copied items: this prefix, then their JSON (also between two windows). */
+const CLIP = "nomospice-items:";
+
+/** The selection as clipboard text, or null: nothing to copy. */
+export function copyText(): string | null {
+  const { items, sel } = useS.getState();
+  const its = sel.map((i) => items[i]).filter((it): it is Shape => !!it && it.t !== "raw");
+  return its.length ? CLIP + JSON.stringify(its) : null;
+}
+
+const num = (v: unknown) => typeof v === "number" && Number.isFinite(v);
+const str = (v: unknown) => typeof v === "string";
+/** A pasted item is only taken as one of ours (the clipboard holds whatever was copied anywhere). */
+function shape(v: unknown): Shape | null {
+  const it = v as Record<string, unknown>;
+  if (!it || typeof it !== "object") return null;
+  if (it.t === "wire" && [it.x1, it.y1, it.x2, it.y2].every(num)) return { t: "wire", x1: it.x1 as number, y1: it.y1 as number, x2: it.x2 as number, y2: it.y2 as number };
+  if (!num(it.x) || !num(it.y)) return null;
+  const extra = Array.isArray(it.extra) && it.extra.every(str) ? { extra: it.extra as string[] } : {};
+  if (it.t === "flag" && str(it.name)) return { t: "flag", x: it.x as number, y: it.y as number, name: it.name as string, ...extra };
+  if (it.t === "text" && str(it.text)) return { t: "text", x: it.x as number, y: it.y as number, text: it.text as string, directive: !!it.directive, ...(str(it.align) && { align: it.align as string }) };
+  const attrs = it.attrs as Record<string, unknown>;
+  if (it.t === "sym" && str(it.sym) && str(it.rot) && attrs && typeof attrs === "object" && Object.values(attrs).every(str)) {
+    return { t: "sym", sym: it.sym as string, x: it.x as number, y: it.y as number, rot: it.rot as string, attrs: { ...(attrs as Record<string, string>) }, ...extra };
+  }
+  return null;
+}
+
+/** The items copied last (pasting falls back to them where reading the system clipboard is refused). */
+let clip = "";
+
+/** Copy (or cut) the selection: to the system clipboard and here. False: nothing selected. */
+export function copySelection(cut = false, data?: DataTransfer | null) {
+  const t = copyText();
+  if (!t) return false;
+  clip = t;
+  if (data) data.setData("text/plain", t);
+  else void navigator.clipboard?.writeText(t).catch(() => {});
+  if (cut) deleteSelection();
+  return true;
+}
+
+/** Paste the system clipboard's items (also from another window), else the last copied here. */
+export function pasteClipboard() {
+  void (navigator.clipboard?.readText() ?? Promise.reject()).then((t) => pasteText(t) || pasteText(clip), () => pasteText(clip));
+}
+
+/** Paste clipboard text: the items follow the cursor (held at their top-left grid point) until a
+ *  click places them. False: not items of ours. */
+export function pasteText(text: string): boolean {
+  if (!text.startsWith(CLIP)) return false;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text.slice(CLIP.length));
+  } catch {
+    return false;
+  }
+  const its = (Array.isArray(raw) ? raw : []).map(shape).filter((x): x is Shape => !!x);
+  if (!its.length) return false;
+  const xs = its.flatMap((it) => (it.t === "wire" ? [it.x1, it.x2] : [it.x])), ys = its.flatMap((it) => (it.t === "wire" ? [it.y1, it.y2] : [it.y]));
+  const [x0, y0] = [snap(xs.reduce((a, b) => Math.min(a, b))), snap(ys.reduce((a, b) => Math.min(a, b)))];
+  useS.setState({ tool: { k: "paste", items: its.map((it) => shifted(it, -x0, -y0)) }, sel: [] });
+  return true;
 }
 
 export const placeFlag = (name: string) => useS.setState({ tool: { k: "place", item: { t: "flag", x: 0, y: 0, name } }, sel: [] });

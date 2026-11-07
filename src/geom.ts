@@ -95,6 +95,10 @@ export const union = (all: (Box | null)[]): Box | null => {
 };
 export const isShape = (it: Item): it is Shape => it.t !== "raw";
 
+/** `it` moved by (dx, dy). */
+export const shifted = (it: Shape, dx: number, dy: number): Shape =>
+  it.t === "wire" ? { ...it, x1: it.x1 + dx, y1: it.y1 + dy, x2: it.x2 + dx, y2: it.y2 + dy } : { ...it, x: it.x + dx, y: it.y + dy };
+
 function distSeg(p: Pt, x1: number, y1: number, x2: number, y2: number) {
   const dx = x2 - x1, dy = y2 - y1;
   const t = dx || dy ? Math.max(0, Math.min(1, ((p[0] - x1) * dx + (p[1] - y1) * dy) / (dx * dx + dy * dy))) : 0;
