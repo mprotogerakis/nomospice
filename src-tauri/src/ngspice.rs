@@ -482,7 +482,7 @@ fn plot_vectors(api: &Api, plot: &str, sensors: &[crate::schematic::Sensor], par
 pub fn trace(expr: &str, scale: &str, run: u64) -> Result<Trace, String> {
     // part currents by name (`I(R1)-I(R2)`, `Ib(Q1)`): the latest run's sensors; messages show the
     // expression as written, ngspice's with the names (not the hidden sensor sources)
-    let named = crate::schematic::sensor_currents(expr, &SENSORS.lock().unwrap_or_else(|e| e.into_inner()));
+    let (named, problem) = crate::schematic::sensor_currents(expr, &SENSORS.lock().unwrap_or_else(|e| e.into_inner()));
     let (shown, expr) = (expr, named.as_str());
     let unname = |log: String| SENSORS.lock().unwrap_or_else(|e| e.into_inner()).iter().fold(log, |l, s| l.replace(&format!("i({})", s.source), &s.label).replace(&format!("{}#branch", s.source), &s.label));
     // ngspice's command line is csh-like (`;` chains, backquotes run sh, `!` history, `$` vars):
@@ -496,12 +496,8 @@ pub fn trace(expr: &str, scale: &str, run: u64) -> Result<Trace, String> {
     if RUNS.load(Ordering::SeqCst) != run {
         return Err("the results were replaced by a later run (a root locus or another simulation): run the simulation again".into());
     }
-    if let Some(why) = crate::schematic::whole_ic_current(shown, &SENSORS.lock().unwrap_or_else(|e| e.into_inner())) {
-        return Err(why); // (`I(U1)` of a subcircuit: its pins have the currents)
-    }
-    // a part current this circuit has not (a typo, the netlist's XU1): left as written
-    if let Some(c) = crate::schematic::unknown_current(expr) {
-        return Err(format!("{c}: no such part current here; a part's right-click menu lists its currents while probing (Ib(Q1), Ix(U1:OUT))"));
+    if let Some(why) = problem {
+        return Err(why); // (a part current the circuit has not, or a subcircuit's I(U1))
     }
     api.command("unlet nmsp_trace"); // a failed `let` would otherwise leave the previous trace behind
     take_log(); // after unlet: it may print leftovers of the finished run ("Background thread stopped")

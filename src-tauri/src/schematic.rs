@@ -841,7 +841,7 @@ fn ltspice_meas(text: &str, sensors: &[Sensor], warnings: &mut Vec<String>) -> S
     // (only with the circuit's sensors: the warnings pass before a run has none)
     if !sensors.is_empty() {
         for l in statements(text, &[".meas", ".measure"]) {
-            if let Some(w) = whole_ic_current(&l, sensors).or_else(|| unknown_current(&sensor_currents(&l, sensors)).map(|c| format!("no part current {c} in this circuit"))) {
+            if let (_, Some(w)) = sensor_currents(&l, sensors) {
                 warnings.push(format!(".meas: {w}"));
             }
         }
@@ -948,7 +948,7 @@ fn meas_statement(s: &str, sensors: &[Sensor], an: &str) -> Result<String, Strin
         blanks.clear();
         flat.push(c);
     }
-    let s = sensor_currents(flat.trim_end(), sensors);
+    let s = sensor_currents(flat.trim_end(), sensors).0;
     let mut toks: Vec<String> = spice_tokens(&s).into_iter().map(str::to_string).collect();
     let low = |t: &str| t.to_ascii_lowercase();
     // a vector, V(..)/I(..) and ngspice's vdb(..), vm(..) … or a number: ngspice reads it as it is
@@ -1110,10 +1110,14 @@ pub fn meas_name_at<S: AsRef<str>>(tokens: &[S]) -> usize {
     if tokens.get(1).is_some_and(|t| TYPES_MEAS.contains(&t.as_ref().to_ascii_lowercase().as_str())) { 2 } else { 1 }
 }
 
-/// Part currents by their names, `I(R1)`, `Ic(Q1)`, `Ib(Q1)`, `Ix(U1:OUT)`, → the sensor's current
-/// `i(vsense_…)` (ngspice knows only branch currents). `I(Q1)` is the pin-1 current (Ic) as before.
-pub fn sensor_currents(s: &str, sensors: &[Sensor]) -> String {
+/// Part currents by their names, `I(R1)`, `Ic(Q1)`, `Ib(Q1)`, `Ix(U1:OUT)` (or by the netlist's
+/// names, `Ib(QT1)`), → the sensor's current `i(vsense_…)` (ngspice knows only branch currents);
+/// `I(Q1)` is the pin-1 current (Ic) as before. With what it could not map: a part current's name
+/// the circuit has not (`Ib(Q9)`: ngspice has no such functions; not `ig(`, its group delay of a
+/// source current) or a subcircuit's `I(U1)` (its pins have the currents).
+pub fn sensor_currents(s: &str, sensors: &[Sensor]) -> (String, Option<String>) {
     let mut out = String::with_capacity(s.len());
+    let mut problem = None;
     let mut rest = s;
     while let Some(open) = rest.find('(') {
         // the word right before "(" (whole: `II(R1)` is not `I(R1)`)
@@ -1121,16 +1125,15 @@ pub fn sensor_currents(s: &str, sensors: &[Sensor]) -> String {
         let start = head.char_indices().rev().take_while(|(_, c)| c.is_ascii_alphanumeric() || *c == '_').last().map_or(open, |(k, _)| k);
         let name = &head[start..];
         let close = rest[open + 1..].find(')').map(|e| open + 1 + e);
-        let hit = close.filter(|_| !name.is_empty()).and_then(|e| {
-            let (key, arg) = (format!("{name}({})", rest[open + 1..e].trim()), rest[open + 1..e].trim());
-            // (`I(Q1)`: pin 1 of a two-pin part or transistor, by its drawn or netlist name; a
-            // subcircuit's currents are per pin)
-            // (an exact name first: a part's own I(T1) before another's alias; then the same names
-            // by the netlist's name, Ib(QT1), Ix(XU1:OUT))
-            let key_lc = key.to_ascii_lowercase();
-            let by_inst = |x: &Sensor| x.label.to_ascii_lowercase().replacen(&format!("({}", x.name), &format!("({}", x.inst), 1) == key_lc;
+        let arg = close.map_or("", |e| rest[open + 1..e].trim());
+        let key = format!("{name}({arg})").to_ascii_lowercase();
+        let ic = |x: &Sensor| x.inst.starts_with('x') && x.label.starts_with("Ix(");
+        let hit = close.filter(|_| !name.is_empty()).and_then(|_| {
+            // an exact name first (a part's own I(T1) before another's alias), then by the netlist's
+            // name, then `I(Q1)`: pin 1 of a two-pin part or transistor (a subcircuit's are per pin)
+            let by_inst = |x: &Sensor| x.label.to_ascii_lowercase().replacen(&format!("({}", x.name), &format!("({}", x.inst), 1) == key;
             sensors.iter().find(|x| x.label.eq_ignore_ascii_case(&key)).or_else(|| sensors.iter().find(|x| by_inst(x))).or_else(|| sensors.iter().find(|x| {
-                x.pin == 0 && !x.label.starts_with("Ix(") && name.eq_ignore_ascii_case("i") && (x.inst.eq_ignore_ascii_case(arg) || x.name.eq_ignore_ascii_case(arg))
+                x.pin == 0 && !ic(x) && name.eq_ignore_ascii_case("i") && (x.inst.eq_ignore_ascii_case(arg) || x.name.eq_ignore_ascii_case(arg))
             }))
         });
         match (hit, close) {
@@ -1140,48 +1143,21 @@ pub fn sensor_currents(s: &str, sensors: &[Sensor]) -> String {
                 rest = &rest[e + 1..];
             }
             _ => {
+                let n = name.to_ascii_lowercase();
+                let whole = (n == "i").then(|| sensors.iter().find(|x| ic(x) && (x.name.eq_ignore_ascii_case(arg) || x.inst.eq_ignore_ascii_case(arg)))).flatten();
+                if problem.is_some() || close.is_none() {
+                } else if let Some(x) = whole {
+                    problem = Some(format!("I({0}) is no single current: {0} has one per pin, e.g. {1}", arg.to_uppercase(), x.label));
+                } else if n.len() == 2 && n.starts_with('i') && "xcbeds".contains(&n[1..]) {
+                    problem = Some(format!("{name}({arg}): no such part current here; a part's right-click menu lists its currents while probing (Ib(Q1), Ix(U1:OUT))"));
+                }
                 out.push_str(&rest[..open + 1]);
                 rest = &rest[open + 1..];
             }
         }
     }
     out.push_str(rest);
-    out
-}
-
-/// A part current's name left in `s` after `sensor_currents` (`Ib(Q9)`, `Ix(U1:NC)`: a typo, a part
-/// without it): ngspice has no such functions, so these names are always ours. (Not `ig(`: also
-/// ngspice's group delay of a source current, `ig(v1)`.)
-pub fn unknown_current(s: &str) -> Option<String> {
-    // (bytes: the pattern is ASCII, so a match starts on a char boundary whatever else the text holds)
-    let b = s.as_bytes();
-    let word = |c: u8| c.is_ascii_alphanumeric() || c == b'_' || c >= 0x80;
-    let k = (0..b.len().saturating_sub(2)).find(|&k| {
-        b[k].eq_ignore_ascii_case(&b'i') && b"xcbeds".contains(&b[k + 1].to_ascii_lowercase()) && b[k + 2] == b'(' && (k == 0 || !word(b[k - 1]))
-    })?;
-    Some(s[k..].split_inclusive(')').next().unwrap_or(&s[k..]).to_string())
-}
-
-/// `I(U1)` of a subcircuit (as LTspice allows): no single current, its pins have one each. The
-/// explanation, if `s` asks for one.
-pub fn whole_ic_current(s: &str, sensors: &[Sensor]) -> Option<String> {
-    // (by its drawn name or the netlist's, XU1)
-    let ics: HashSet<&str> = sensors.iter().filter(|x| x.inst.starts_with('x') && x.label.starts_with("Ix(")).flat_map(|x| [x.name.as_str(), x.inst.as_str()]).collect();
-    if ics.is_empty() {
-        return None;
-    }
-    let low = s.to_lowercase();
-    let mut rest = low.as_str();
-    while let Some(k) = rest.find("i(") {
-        let word = rest[..k].ends_with(|c: char| c.is_ascii_alphanumeric() || c == '_');
-        let arg = rest[k + 2..].split(')').next().unwrap_or("").trim();
-        if let Some(n) = (!word).then_some(arg).filter(|a| ics.contains(a)) {
-            let pin = sensors.iter().find(|x| (x.name == n || x.inst == n) && x.label.starts_with("Ix(")).map_or(String::new(), |x| x.label.clone());
-            return Some(format!("I({0}) is no single current: {0} has one per pin, e.g. {pin}", n.to_uppercase()));
-        }
-        rest = &rest[k + 2..];
-    }
-    None
+    (out, problem)
 }
 
 /// The pins' currents by their usual names: `I(R1)`; `Ic(Q1)` `Ib(Q1)` `Ie(Q1)`; `Id(M1)` `Ig(M1)`
@@ -2073,7 +2049,7 @@ mod tests {
         for same in [".meas tran w WHEN V(out)=1 RISE=1", ".meas tran a AVG V(out) FROM=1m TO=2m", ".meas tran t TRIG AT=1n TARG V(out) VAL={0.5*2} RISE=1", ".meas ac bw WHEN vdb(out)=-3", ".meas ac g MAX vm(out)"] {
             assert_eq!(m(same), same);
         }
-        assert_eq!(sensor_currents("I(R1)+I(R10)+II(R1)", &r1), "i(vsense_r1)+I(R10)+II(R1)");
+        assert_eq!(sensor_currents("I(R1)+I(R10)+II(R1)", &r1).0, "i(vsense_r1)+I(R10)+II(R1)");
         // subcircuit pins: by name, by number where names repeat or do not read as one; I(U1) is none
         let pin = |n: &str| Pin { x: 0, y: 0, name: n.into() };
         let pins = [pin("IN"), pin("GND"), pin("GND"), pin("a)b")];
@@ -2081,13 +2057,15 @@ mod tests {
         assert_eq!(pin_labels('X', "U1", &[pin("IN+"), pin("IN-"), pin("OUT")]), ["Ix(U1:IN+)", "Ix(U1:IN-)", "Ix(U1:OUT)"]);
         assert_eq!(pin_labels('X', "U1", &[pin("2"), pin("GND"), pin("GND")]), ["Ix(U1:1)", "Ix(U1:2)", "Ix(U1:3)"], "never two alike");
         assert_eq!(pin_labels('Q', "Q1", &[pin("C"), pin("B"), pin("E")]), ["Ic(Q1)", "Ib(Q1)", "Ie(Q1)"]);
-        let u1 = [Sensor { source: "vsense_u1".into(), node: "y".into(), inst: "u1".into(), pin: 0, label: "Ix(U1:IN)".into(), name: "u1".into(), hold: String::new() }];
-        assert_eq!(sensor_currents("I(U1)+ix(u1:in)", &u1), "I(U1)+i(vsense_u1)");
-        assert_eq!(unknown_current("v(a)*Ib(Q9)"), Some("Ib(Q9)".into()));
-        assert_eq!(unknown_current("i(v1)+mix(1)+vin(a)"), None, "a source's i(), other words");
-        assert_eq!(unknown_current("1µ*Ω°ib(q1)"), None, "non-ASCII before: a word, and no panic");
-        assert_eq!(unknown_current("1µ* Ix(U1:a)"), Some("Ix(U1:a)".into()));
-        assert_eq!(unknown_current("ig(v1)"), None, "ngspice's group delay");
+        let ic = [Sensor { source: "vsense_xu1".into(), node: "y".into(), inst: "xu1".into(), pin: 0, label: "Ix(U1:IN)".into(), name: "u1".into(), hold: String::new() }];
+        let (text, why) = sensor_currents("I(U1)+ix(u1:in)", &ic);
+        assert_eq!(text, "I(U1)+i(vsense_xu1)");
+        assert!(why.is_some_and(|w| w.contains("one per pin")), "a subcircuit's I(U1)");
+        assert!(sensor_currents("I(XU1)", &ic).1.is_some(), "by the netlist's name too");
+        let problem = |e: &str| sensor_currents(e, &r1).1;
+        assert!(problem("v(a)*Ib(Q9)").is_some_and(|w| w.starts_with("Ib(Q9)")));
+        assert_eq!(problem("i(v1)+mix(1)+vin(a)+ig(v1)"), None, "a source's i(), other words, ngspice's group delay");
+        assert!(problem("1µ*Ω°ib(q9)").is_some(), "after non-ASCII: no panic, still a word of its own");
         assert_eq!(m(".meas tran p AVG 1µ*I(R1)"), ".meas tran p AVG par('1µ*i(vsense_r1)')", "multi-byte text: no panic");
         assert_eq!(m(".meas tran a AVG V(out) FROM = 1m TO =2m"), ".meas tran a AVG V(out) FROM=1m TO=2m", "blanks around =");
         assert_eq!(m(".meas tran w WHEN V(out) = 0.5 RISE = 1"), ".meas tran w WHEN V(out)=0.5 RISE=1");
@@ -2244,8 +2222,8 @@ mod tests {
         let d = z.insts.iter().position(|n| n == "XD1").unwrap();
         assert_eq!(z.pin_currents[d], ["I(D1)", ""], "{}", z.text);
         let t1 = [Sensor { source: "vsense_qt1".into(), node: "y".into(), inst: "qt1".into(), pin: 0, label: "Ic(T1)".into(), name: "t1".into(), hold: String::new() }];
-        assert_eq!(sensor_currents("I(T1)+I(QT1)", &t1), "i(vsense_qt1)+i(vsense_qt1)", "pin 1 by the drawn name too");
-        assert_eq!(sensor_currents("Ic(QT1)", &t1), "i(vsense_qt1)", "a name by the netlist's name");
+        assert_eq!(sensor_currents("I(T1)+I(QT1)", &t1).0, "i(vsense_qt1)+i(vsense_qt1)", "pin 1 by the drawn name too");
+        assert_eq!(sensor_currents("Ic(QT1)", &t1).0, "i(vsense_qt1)", "a name by the netlist's name");
         let run = crate::ngspice::run(&prepare(&nl.text, None, &mut vec![]).with_sensors(nl.sensors.clone())).unwrap();
         let get = |n: &str| run.op.iter().find(|o| o.0 == n).map(|o| o.1).unwrap_or_else(|| panic!("{n}: {:?}", run.op));
         let (ic, ib, ie) = (get("Ic(Q1)"), get("Ib(Q1)"), get("Ie(Q1)"));
