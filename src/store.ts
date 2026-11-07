@@ -314,20 +314,27 @@ function withoutAnalysis(items: Item[], kind: Analysis, active: boolean): [Item[
   return [rest.some((l) => l.trim()) ? items.map((x, j) => (j === k ? { ...it, text: rest.join("\n") } : x)) : items.filter((_, j) => j !== k), k];
 }
 
-/** "×" on a result tab: its analysis leaves the schematic (⌘Z brings it back, with its results).
- *  The schematic's own analysis closed: the first alternative left takes its place, so the file
- *  still has one to run (also in other simulators). The last tab stays. */
+/** "×" on a result tab: its analysis leaves the schematic, the active line and commented ones of
+ *  its kind alike (⌘Z brings them back, with the results). The schematic's own analysis closed:
+ *  the first alternative left takes its place, so the file still has one to run (also in other
+ *  simulators). The last tab stays. */
 export function closeTab(kind: Analysis) {
   const { items, running } = get();
   const opts = analysesOf(items), o = opts.find((x) => x.kind === kind);
   if (running || !o || opts.length < 2) return;
-  const cut = withoutAnalysis(items, kind, o.active);
-  if (!cut) return;
-  let [next] = cut;
+  let next = items, at: Extract<Item, { t: "text" }> | null = null, kept = 0;
+  for (let cut; (cut = withoutAnalysis(next, kind, true) ?? withoutAnalysis(next, kind, false)); next = cut[0]) {
+    const was = next[cut[1]] as Extract<Item, { t: "text" }>;
+    if (was.directive && !at) {
+      // where the active one stood (below what stays of its text)
+      at = was;
+      kept = cut[0].length === next.length ? (cut[0][cut[1]] as Extract<Item, { t: "text" }>).text.split("\n").length : 0;
+    }
+  }
   const alt = analysesOf(next);
-  if (o.active && !alt.some((x) => x.active)) {
-    const at = items[cut[1]] as Extract<Item, { t: "text" }>, moved = withoutAnalysis(next, alt[0].kind, false);
-    if (moved) next = [...moved[0], { t: "text", x: at.x, y: at.y, text: alt[0].line, directive: true }];
+  if (at && alt.length && !alt.some((x) => x.active)) {
+    const moved = withoutAnalysis(next, alt[0].kind, false);
+    if (moved) next = [...moved[0], { t: "text", x: at.x, y: at.y + 32 * kept, text: alt[0].line, directive: true }];
   }
   commit(next);
 }

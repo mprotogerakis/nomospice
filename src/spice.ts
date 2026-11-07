@@ -547,7 +547,22 @@ const UNITS: [string, number[]][] = [
   ["C", [0, 1, 1]], ["s", [0, 0, 1]], ["Hz", [0, 0, -1]], ["F", [-1, 1, 1]], ["H", [1, -1, 1]],
 ];
 const SUP: Record<string, string> = { "2": "²", "3": "³" };
-const dimOf = (u: string) => (u === "" ? [0, 0, 0] : UNITS.find(([n]) => n === u)?.[1] ?? null);
+/** Exponents of V, A, s of a unit: a named one, or one `unitName` composed ("V/s", "V²·A"). */
+function dimOf(u: string): number[] | null {
+  if (u === "") return [0, 0, 0];
+  const named = UNITS.find(([n]) => n === u);
+  if (named) return named[1];
+  const d = [0, 0, 0], [num, den = ""] = u.split("/");
+  for (const [part, sign] of [[num, 1], [den, -1]] as const) {
+    for (const f of part.split("·").filter((x) => x && x !== "1")) {
+      const m = /^(V|A|s|W|Ω|S|J|C|Hz|F|H)(²|³|\^(-?[\d.]+))?$/.exec(f);
+      if (!m) return null;
+      const k = m[2] === "²" ? 2 : m[2] === "³" ? 3 : m[3] ? +m[3] : 1;
+      UNITS.find(([n]) => n === m[1])![1].forEach((x, j) => (d[j] += sign * k * x));
+    }
+  }
+  return d;
+}
 function unitName(d: number[]) {
   const named = UNITS.find(([, e]) => e.every((x, j) => Math.abs(x - d[j]) < 1e-9));
   if (named) return named[0];
@@ -555,6 +570,10 @@ function unitName(d: number[]) {
   const up = d.flatMap((k, j) => (k > 0 ? [part(j, k)] : [])), down = d.flatMap((k, j) => (k < 0 ? [part(j, -k)] : []));
   return !up.length && !down.length ? "" : `${up.join("·") || "1"}${down.length ? `/${down.join("·")}` : ""}`;
 }
+
+/** The x axis' unit of a run's scale vector: time s, frequency Hz, a .dc sweep of a source V or A. */
+export const xUnitOf = (scale: string) =>
+  scale === "frequency" ? "Hz" : scale === "time" ? "s" : scale.startsWith("i") ? "A" : scale.endsWith("sweep") && scale.startsWith("v") ? "V" : "";
 
 /** The unit of a product of two units (an integral over x: W·s = J, A·s = C), "" for none. */
 export function unitTimes(a: string, b: string) {
@@ -565,8 +584,9 @@ export function unitTimes(a: string, b: string) {
 /** The unit of a trace expression by dimensional analysis: `V(…)` volts, `I(…)`/`Ic(…)`… amperes,
  *  and sums, products, quotients and powers of them (V·A = W, V/A = Ω, a number is unitless and
  *  takes the other side's unit in a sum). `vector` gives a plain vector name's unit ("V" for a
- *  node). "" when it has none or it cannot tell (a sum of volts and amperes, db() inside, …). */
-export function exprUnit(expr: string, vector: (name: string) => string = () => ""): string {
+ *  node); `x` is the x axis' unit (integ, deriv). "" when it has none or it cannot tell (a sum of
+ *  volts and amperes, db() inside, …). */
+export function exprUnit(expr: string, vector: (name: string) => string = () => "", x = "s"): string {
   type D = { d: number[] | null; n?: boolean }; // n: a plain number
   const s = expr;
   let i = 0;
@@ -607,8 +627,8 @@ export function exprUnit(expr: string, vector: (name: string) => string = () => 
     const a = args()[0];
     if (/^(abs|mag|real|re|imag|im|mean|avg|rms|max|min|vecmax|vecmin)$/.test(name)) return a;
     if (name === "sqrt") return { d: a.d && a.d.map((x) => x / 2), n: a.n };
-    if (name === "integ") return mul(a, dims("s"), 1);
-    if (name === "deriv") return mul(a, dims("s"), -1);
+    if (name === "integ") return mul(a, dims(x), 1);
+    if (name === "deriv") return mul(a, dims(x), -1);
     return { d: null }; // db(), ph(), exp() …: no unit of its own here
   }
   function power(): D {

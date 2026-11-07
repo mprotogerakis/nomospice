@@ -6,7 +6,7 @@ import { Plus, X } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { removeTrace, setPlot, setTraceRight, useS } from "./store";
 import { openMenu } from "./Menu";
-import { at, integrate, si, unitTimes } from "./spice";
+import { at, integrate, si, unitTimes, xUnitOf } from "./spice";
 import { keys } from "./lib/utils";
 import type { Trace } from "./types";
 import { saveSvg, withLightTheme, xmlEscape } from "./svgExport";
@@ -121,7 +121,7 @@ export const Waveform = memo(function Waveform() {
   const traces = useS((s) => s.traces);
   const ac = !!run?.plot.startsWith("ac"); // complex: magnitude + phase panes
   const freq = run?.scale === "frequency";
-  const xUnit = freq ? "Hz" : run?.scale === "time" ? "s" : run?.scale.startsWith("i") ? "A" : run?.scale.endsWith("sweep") && run.scale.startsWith("v") ? "V" : "";
+  const xUnit = xUnitOf(run?.scale ?? "");
   const ok = useMemo(() => traces.filter((t) => t.data?.x.length), [traces]);
   // constants (reference lines: 0.5, 500m) are drawn on the top pane's axis, whatever it is now:
   // volts first, the magnitude in a Bode plot
@@ -208,7 +208,7 @@ export const Waveform = memo(function Waveform() {
           { stroke: text, grid: { stroke: grid, width: 1 }, ticks: { stroke: grid, width: 1 }, size: 72, values: yValues, font: "11px IBM Plex Mono", label: pane.unit === "" ? "expr" : undefined },
           // the right axis: its traces' own scale, in the color of its trace when it has one
           ...(!twin && anyTwin ? [{ side: 1, size: 72, values: () => [], grid: { show: false }, ticks: { show: false }, stroke: "transparent" }] : []),
-          ...(twin ? [{ scale: "y2", side: 1, stroke: (() => { const r = pane.series.filter((s) => scaleOf(pane, s) === "y2"); return new Set(r.map((s) => s.t)).size === 1 ? color(r[0].t.slot) : text; })(), grid: { show: false }, ticks: { stroke: grid, width: 1 }, size: 72, values: yValues, font: "11px IBM Plex Mono" }] : []),
+          ...(twin ? [{ scale: "y2", side: 1, stroke: (() => { const r = pane.series.filter((s) => scaleOf(pane, s) === "y2"); return new Set(r.map((s) => s.t)).size === 1 ? color(r[0].t.slot) : text; })() /* (a .dc family: one trace, several series) */, grid: { show: false }, ticks: { stroke: grid, width: 1 }, size: 72, values: yValues, font: "11px IBM Plex Mono" }] : []),
         ],
         series: [{}, ...pane.series.map((s) => ({ label: s.t.label, scale: scaleOf(pane, s), stroke: color(s.t.slot), width: 2, points: { show: false } }))],
         hooks: {

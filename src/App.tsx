@@ -180,7 +180,7 @@ async function saveFile(as = false) {
     if (moved) void loadSymbols(useS.getState().items).catch(() => {}).finally(refreshNets); // the new folder's symbols
     refreshGit();
   } catch (e) {
-    await fail(`Cannot open ${path}`)(e);
+    await fail(`Cannot save ${path}`)(e);
   }
 }
 async function newFile() {
@@ -575,9 +575,8 @@ function BottomPanel() {
   const [simulated, setSimulated] = useState(false);
   const isOpPlot = !!sim?.run?.plot.startsWith("op");
   const phasors = !!sim?.run?.plot.startsWith("ac"); // a table from .ac means one frequency: phasors
-  // .tf: its statement (output, input source) names the results
-  const items = useS((s) => s.items);
-  const tf = sim?.run?.plot.startsWith("tf") ? analysesOf(items).find((o) => o.kind === "tf")?.line ?? ".tf" : null;
+  // .tf: its statement (output, input source) names the results (only that line: no re-render per edit)
+  const tf = useS((s) => (s.sim?.run?.plot.startsWith("tf") ? analysesOf(s.items).find((o) => o.kind === "tf")?.line ?? ".tf" : null));
   const tabs: [typeof panel, string][] = [["log", "Log"], ["netlist", "Netlist"], ...(sim?.run?.op.length ? [["op", isOpPlot ? "Operating point" : phasors ? "Phasors" : "Results"] as [typeof panel, string]] : []), ["history", "History"]];
   // its share of the area (it scales with the window, like the plot's split): dragged at the top
   // edge, kept across sessions

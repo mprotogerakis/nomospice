@@ -397,6 +397,8 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
         return Err(log);
     }
     let sensors = &sensors[..];
+    // a sensor's current vector -> its name (`vsense_q1_2#branch` -> `Ib(Q1)`)
+    let named: std::collections::HashMap<String, &str> = sensors.iter().map(|s| (format!("{}#branch", s.source), s.label.as_str())).collect();
     // ngspice makes a helper source per par() in its output lines, named pa_00, pa_01 …
     // (cheap checks first, without a lowercase copy of the deck: most decks have neither)
     let pars = if !crate::schematic::contains_ci(netlist, "par(") { 0 } else {
@@ -413,7 +415,7 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
         vectors.iter().filter_map(|v| {
             let t = read(api, v)?;
             // a sensor's current is reported by its name (`I(R1)`, `Ib(Q1)`)
-            let name = sensors.iter().find(|s| v.strip_suffix("#branch") == Some(s.source.as_str())).map_or(v.clone(), |s| s.label.clone());
+            let name = named.get(v).map_or(v.clone(), |l| l.to_string());
             // types are reliable only for .op and .ac (ngspice marks .tf/.pz/.sens/noise values as "voltage")
             let unit = match (plot.starts_with("op") || phasors, t.typ) { (true, 3) => "V", (true, 4) => "A", _ => "" }.to_string();
             Some((name, *t.re.first()?, t.im.and_then(|im| im.first().copied()).unwrap_or(0.0), unit))
@@ -432,7 +434,7 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
     });
     let meas = if crate::schematic::contains_ci(netlist, ".meas") { measurements(&log, &meas_names(netlist)) } else { vec![] };
     // sensor currents listed by their names, which trace expressions take (`I(R1)`, not `vsense_r1#branch`)
-    let mut vectors: Vec<String> = vectors.into_iter().map(|v| sensors.iter().find(|s| v.strip_suffix("#branch") == Some(s.source.as_str())).map_or(v, |s| s.label.clone())).collect();
+    let mut vectors: Vec<String> = vectors.into_iter().map(|v| named.get(&v).map_or(v, |l| l.to_string())).collect();
     vectors.sort();
     Ok(Run { id, plot, scale, vectors, op, aborted, meas, log })
 }

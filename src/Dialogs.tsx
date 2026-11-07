@@ -10,7 +10,7 @@ import { closeDialog as close, Field, FIELD, Modal, numHelp, Rows, TextField } f
 import { SourceEditor } from "./SourceEditor";
 import { SimDialog } from "./SimDialog";
 import { DirectiveDialog } from "./DirectiveDialog";
-import { analysisEditable, analysisEditableAt, analysisLine, analysisLineIndex, analysisOptions, exprUnit, tokens } from "./spice";
+import { analysisEditable, analysisEditableAt, analysisLine, analysisLineIndex, analysisOptions, exprUnit, tokens, xUnitOf } from "./spice";
 import { cn } from "@/lib/utils";
 import thirdParty from "./third-party.json";
 import { checkForUpdate } from "./updater";
@@ -302,7 +302,7 @@ function TraceDialog() {
     };
     const f = e.match(/^(\w+)\((.*)\)$/);
     const unit = f && /^v?db$/i.test(f[1]) ? "dB" : f && /^(c?ph|vp)$/i.test(f[1]) ? "rad"
-      : raw && !noise ? "" : noise && /^\w+$/.test(e) ? noiseUnit(e) : exprUnit(e, vectorUnit);
+      : raw && !noise ? "" : noise && /^\w+$/.test(e) ? noiseUnit(e) : exprUnit(e, vectorUnit, xUnitOf(run?.scale ?? ""));
     if (e) addTrace(e, e, unit);
   };
   return (

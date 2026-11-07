@@ -1111,7 +1111,8 @@ pub fn sensor_currents(s: &str, sensors: &[Sensor]) -> String {
         let close = rest[open + 1..].find(')').map(|e| open + 1 + e);
         let hit = close.filter(|_| !name.is_empty()).and_then(|e| {
             let (key, arg) = (format!("{name}({})", rest[open + 1..e].trim()), rest[open + 1..e].trim());
-            sensors.iter().find(|x| x.label.eq_ignore_ascii_case(&key) || (x.pin == 0 && name.eq_ignore_ascii_case("i") && x.inst.eq_ignore_ascii_case(arg)))
+            // (`I(Q1)`: pin 1 of a two-pin part or transistor; a subcircuit's currents are per pin)
+            sensors.iter().find(|x| x.label.eq_ignore_ascii_case(&key) || (x.pin == 0 && !x.label.starts_with("Ix(") && name.eq_ignore_ascii_case("i") && x.inst.eq_ignore_ascii_case(arg)))
         });
         match (hit, close) {
             (Some(x), Some(e)) => {
@@ -1130,12 +1131,16 @@ pub fn sensor_currents(s: &str, sensors: &[Sensor]) -> String {
 }
 
 /// A pin's current by its usual name: `I(R1)`; `Ic(Q1)` `Ib(Q1)` `Ie(Q1)`; `Id(M1)` `Ig(M1)`
-/// `Is(M1)` `Ib(M1)`; `Id(J1)` …; `Ix(U1:OUT)` for a subcircuit's pins (by their names).
-fn pin_label(prefix: char, inst: &str, k: usize, npins: usize, name: &str) -> String {
+/// `Is(M1)` `Ib(M1)`; `Id(J1)` …; `Ix(U1:OUT)` for a subcircuit's pins: by their names, by number
+/// where a name is empty, shared with another pin (two GND) or would not read as one (`a)b`).
+fn pin_label(prefix: char, inst: &str, k: usize, pins: &[Pin]) -> String {
     let roles = match prefix { 'Q' => "cbes", 'M' => "dgsb", 'J' => "dgs", _ => "" };
+    let name = pins.get(k).map_or("", |p| p.name.trim());
+    let usable = !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || "_+-.".contains(c))
+        && pins.iter().filter(|p| p.name.trim().eq_ignore_ascii_case(name)).count() == 1;
     match roles.chars().nth(k) {
         Some(r) => format!("I{r}({inst})"),
-        None if prefix == 'X' && npins > 2 => format!("Ix({inst}:{})", if name.trim().is_empty() { (k + 1).to_string() } else { name.trim().to_string() }),
+        None if prefix == 'X' && pins.len() > 2 => format!("Ix({inst}:{})", if usable { name.to_string() } else { (k + 1).to_string() }),
         None => format!("I({inst})"),
     }
 }
@@ -1619,7 +1624,7 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool) -> Netlist {
             while !used.insert(node.to_lowercase()) {
                 node.push('_');
             }
-            let label = pin_label(prefix, &inst, k, npins, def.pins.get(k).map_or("", |p| p.name.as_str()));
+            let label = pin_label(prefix, &inst, k, &def.pins[..npins.min(def.pins.len())]);
             if k == 0 && !(prefix == 'X' && npins > 2) {
                 nl.probes[i] = format!("i({})", src.to_lowercase()); // (a subcircuit's pins are its currents)
             }
@@ -1947,6 +1952,13 @@ mod tests {
             assert_eq!(m(same), same);
         }
         assert_eq!(sensor_currents("I(R1)+I(R10)+II(R1)", &r1), "i(vsense_r1)+I(R10)+II(R1)");
+        // subcircuit pins: by name, by number where names repeat or do not read as one; I(U1) is none
+        let pin = |n: &str| Pin { x: 0, y: 0, name: n.into() };
+        let pins = [pin("IN"), pin("GND"), pin("GND"), pin("a)b")];
+        let labels: Vec<String> = (0..4).map(|k| pin_label('X', "U1", k, &pins)).collect();
+        assert_eq!(labels, ["Ix(U1:IN)", "Ix(U1:2)", "Ix(U1:3)", "Ix(U1:4)"]);
+        let u1 = [Sensor { source: "vsense_u1".into(), node: "y".into(), inst: "u1".into(), pin: 0, label: "Ix(U1:IN)".into() }];
+        assert_eq!(sensor_currents("I(U1)+ix(u1:in)", &u1), "I(U1)+i(vsense_u1)");
         assert_eq!(m(".meas tran p AVG 1µ*I(R1)"), ".meas tran p AVG par('1µ*i(vsense_r1)')", "multi-byte text: no panic");
         assert_eq!(m(".meas tran a AVG V(out) FROM = 1m TO =2m"), ".meas tran a AVG V(out) FROM=1m TO=2m", "blanks around =");
         assert_eq!(m(".meas tran w WHEN V(out) = 0.5 RISE = 1"), ".meas tran w WHEN V(out)=0.5 RISE=1");
