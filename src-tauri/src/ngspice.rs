@@ -285,17 +285,12 @@ fn meas_names(deck: &str) -> std::collections::HashMap<String, bool> {
 }
 
 /// The `.meas` results in ngspice's report (`name = value targ= … trig= …`, `… failed!`), for the
-/// deck's measurement `names` only: ngspice prints failure messages before the results, and other
-/// `x = y` lines are not results.
+/// deck's measurement `names` only: other `x = y` lines are not results. (Wherever they stand: the
+/// report's "Measurements for … Analysis" heading is missing for AC in older ngspice, e.g. 36.)
 fn measurements(log: &[String], names: &std::collections::HashMap<String, bool>) -> Vec<(String, Option<f64>, String, bool)> {
     let mut out = vec![];
-    let mut on = false;
     for t in log.iter().map(|l| l.trim()) {
-        if t.starts_with("Measurements for") {
-            on = true;
-            continue;
-        }
-        if !on || t.is_empty() {
+        if t.is_empty() || t.starts_with("Measurements for") {
             continue;
         }
         let at_x = |n: &str| names.get(&n.to_ascii_lowercase()).copied();
@@ -549,6 +544,10 @@ mod tests {
         assert_eq!(names, ["ratio", "error_pct", "w", "p", "tplh"], "{m:?}");
         assert!(m[0].1.is_none() && m[4].3 && !m[1].3, "a failed PARAM listed; trig/targ on the x axis, AVG not");
         assert_eq!(m[4].2, "targ=  3.0e-08 trig=  3.0e-08");
+        // ngspice 36 reports AC results without the heading
+        let log: Vec<String> = ["Warning: v1: no DC value, transient time 0 value used", ".meas ac p2 max mag(v(out)) failed!", "peak                =  3.174444e+00 at=  5.011872e+02"].map(String::from).into();
+        let m = measurements(&log, &meas_names(".meas ac peak MAX vm(out)\n.meas ac p2 MAX mag(v(out))"));
+        assert_eq!((m.len(), m[0].0.as_str(), m[1].1), (2, "p2", Some(3.174444)), "{m:?}");
     }
 
     #[test]
