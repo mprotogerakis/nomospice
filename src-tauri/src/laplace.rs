@@ -703,6 +703,7 @@ mod tests {
     /// H(s) in ngspice: H(0) at the operating point, a ramp from 1/s, a 2nd-order pole at 1 MHz.
     #[test]
     fn runs() {
+        let _s = crate::ngspice::TEST_SIM.lock(); // (one simulation at a time across the tests)
         let run = |deck: &str, v: &str| {
             let r = crate::ngspice::run(&crate::schematic::prepare(deck, None, &mut vec![])).unwrap_or_else(|e| panic!("{deck}: {e:?}"));
             crate::ngspice::trace(v, &r.scale, r.id).unwrap()
