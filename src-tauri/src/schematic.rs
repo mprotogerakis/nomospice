@@ -319,7 +319,7 @@ macro_rules! examples {
 }
 pub const EXAMPLES: &[(&str, &str)] =
     examples!("rc_transient", "rc_bode", "opamp_inverting", "ce_amplifier", "diode_sweep", "bjt_curves", "noise_rc", "phasor_rlc", "pz_sallen_key",
-        "meas_rc_timing", "buck_converter", "rectifier_rms", "analysis_tabs", "zener_prefix", "step_rc", "laplace_lowpass");
+        "meas_rc_timing", "buck_converter", "rectifier_rms", "analysis_tabs", "zener_prefix", "step_rc", "laplace_lowpass", "monte_carlo");
 
 /// LTspice writes ASCII, Latin-1 or UTF-16LE.
 pub fn decode(bytes: &[u8]) -> String {
@@ -1404,8 +1404,57 @@ pub fn prepare(text: &str, dir: Option<&std::path::Path>, warnings: &mut Vec<Str
     let mut x = Expander { warnings, out: String::new(), seen: HashSet::new(), read: true, diode: None, behavioural: vec![] };
     x.expand(text, dir, None, 0);
     x.warn_behavioural();
-    let out = crate::laplace::rewrite(&x.out, x.warnings); // (also in included files)
+    let out = crate::laplace::rewrite(&lt_random(&x.out), x.warnings); // (also in included files)
     Prepared(out, vec![], vec![])
+}
+
+/// LTspice's random functions as ngspice's, which draw anew each time a deck is read (so each run
+/// of `.step param run 1 100 1` is another sample): `mc(x,tol)`, x·(1 ± tol) uniform, is
+/// `unif(x,tol)`; `flat(x)`, uniform in ±x, is `aunif(0,x)`; `gauss(x)`, normal with σ = x, is
+/// `agauss(0,x,1)` (ngspice's own three-argument gauss stays).
+fn lt_random(text: &str) -> String {
+    if !["mc", "flat", "gauss"].iter().any(|f| contains_ci(text, f)) {
+        return text.to_string();
+    }
+    let (b, mut out, mut k) = (text.as_bytes(), String::with_capacity(text.len()), 0);
+    let word = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    while k < b.len() {
+        let call = ["mc", "flat", "gauss"].into_iter().find(|f| {
+            b.len() >= k + f.len() && b[k..k + f.len()].eq_ignore_ascii_case(f.as_bytes()) && (k == 0 || !word(b[k - 1])) && text[k + f.len()..].trim_start().starts_with('(')
+        });
+        let Some(f) = call else {
+            let c = text[k..].chars().next().unwrap_or(' ');
+            out.push(c);
+            k += c.len_utf8();
+            continue;
+        };
+        // the arguments: up to the matching parenthesis (translated too: nested calls)
+        let open = k + f.len() + (text[k + f.len()..].len() - text[k + f.len()..].trim_start().len());
+        let mut depth = 0;
+        let Some(close) = text[open..].char_indices().find_map(|(i, c)| {
+            depth += match c { '(' => 1, ')' => -1, _ => 0 };
+            (depth == 0).then_some(open + i)
+        }) else {
+            out.push_str(&text[k..]);
+            break;
+        };
+        let inner = lt_random(&text[open + 1..close]);
+        let args = {
+            let mut d = 0;
+            inner.chars().filter(|&c| {
+                d += match c { '(' | '{' => 1, ')' | '}' => -1, _ => 0 };
+                c == ',' && d == 0
+            }).count() + 1
+        };
+        match (f, args) {
+            ("mc", 2) => out.push_str(&format!("unif({inner})")),
+            ("flat", 1) => out.push_str(&format!("aunif(0,{inner})")),
+            ("gauss", 1) => out.push_str(&format!("agauss(0,{inner},1)")),
+            _ => out.push_str(&format!("{}({inner})", &text[k..k + f.len()])),
+        }
+        k = close + 1;
+    }
+    out
 }
 
 /// The warnings `prepare` would give for the schematic's own lines, without reading any
@@ -2507,6 +2556,21 @@ mod tests {
     }
 
     #[test]
+    fn monte_carlo() {
+        assert_eq!(lt_random("R1 a b {mc(1k, tol)}\n.param x=flat(1)+Gauss(2*(1+1)) y=gauss(1,0.1,3) amc(1) mc_x"), "R1 a b {unif(1k, tol)}\n.param x=aunif(0,1)+agauss(0,2*(1+1),1) y=gauss(1,0.1,3) amc(1) mc_x");
+        assert_eq!(lt_random("{mc(mc(1k,0.1),0.1)}"), "{unif(unif(1k,0.1),0.1)}", "nested");
+        // each step of `.step param run …` another sample, within the tolerance
+        let _s = SIM.lock();
+        let deck = prepare("* mc\nV1 a 0 1\nR1 a b {mc(1k,0.5)}\nR2 b 0 1k\n.op\n.end\n", None, &mut vec![]);
+        let run = crate::ngspice::run(&Prepared(deck.0, vec![], vec![".step param run 1 6 1".into()])).unwrap();
+        let v = crate::ngspice::trace("V(b)", &run.scale, run.id).unwrap();
+        let mut vs = v.re.clone();
+        vs.sort_by(f64::total_cmp);
+        vs.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+        assert!(v.re.len() == 6 && vs.len() > 3 && v.re.iter().all(|&x| (0.4 - 1e-9..=2.0 / 3.0 + 1e-9).contains(&x)), "{:?}", v.re);
+    }
+
+    #[test]
     fn pin_currents_by_name() {
         let _s = SIM.lock();
         // a transistor: a sensor at every pin, named as usual; the currents add up to zero
@@ -2680,6 +2744,13 @@ mod tests {
                     let out = crate::ngspice::trace("V(out)", &r.scale, r.id).unwrap();
                     let at = |t: f64| out.re[out.x.iter().position(|&x| x >= t).unwrap()];
                     assert!((at(2e-3) - 0.632).abs() < 0.02 && at(0.9e-3).abs() < 0.01, "{name}: {} {}", at(2e-3), at(0.9e-3));
+                }
+                "monte_carlo" => {
+                    // 20 samples: fc = 1/(2*pi*R*C) within the tolerances (1.25 … 2.09 kHz), and spread
+                    assert_eq!(run.steps.len(), 20, "{name}");
+                    let fc: Vec<f64> = run.meas.iter().filter(|m| m.0.starts_with("fc [")).filter_map(|m| m.1).collect();
+                    let (lo, hi) = fc.iter().fold((f64::MAX, 0f64), |(a, b), &v| (a.min(v), b.max(v)));
+                    assert!(fc.len() == 20 && lo > 1.24e3 && hi < 2.1e3 && hi - lo > 50.0, "{name}: {fc:?}");
                 }
                 "step_rc" => {
                     assert_eq!(run.steps, ["C=47n", "C=100n", "C=220n"], "{name}");
