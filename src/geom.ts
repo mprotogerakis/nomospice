@@ -243,7 +243,7 @@ export function dragPlan(items: Item[], lib: Lib, sel: Set<number>) {
     ...rejoin(all.map((it, i) => {
       if (it.t === "raw") return it;
       if (i < items.length && (whole.has(i) || (sel.has(i) && items[i].t !== "wire"))) {
-        return it.t === "wire" ? { ...it, x1: it.x1 + dx, y1: it.y1 + dy, x2: it.x2 + dx, y2: it.y2 + dy } : { ...it, x: it.x + dx, y: it.y + dy };
+        return shifted(it, dx, dy);
       }
       if (it.t === "wire") {
         const a = moving.has(key(it.x1, it.y1)), b = moving.has(key(it.x2, it.y2));

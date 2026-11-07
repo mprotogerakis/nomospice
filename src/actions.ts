@@ -36,8 +36,11 @@ export function copyText(): string | null {
   return its.length ? CLIP + JSON.stringify(its) : null;
 }
 
-const num = (v: unknown) => typeof v === "number" && Number.isFinite(v);
-const str = (v: unknown) => typeof v === "string";
+// (what the core takes: i32 coordinates; no line breaks or control characters a saved .asc line
+// would carry into lines of its own, no spaces in a symbol name or an attribute's key)
+const num = (v: unknown) => typeof v === "number" && Number.isInteger(v) && Math.abs(v) < 2 ** 31;
+const str = (v: unknown) => typeof v === "string" && !/[\u0000-\u001f\u007f]/.test(v);
+const word = (v: unknown) => str(v) && !/\s/.test(v as string) && (v as string).length > 0;
 /** A pasted item is only taken as one of ours (the clipboard holds whatever was copied anywhere). */
 function shape(v: unknown): Shape | null {
   const it = v as Record<string, unknown>;
@@ -46,9 +49,9 @@ function shape(v: unknown): Shape | null {
   if (!num(it.x) || !num(it.y)) return null;
   const extra = Array.isArray(it.extra) && it.extra.every(str) ? { extra: it.extra as string[] } : {};
   if (it.t === "flag" && str(it.name)) return { t: "flag", x: it.x as number, y: it.y as number, name: it.name as string, ...extra };
-  if (it.t === "text" && str(it.text)) return { t: "text", x: it.x as number, y: it.y as number, text: it.text as string, directive: !!it.directive, ...(str(it.align) && { align: it.align as string }) };
+  if (it.t === "text" && typeof it.text === "string" && !/[\u0000-\u0009\u000b-\u001f\u007f]/.test(it.text)) return { t: "text", x: it.x as number, y: it.y as number, text: it.text as string, directive: !!it.directive, ...(str(it.align) && { align: it.align as string }) };
   const attrs = it.attrs as Record<string, unknown>;
-  if (it.t === "sym" && str(it.sym) && str(it.rot) && attrs && typeof attrs === "object" && Object.values(attrs).every(str)) {
+  if (it.t === "sym" && word(it.sym) && word(it.rot) && attrs && typeof attrs === "object" && Object.keys(attrs).every(word) && Object.values(attrs).every(str)) {
     return { t: "sym", sym: it.sym as string, x: it.x as number, y: it.y as number, rot: it.rot as string, attrs: { ...(attrs as Record<string, string>) }, ...extra };
   }
   return null;
@@ -58,19 +61,25 @@ function shape(v: unknown): Shape | null {
 let clip = "";
 
 /** Copy (or cut) the selection: to the system clipboard and here. False: nothing selected. */
-export function copySelection(cut = false, data?: DataTransfer | null) {
+export function copySelection(cut = false) {
   const t = copyText();
   if (!t) return false;
   clip = t;
-  if (data) data.setData("text/plain", t);
-  else void navigator.clipboard?.writeText(t).catch(() => {});
+  void navigator.clipboard?.writeText(t).catch(() => {});
   if (cut) deleteSelection();
   return true;
 }
 
-/** Paste the system clipboard's items (also from another window), else the last copied here. */
+/** Paste the system clipboard's items (also from another window); where reading it is refused,
+ *  the last copied here. Other text there: nothing. */
 export function pasteClipboard() {
-  void (navigator.clipboard?.readText() ?? Promise.reject()).then((t) => pasteText(t) || pasteText(clip), () => pasteText(clip));
+  let read: Promise<string>;
+  try {
+    read = navigator.clipboard.readText(); // (missing on some webviews: throws)
+  } catch {
+    read = Promise.reject();
+  }
+  void read.then((t) => pasteText(t), () => pasteText(clip));
 }
 
 /** Paste clipboard text: the items follow the cursor (held at their top-left grid point) until a
