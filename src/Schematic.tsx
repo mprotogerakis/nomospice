@@ -295,8 +295,19 @@ export const Schematic = memo(function Schematic() {
   }, [size]);
   useEffect(() => {
     const onFit = () => fit();
+    // (found items: in the middle; zoomed out only as far as they need, in no further than a fit)
+    const onShow = (e: Event) => {
+      const its = ((e as CustomEvent<number[]>).detail ?? []).map((i) => items[i]).filter(Boolean);
+      const b = union(its.map((it) => box(it, lib, leftLabels(items))));
+      if (!b || !size.w) return;
+      autoFit.current = false;
+      const pad = Math.min(FIT_PADDING, size.w / 8, size.h / 8);
+      const k = clampZoom(Math.min(view.k, (size.w - 2 * pad) / Math.max(b[2] - b[0], 1), (size.h - 2 * pad) / Math.max(b[3] - b[1], 1)));
+      setView({ k, x: size.w / 2 - ((b[0] + b[2]) / 2) * k, y: size.h / 2 - ((b[1] + b[3]) / 2) * k });
+    };
     window.addEventListener("nomospice:fit", onFit);
-    return () => window.removeEventListener("nomospice:fit", onFit);
+    window.addEventListener("nomospice:show", onShow);
+    return () => (window.removeEventListener("nomospice:fit", onFit), window.removeEventListener("nomospice:show", onShow));
   });
   useLayoutEffect(() => {
     if (tool.k !== "wire") setWireStart(null);
@@ -533,6 +544,7 @@ export const Schematic = memo(function Schematic() {
       "-",
       { label: "Paste", hint: "⌘V", run: pasteClipboard },
       { label: "Select all", hint: "⌘A", run: () => set({ sel: items.flatMap((x, j) => (x.t === "raw" ? [] : [j])) }) },
+      { label: "Find…", hint: "⌘F", run: () => set({ dialog: { k: "find" } }) },
       { label: "Fit view", hint: "Space", run: fit },
       "-",
       { label: "Export schematic as SVG…", disabled: !items.some(isShape), run: () => void saveSvg(schematicSvg(items, lib), "") },

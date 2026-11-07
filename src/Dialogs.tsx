@@ -322,6 +322,52 @@ function TraceDialog() {
   );
 }
 
+/** What a search finds in an item: the words it is known by, and how it is listed. */
+function findable(it: Item): { text: string; shown: string; kind: string } | null {
+  if (it.t === "sym") {
+    const a = it.attrs;
+    return { text: [a.InstName, a.Value, a.Value2, a.SpiceLine, it.sym].filter(Boolean).join(" "), shown: [a.InstName, a.Value].filter(Boolean).join("  ") || it.sym, kind: it.sym.split(/[\\/]/).pop() ?? it.sym };
+  }
+  if (it.t === "flag") return { text: it.name, shown: it.name, kind: it.name === "0" ? "ground" : "net label" };
+  if (it.t === "text") return { text: it.text, shown: it.text.split("\n")[0], kind: it.directive ? "directive" : "comment" };
+  return null;
+}
+
+/** Find parts (name, value, model), net labels and texts: click one to select it and bring it into
+ *  view, Enter for all of them. */
+function FindDialog() {
+  const items = useS((s) => s.items);
+  const [q, setQ] = useState("");
+  const hits = useMemo(() => {
+    const t = q.trim().toLowerCase();
+    if (!t) return [];
+    return items.flatMap((it, i) => ((f) => (f && f.text.toLowerCase().includes(t) ? [{ i, ...f }] : []))(findable(it)));
+  }, [items, q]);
+  const show = (idx: number[]) => {
+    close();
+    useS.setState({ sel: idx });
+    setTimeout(() => window.dispatchEvent(new CustomEvent("nomospice:show", { detail: idx })));
+  };
+  return (
+    <Modal title="Find" ok={hits.length > 1 ? `Select all ${hits.length}` : "Select"} onSubmit={() => hits.length && show(hits.map((h) => h.i))}>
+      <Field label="Name, value or text" hint={q.trim() ? (hits.length ? undefined : "nothing found") : "a part's name or value (R1, 10k, BC547), a net label, a directive"}>
+        <input data-autofocus className={FIELD} value={q} onChange={(e) => setQ(e.target.value)} spellCheck={false} />
+      </Field>
+      {!!hits.length && (
+        <div className="flex max-h-[40vh] flex-col overflow-y-auto rounded-control border border-border">
+          {hits.slice(0, 200).map((h) => (
+            <button key={h.i} type="button" className="flex items-baseline gap-2 px-2 py-1 text-left text-xs hover:bg-surface-hover" onClick={() => show([h.i])}>
+              <span className="truncate font-mono text-text">{h.shown}</span>
+              <span className="ml-auto shrink-0 text-2xs text-text-tertiary">{h.kind}</span>
+            </button>
+          ))}
+          {hits.length > 200 && <div className="px-2 py-1 text-2xs text-text-tertiary">… {hits.length - 200} more (Enter selects all)</div>}
+        </div>
+      )}
+    </Modal>
+  );
+}
+
 /** A pane's fixed y range; both fields empty: automatic again. */
 function YRangeDialog({ pane, unit, log }: { pane: string; unit: string; log: boolean }) {
   const y = useS((s) => s.plot.y[pane]);
@@ -430,6 +476,7 @@ export const Dialogs = memo(function Dialogs() {
     }
     case "parts": return <PartsDialog replace={dialog.replace} kind0={dialog.kind} libraries={dialog.libraries} />;
     case "trace": return <TraceDialog />;
+    case "find": return <FindDialog />;
     case "yrange": return <YRangeDialog pane={dialog.pane} unit={dialog.unit} log={dialog.log} />;
     case "about": return <AboutDialog />;
   }

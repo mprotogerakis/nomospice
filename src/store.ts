@@ -21,6 +21,8 @@ export type Dialog =
   /** `replace`: choose a model for that part instead of placing a new one */
   | { k: "parts"; replace?: number; kind?: string; libraries?: boolean }
   | { k: "trace" }
+  /** find parts, labels and texts by name */
+  | { k: "find" }
   /** a pane's fixed y range (`pane`: its key in PlotView.y) */
   | { k: "yrange"; pane: string; unit: string; log: boolean }
   | { k: "about" };
