@@ -113,6 +113,14 @@ fn call(base: &Path, name: &str, args: &Value) -> Result<Value, String> {
             let mut traces = serde_json::Map::new();
             for expr in args["traces"].as_array().into_iter().flatten().filter_map(Value::as_str) {
                 traces.insert(expr.into(), match ngspice::trace(expr, &run.scale, run.id) {
+                    // a .step run: one curve per step (end to end in the trace), each downsampled
+                    Ok(t) if run.steps.len() > 1 && t.x.len() % run.steps.len() == 0 => {
+                        let n = t.x.len() / run.steps.len();
+                        let part = |v: &[f64], k: usize| downsample(&v[k * n..(k + 1) * n], points);
+                        json!({ "steps": run.steps.iter().enumerate().map(|(k, s)| json!({
+                            "step": s, "x": part(&t.x, k), "re": part(&t.re, k), "im": t.im.as_ref().map(|im| part(im, k)),
+                        })).collect::<Vec<_>>() })
+                    }
                     Ok(t) => json!({
                         "x": downsample(&t.x, points),
                         "re": downsample(&t.re, points),
@@ -123,6 +131,8 @@ fn call(base: &Path, name: &str, args: &Value) -> Result<Value, String> {
             }
             Ok(json!({
                 "ok": true, "plot": run.plot, "scale": run.scale, "aborted": run.aborted,
+                // .step: each step's label; values, measurements and traces are per step (`name [step]`)
+                "steps": run.steps,
                 "vectors": run.vectors,
                 "values": run.op.iter().map(|(n, re, im, unit)| json!({ "name": n, "re": re, "im": im, "unit": unit })).collect::<Vec<_>>(),
                 // .meas results (value null: ngspice could not evaluate it)

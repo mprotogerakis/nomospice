@@ -398,8 +398,14 @@ const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot, steps }:
     const ps = panes.flatMap((p) => p.series.filter((s) => s.t === t).map((s) => ({ s, unit: p.unit })));
     const fmt = (unit: string, v: number) => (Number.isNaN(v) ? "–" : unit === "dB" ? `${v.toFixed(2)} dB` : unit === "°" ? `∠${v.toFixed(1)}°` : si(v, unit));
     const val = (x: number | null) => (x == null || !ps.length ? "–" : ps.map(({ s, unit }) => fmt(unit, at(xs, s.y, x))).join(" "));
-    // (a .step family: each value with its step, in a tooltip)
-    const named = (x: number | null) => (x == null || !steps.length || ps.length < 2 ? undefined : panes.flatMap((p) => p.series.filter((s) => s.t === t).map((s) => `${member(p, s, steps)}: ${fmt(p.unit, at(xs, s.y, x))}`)).join("\n"));
+    // (a .step family: each value with its step, in a tooltip; each pane's series of this trace once)
+    const named = (x: number | null) => {
+      if (x == null || !steps.length || ps.length < 2) return undefined;
+      return panes.flatMap((p) => {
+        const mine = p.series.filter((s) => s.t === t);
+        return mine.map((s, k) => `${mine.length === steps.length ? steps[k] : `#${k + 1}`}: ${fmt(p.unit, at(xs, s.y, x))}`);
+      }).join("\n");
+    };
     const delta = a != null && b != null && ps.length ? ps.map(({ s, unit }) => fmt(unit, at(xs, s.y, b) - at(xs, s.y, a))).join(" ") : "–";
     return { t, val, delta, named };
   });
@@ -441,7 +447,7 @@ const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot, steps }:
               </td>
               <td className="truncate text-right text-text-secondary" title={named(hover)}>{val(hover)}</td>
               <td className="truncate text-right" title={named(a)}>{val(a)}</td>
-              <td className="truncate pr-2 text-right" title={`${named(b) ?? ""}${named(b) ? "\n" : ""}B−A: ${delta}`}>{val(b)}</td>
+              <td className="truncate pr-2 text-right" title={((n) => `${n ? `${n}\n` : ""}B−A: ${delta}`)(named(b))}>{val(b)}</td>
             </tr>
           ))}
         </tbody>

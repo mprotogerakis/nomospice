@@ -757,7 +757,7 @@ fn directive(line: &str, warnings: &mut Vec<String>) -> Option<String> {
             }
             Some(format!(".tran {}{uic}", v.join(" ")))
         }
-        Some(".step" | ".wave" | ".net" | ".savebias" | ".loadbias") => {
+        Some(".wave" | ".net" | ".savebias" | ".loadbias") => {
             warnings.push(format!("`{line}` is LTspice-only and was skipped"));
             None
         }
@@ -873,7 +873,22 @@ impl Step {
                 let spans = param_spans(text, n);
                 Ok(if spans.is_empty() { before_end(text, &format!(".param {n}={v:e}")) } else { splice(text, &spans, v) })
             }
-            Stepped::Temp => Ok(before_end(text, &format!(".options temp={v:e}"))),
+            Stepped::Temp => {
+                // the deck's own `.temp 50` / `.options … temp=50` set, else one added
+                let lines = deck_lines(text);
+                let own = lines.iter().filter(|l| l.top && !l.skip).find_map(|l| {
+                    let sp = token_spans(l.line);
+                    match l.head.as_str() {
+                        ".temp" => sp.get(1).copied(),
+                        ".options" | ".option" | ".opt" => sp.iter().find(|&&(a, e)| l.low[a..e].starts_with("temp=") && e > a + 5).map(|&(a, e)| (a + 5, e)),
+                        _ => None,
+                    }.map(|(a, e)| (l.start + a, l.start + e))
+                });
+                Ok(match own {
+                    Some(span) => splice(text, &[span], v),
+                    None => before_end(text, &format!(".options temp={v:e}")),
+                })
+            }
             Stepped::Source(n) => {
                 let low = n.to_ascii_lowercase();
                 let line = deck_lines(text).into_iter().find(|l| l.top && l.low.split_whitespace().next() == Some(low.as_str()))
@@ -881,9 +896,14 @@ impl Step {
                 // `V1 a b 5` or `V1 a b DC 5 …`: the DC value (a SINE or PULSE has none to step)
                 let sp = token_spans(line.line);
                 let k = if sp.get(3).is_some_and(|&(a, e)| line.line[a..e].eq_ignore_ascii_case("dc")) { 4 } else { 3 };
-                let (a, e) = *sp.get(k).filter(|&&(a, e)| spice_num(&line.line[a..e]).is_some() || line.line[a..e].starts_with('{'))
-                    .ok_or_else(|| format!("`.step {n}`: {n} has no DC value to step (a number, or DC <value>)"))?;
-                Ok(splice(text, &[(line.start + a, line.start + e)], v))
+                match sp.get(k).filter(|&&(a, e)| spice_num(&line.line[a..e]).is_some() || line.line[a..e].starts_with('{')) {
+                    Some(&(a, e)) => Ok(splice(text, &[(line.start + a, line.start + e)], v)),
+                    // `V1 in 0 AC 1`, a SINE: no DC value written (0): one put after the nodes
+                    None => {
+                        let at = line.start + sp.get(2).ok_or_else(|| format!("`.step {n}`: {n} has no nodes"))?.1;
+                        Ok(format!("{} DC {v:e}{}", &text[..at], &text[at..]))
+                    }
+                }
             }
         }
     }
@@ -1715,7 +1735,7 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool) -> Netlist {
                     }
                     continue;
                 }
-                stepping = l.starts_with(".step") && l[5..].starts_with(char::is_whitespace);
+                stepping = l.starts_with(".step") && (l.len() == 5 || l[5..].starts_with(char::is_whitespace));
                 if stepping {
                     nl.steps.push(uncommented(line).trim_end().to_string());
                     continue;
@@ -2404,6 +2424,10 @@ mod tests {
         let s: Vec<(String, Prepared)> = (0..st.total).map(|k| st.at(k).unwrap()).collect();
         assert_eq!(s.iter().map(|x| x.0.as_str()).collect::<Vec<_>>(), ["R=1k V1=1", "R=2k V1=1", "R=1k V1=2", "R=2k V1=2"]);
         assert!(s[1].1.text().contains(".param R=2e3\n.end") && s[3].1.text().contains("V1 a 0 DC 2e0"), "{}", s[3].1.text());
+        // a source without a DC value gets one; the deck's own .temp is the one stepped
+        let p = Prepared("* t\nV1 a 0 AC 1\n.temp 50\n.end\n".into(), vec![], vec![".step V1 list 3".into(), ".step temp list -40".into()]);
+        let t = p.steps().unwrap().unwrap().at(0).unwrap().1;
+        assert!(t.text().contains("V1 a 0 DC 3e0 AC 1") && t.text().contains(".temp -4e1") && !t.text().contains("options"), "{}", t.text());
         assert!(parse_step(".step VDMOS IRF530(Rd) 1m 10m 1m").unwrap_err().contains("model parameter"));
         assert!(parse_step(".step param x 0 1 1e-300").unwrap_err().contains("more than"), "no overflow");
         assert_eq!(short_num(1000.5), "1.0005k");

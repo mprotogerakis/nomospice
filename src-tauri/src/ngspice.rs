@@ -623,11 +623,12 @@ fn steps_joined(each: Vec<Trace>) -> Result<Trace, String> {
     let grid: Vec<f64> = if same {
         each[0].x.clone()
     } else {
-        let longest = each.iter().map(|t| &t.x).max_by_key(|x| x.len()).unwrap();
+        let cap = 3 * each.iter().map(|t| t.x.len()).max().unwrap_or(0);
         let mut g: Vec<f64> = each.iter().flat_map(|t| t.x.iter().copied()).collect();
         g.sort_by(|a, b| (dir * a).total_cmp(&(dir * b)));
         g.dedup_by(|a, b| (*a - *b).abs() <= 1e-12 * a.abs().max(b.abs()));
-        if g.len() > 3 * longest.len() { longest.clone() } else { g }
+        // (many steps: thinned evenly to 3x the longest step, still from the first x to the last)
+        if g.len() > cap && cap > 1 { (0..cap).map(|k| g[k * (g.len() - 1) / (cap - 1)]).collect() } else { g }
     };
     // linear between samples, the end value beyond (a step that stopped early), none where a step
     // has no data (a gap)
