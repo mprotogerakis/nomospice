@@ -76,6 +76,8 @@ export interface PlotView {
   fft: { lo: number; hi: number; time: { zoom: [number, number] | null; a: number | null; b: number | null } } | null;
   /** per pane (by its unit; `fft:` in the spectrum): log scale, fixed range */
   y: Record<string, { log?: boolean; lo?: number; hi?: number }>;
+  /** an .ac result as a Nyquist or Nichols plot instead of the Bode panes */
+  polar?: "nyquist" | "nichols";
 }
 const NO_PLOT: PlotView = { kind: "", zoom: null, a: null, b: null, fft: null, y: {} };
 export const setPlot = (p: Partial<PlotView>) => useS.setState({ plot: { ...useS.getState().plot, ...p } });

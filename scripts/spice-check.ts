@@ -223,6 +223,7 @@ assert.equal(numInfo("1Meg", "Hz")!.text, "= 1MegHz"); // not "1M", the milli tr
   assert.equal(exprUnit("deriv(i(v1))", undefined, "V"), "", "over a .dc sweep: not named (no S, no W)");
   assert.equal(exprUnit("integ(i(v1))", undefined, "V"), "");
   assert.equal(exprUnit("integ(v(a))", undefined, "°C"), "", "an x unit it does not know");
+  assert.equal(exprUnit("group_delay(v(out)/v(in))", undefined, "Hz"), "s");
   assert.equal(exprUnit("integ(v(a))", undefined, ""), "", "a temperature or resistance sweep");
 }
 

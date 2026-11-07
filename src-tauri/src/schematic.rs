@@ -2831,6 +2831,12 @@ mod tests {
                     let at = |t: f64| out.re[out.x.iter().position(|&x| x >= t).unwrap()];
                     assert!((at(2e-3) - 0.632).abs() < 0.02 && at(0.9e-3).abs() < 0.01, "{name}: {} {}", at(2e-3), at(0.9e-3));
                 }
+                "rc_bode" => {
+                    // the group delay, -dφ/dω: RC at low frequencies, about half of it at fc (the first point past it)
+                    let gd = crate::ngspice::trace("group_delay(V(out))", &run.scale, run.id).unwrap();
+                    let at = |f: f64| gd.re[gd.x.iter().position(|&x| x >= f).unwrap()];
+                    assert!((at(10.0) - 1e-4).abs() < 1e-6 && (at(1591.0) - 0.5e-4).abs() < 4e-6, "{name}: {} {}", at(10.0), at(1591.0));
+                }
                 "monte_carlo" => {
                     // 20 samples: fc = 1/(2*pi*R*C) within the tolerances (1.25 … 2.09 kHz), and spread
                     assert_eq!(run.steps.len(), 20, "{name}");

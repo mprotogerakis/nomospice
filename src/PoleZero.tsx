@@ -39,7 +39,7 @@ function branches(steps: P[][]): (P | null)[][] {
 }
 
 /** Tick step for a span: 1, 2 or 5 × 10^n, about six ticks. */
-const tickStep = (span: number) => { const e = 10 ** Math.floor(Math.log10(span / 6)); return [1, 2, 5, 10].map((m) => m * e).find((s) => span / s <= 8) ?? 10 * e; };
+export const tickStep = (span: number) => { const e = 10 ** Math.floor(Math.log10(span / 6)); return [1, 2, 5, 10].map((m) => m * e).find((s) => span / s <= 8) ?? 10 * e; };
 
 export const PoleZero = memo(function PoleZero({ run }: { run: Run }) {
   // ngspice's NaN/inf arrive as null (JSON): left out, not drawn at the origin

@@ -4,12 +4,13 @@ import uPlot from "uplot";
 import { create } from "zustand";
 import { Plus, X } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
-import { removeTrace, setPlot, setTracePane, setTraceRight, setYAxis, showFft, useS } from "./store";
+import { addTrace, removeTrace, setPlot, setTracePane, setTraceRight, setYAxis, showFft, useS } from "./store";
 import { openMenu } from "./Menu";
 import { at, fftFreqs, fftSize, integrate, si, spectrum, unitTimes, xUnitOf } from "./spice";
 import { keys } from "./lib/utils";
 import type { Trace } from "./types";
 import { saveSvg, withLightTheme, xmlEscape } from "./svgExport";
+import { Polar, type Curve } from "./Nyquist";
 
 /** A plotted curve: of trace `t`, curve `k` of its `n` in the pane (a .step or nested .dc family);
  *  its values in `u`, `r`: wanted on the right axis (moved there, or moved into a pane of
@@ -242,6 +243,16 @@ export const Waveform = memo(function Waveform() {
     return panes;
   }, [shown, lines, signals, zero, seg]);
 
+  // an .ac result as Nyquist (Im over Re) or Nichols (dB over phase) curves, one per step
+  const polar = useS((s) => s.plot.polar);
+  const polarOn = ac && !!polar && signals.some((t) => t.data!.im);
+  const steps = run?.steps ?? NO_STEPS;
+  const curves = useMemo<Curve[]>(() => !polarOn ? [] : signals.filter((t) => t.data!.im).flatMap((t) => {
+    const n = Math.max(1, Math.floor(t.data!.re.length / seg));
+    const [x, y] = polar === "nyquist" ? [t.data!.re, t.data!.im!] : [phase(t, seg), mag(t)];
+    return Array.from({ length: n }, (_, k) => ({ label: `${t.label}${((m) => (m ? ` ${m}` : ""))(curveName(t, k, n, steps))}`, slot: t.slot, x: x.slice(k * seg, (k + 1) * seg), y: y.slice(k * seg, (k + 1) * seg) }));
+  }), [polarOn, polar, signals, seg, steps]);
+
   const host = useRef<HTMLDivElement>(null);
   const paneEls = useRef<(HTMLDivElement | null)[]>([]);
   // zoom + cursors live in the store (kept across re-runs, reset per document / analysis kind)
@@ -408,7 +419,7 @@ export const Waveform = memo(function Waveform() {
     };
     // size is read via sizeRef: resizing must not rebuild the plots
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [panes, ac, logX, xUnit, xs, size.w > 0, yAxes, spec]);
+  }, [panes, ac, logX, xUnit, xs, size.w > 0, yAxes, spec, polarOn]); // (polar: no pane elements to draw in; back: new ones)
 
   useEffect(() => {
     const h = Math.floor(size.h / Math.max(panes.length, 1));
@@ -433,6 +444,11 @@ export const Waveform = memo(function Waveform() {
           { label: "Reset zoom", hint: "dbl-click", disabled: !panes.length, run: () => { setPlot({ zoom: null }); plots.current[0]?.setScale("x", { min: xs[0], max: xs[xs.length - 1] }); } },
           { label: "Clear cursors", run: () => setPlot({ a: null, b: null }) },
           { label: "Add trace…", disabled: !run, run: () => useS.setState({ dialog: { k: "trace" } }) },
+          // (a loop gain's stability: where it passes -1)
+          ...(ac && signals.some((t) => t.data!.im) ? [
+            { label: polar ? "Bode plot" : "Nyquist plot", hint: polar ? undefined : "Im over Re", run: () => setPlot({ polar: polar ? undefined : "nyquist" }) },
+            ...(polar !== "nichols" ? [{ label: "Nichols plot", hint: "dB over phase", run: () => setPlot({ polar: "nichols" }) }] : polar ? [{ label: "Nyquist plot", hint: "Im over Re", run: () => setPlot({ polar: "nyquist" }) }] : []),
+          ] : []),
           ...(tran ? [spec ? { label: "Back to the transient", run: () => showFft(null) }
             : { label: "FFT (spectrum)", hint: a != null && b != null && a !== b ? "of A–B" : zoom ? "of the shown range" : "of the whole run", disabled: !panes.length || !(range[1] > range[0]), run: () => showFft(range) }] : []),
           ...(pane ? ["-" as const,
@@ -442,11 +458,12 @@ export const Waveform = memo(function Waveform() {
           ] : []),
           "-",
           { label: "Copy data as CSV", disabled: !panes.length, run: () => navigator.clipboard.writeText(csv(xs, xUnit, panes, run?.steps ?? [])) },
-          { label: "Export plot as SVG…", disabled: !panes.length, run: () => void saveSvg(plotSvg(plots.current, panes, useS.getState().plot), "-plot") },
+          { label: "Export plot as SVG…", hint: polarOn ? "Bode plot only" : undefined, disabled: !panes.length || polarOn, run: () => void saveSvg(plotSvg(plots.current, panes, useS.getState().plot), "-plot") },
           { label: "Remove all traces", danger: true, disabled: !traces.length, run: () => useS.setState({ traces: [] }) },
         ]);
       }}>
-        {panes.map((p, i) => <div key={`${p.unit}-${i}`} ref={(el) => { paneEls.current[i] = el; }} />)}
+        {polarOn ? <Polar curves={curves} freqs={xs} mode={polar!} onHover={(x) => useHover.setState({ x })} />
+          : panes.map((p, i) => <div key={`${p.unit}-${i}`} ref={(el) => { paneEls.current[i] = el; }} />)}
         {!panes.length && (
           <div className="absolute inset-0 flex items-center justify-center text-xs text-text-tertiary">
             {!run ? `Run a simulation (${keys("⌘↵")}).` : zero ? "All AC results are 0: no source has an AC amplitude. Give the input source one, e.g. AC 1." : run.plot.startsWith("noise") ? "Add a trace: onoise_spectrum or inoise_spectrum." : run.plot.startsWith("sens") ? "Add a trace: the sensitivity of a part, e.g. r1." : "Click a wire to plot its voltage, a component to plot its current."}
@@ -548,6 +565,8 @@ const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot, spec, st
                 // already; not the Bode panes, nor in a spectrum)
                 ...(t.data?.im || t.data?.constant || spec ? [] : panes.filter((p) => p.own && p.unit !== "dB" && p.unit !== "°" && p.unit !== t.unit && !p.series.some((s) => s.t === t) && p.series.every((s) => s.u === p.unit || s.u === t.unit)).map((p) => ({ label: `Into the ${p.unit || "unitless"} pane`, hint: "its right axis", run: () => setTracePane(t.expr, p.unit) }))),
                 ...(t.pane != null && !spec && !t.data?.im ? [{ label: moved(t) ? `Back to its own pane (${t.unit || "unitless"})` : `Not into the ${t.pane || "unitless"} pane any more`, hint: moved(t) ? undefined : "it would go there with traces of its own", run: () => setTracePane(t.expr, undefined) }] : []),
+                // (an .ac result: -dφ/dω, how long a band of frequencies takes through it)
+                ...(t.data?.im && plot.startsWith("ac") ? [{ label: "Plot group delay", hint: `τg(${t.label})`, run: () => void addTrace(`τg(${t.label})`, `group_delay(${t.expr})`, "s") }] : []),
                 { label: "Copy expression", hint: t.expr, run: () => navigator.clipboard.writeText(t.expr) },
                 { label: `Remove ${t.label}`, danger: true, run: () => removeTrace(t.expr) },
               ]))}>
