@@ -287,11 +287,13 @@ fn meas_names(deck: &str) -> std::collections::HashMap<String, bool> {
 }
 
 /// The `.meas` results in ngspice's report (`name = value targ= … trig= …`, `… failed!`), for the
-/// deck's measurement `names` only: other `x = y` lines are not results. (Wherever they stand: the
-/// report's "Measurements for … Analysis" heading is missing for AC in older ngspice, e.g. 36.)
+/// deck's measurement `names` only: other `x = y` lines are not results. From the report's
+/// "Measurements for … Analysis" heading on; older ngspice (36) prints none for AC: then all lines.
 fn measurements(log: &[String], names: &std::collections::HashMap<String, bool>) -> Vec<(String, Option<f64>, String, bool)> {
     let mut out: Vec<(String, Option<f64>, String, bool)> = vec![];
-    for t in log.iter().map(|l| l.trim()) {
+    // from the report's heading where there is one (an earlier `x = y` echo is not a result)
+    let from = log.iter().position(|l| l.trim().starts_with("Measurements for")).unwrap_or(0);
+    for t in log[from..].iter().map(|l| l.trim()) {
         if t.is_empty() || t.starts_with("Measurements for") {
             continue;
         }

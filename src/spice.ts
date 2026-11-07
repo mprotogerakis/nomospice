@@ -620,7 +620,8 @@ export function exprUnit(expr: string, vector: (name: string) => string = () => 
     i += id[0].length;
     const name = id[0].toLowerCase();
     ws();
-    if (s[i] !== "(") return /^(pi|e|boltz|echarge|kelvin|planck)$/.test(name) ? { d: [0, 0, 0], n: true } : dims(vector(id[0]));
+    // (a vector of no known unit makes the whole expression's unknown, not dimensionless)
+    if (s[i] !== "(") return /^(pi|e|boltz|echarge|kelvin|planck)$/.test(name) ? { d: [0, 0, 0], n: true } : ((u) => (u ? dims(u) : { d: null }))(vector(id[0]));
     i++;
     if (/^v[mri]?$/.test(name)) return raw(), dims("V");
     if (/^i[cbedgsx]?$/.test(name)) return raw(), dims("A");

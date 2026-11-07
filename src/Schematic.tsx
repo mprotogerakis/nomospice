@@ -460,6 +460,7 @@ export const Schematic = memo(function Schematic() {
     // a part: its current, and each pin's where it has its own (a transistor's Ib, a subcircuit's pins)
     const own = it?.t === "sym" && nets ? partCurrent(nets, i) : "";
     const plot: MenuItem[] = !probing || !it ? [] : it.t !== "sym" ? (canProbe(it) ? [{ label: `Plot V(${net ?? "?"})`, run: () => probe(it) }] : [])
+      : !nets ? (canProbe(it) ? [{ label: "Plot its current", run: () => probe(it) }] : []) // (no fresh netlist yet: the probe re-runs first)
       : [...(own ? [{ label: `Plot ${own}`, run: () => probe(it) }] : []),
         ...(nets?.pin_currents[i] ?? []).flatMap((c, k) => (c && c !== own ? [{ label: `Plot ${c}`, run: () => probe(it, false, k) }] : []))];
     // two-pin parts: their power too (LTspice: alt-click)

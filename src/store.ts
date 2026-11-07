@@ -332,7 +332,8 @@ export function closeTab(kind: Analysis) {
     }
   }
   const alt = analysesOf(next);
-  if (at && alt.length && !alt.some((x) => x.active)) {
+  // (an active analysis of ngspice's own left, .pss: it runs as it is, none is added beside it)
+  if (at && alt.length && !alt.some((x) => x.active) && !activeLines(next, ANY_ANALYSIS)) {
     const moved = withoutAnalysis(next, alt[0].kind, false);
     if (moved) next = [...moved[0], { t: "text", x: at.x, y: at.y + 32 * kept, text: alt[0].line, directive: true }];
   }

@@ -299,11 +299,12 @@ function TraceDialog() {
     const vectorUnit = (n: string) => {
       const v = vectors.find((x) => x.toLowerCase() === n.toLowerCase());
       // (a device parameter @m1[gm] … has a unit of its own: none rather than a wrong one)
-      return !v ? "" : v === run?.scale ? { time: "s", frequency: "Hz" }[v] ?? "" : /#branch$|^@.*\[i/i.test(v) ? "A" : v.startsWith("@") ? "" : "V";
+      return !v ? "" : v === run?.scale ? xUnitOf(v) : /#branch$|^@.*\[i/i.test(v) ? "A" : v.startsWith("@") ? "" : "V";
     };
     const f = e.match(/^(\w+)\((.*)\)$/);
     const unit = f && /^v?db$/i.test(f[1]) ? "dB" : f && /^(c?ph|vp)$/i.test(f[1]) ? "rad"
-      : noise ? (/^\w+$/.test(e) ? noiseUnit(e) : "") : raw ? "" : exprUnit(e, vectorUnit, xUnitOf(run?.scale ?? ""));
+      : noise ? ((a) => (/^\w+$/.test(a) ? noiseUnit(a) : ""))(f && /^(mag|vm|real|re|abs)$/i.test(f[1]) ? f[2] : e) // (a spectrum, or a magnitude of one)
+      : raw ? "" : exprUnit(e, vectorUnit, xUnitOf(run?.scale ?? ""));
     if (e) addTrace(e, e, unit);
   };
   return (

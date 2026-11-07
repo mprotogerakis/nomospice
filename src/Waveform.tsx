@@ -178,6 +178,7 @@ export const Waveform = memo(function Waveform() {
     const h = Math.floor(size.h / panes.length);
     // one pane with a right axis: the others keep the same width free, so their x axes line up
     const anyTwin = panes.some((p) => p.series.some((s) => scaleOf(p, s) === "y2"));
+    let dragFrom: uPlot | null = null; // the pane a drag started in (the others follow it, synced)
     panes.forEach((pane, pi) => {
       const el = paneEls.current[pi];
       if (!el) return;
@@ -219,6 +220,7 @@ export const Waveform = memo(function Waveform() {
               down = e.clientX;
               // shift-drag marks the range A–B (its statistics) instead of zooming; in every pane (synced)
               all.forEach((o) => (o.cursor.drag!.setScale = !e.shiftKey));
+              dragFrom = u;
               if (e.detail === 1) before = { a: useS.getState().plot.a, b: useS.getState().plot.b };
             });
             u.over.addEventListener("click", (e) => {
@@ -257,7 +259,9 @@ export const Waveform = memo(function Waveform() {
             const range: [number, number] = [u.posToVal(u.select.left, "x"), u.posToVal(u.select.left + u.select.width, "x")];
             // drag-zoom (uPlot applies it after this hook): remember it as the user's zoom
             if (u.cursor.drag!.setScale) return setPlot({ zoom: range });
-            // shift-drag: the cursors at its ends, the box gone (the shading between A and B stays)
+            // shift-drag: the cursors at its ends, the box gone (the shading between A and B stays);
+            // once, from the pane it was made in
+            if (u !== dragFrom) return;
             setPlot({ a: range[0], b: range[1] });
             all.forEach((o) => o.setSelect({ left: 0, top: 0, width: 0, height: 0 }, false));
           }],

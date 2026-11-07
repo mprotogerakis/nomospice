@@ -203,6 +203,7 @@ assert.equal(numInfo("1Meg", "Hz")!.text, "= 1MegHz"); // not "1M", the milli tr
   assert.equal(exprUnit("db(v(out))"), "");
   assert.equal(exprUnit("p_ges", vec), "V", "a node by its name");
   assert.equal(exprUnit("v1#branch*out", vec), "W");
+  assert.equal(exprUnit("v(out)*@m1[gm]", (n) => (n.startsWith("@") ? "" : "V")), "", "a factor of unknown unit");
   assert.equal(exprUnit("v(a)^2"), "V²");
   assert.equal(exprUnit("v(a"), "V", "an open call: what was read");
   assert.equal(exprUnit("v(a) v(b)"), "", "not one expression");
