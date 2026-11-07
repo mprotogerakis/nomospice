@@ -221,23 +221,13 @@ impl P<'_> {
     }
     fn atom(&mut self) -> Result<R, String> {
         match self.peek() {
-            // `{…}`: SPICE's expression braces, read as a group
-            Some('{') => {
-                let rest = &self.s[self.i..];
-                let end = rest.find('}').ok_or("a { without its }")?;
-                let mut inner = P { s: &rest[1..end], i: 0, d: self.d };
-                let a = inner.sum()?;
-                if inner.peek().is_some() {
-                    return Err(format!("cannot read `{}`", &rest[1..end]));
-                }
-                self.i += end + 1;
-                Ok(a)
-            }
-            Some('(') => {
+            // `{…}`: SPICE's expression braces, a group like `(…)`
+            Some(c @ ('{' | '(')) => {
                 self.i += 1;
                 let a = self.sum()?;
-                if self.peek() != Some(')') {
-                    return Err("a ( without its )".into());
+                let close = if c == '{' { '}' } else { ')' };
+                if self.peek() != Some(close) {
+                    return Err(format!("a {c} without its {close}"));
                 }
                 self.i += 1;
                 Ok(a)
@@ -276,7 +266,7 @@ impl P<'_> {
                 if mentions_s(text) {
                     return Err(format!("`{text}`: only a ratio of polynomials in s runs (no delay exp(-s*T), no sqrt(s))"));
                 }
-                if ["v", "i"].iter().any(|f| name.eq_ignore_ascii_case(f)) && text.len() > name.len() {
+                if probes(text) {
                     return Err(format!("`{text}`: no voltages or currents in it (an E source's input is its control nodes)"));
                 }
                 // (inner braces: one pair around the whole coefficient is what ngspice takes)
@@ -309,6 +299,19 @@ fn constant(r: &R) -> Option<C> {
 /// listed with the results.
 pub fn internal(v: &str) -> bool {
     v.ends_with("#lapy") || v.rsplit_once("#lapz").is_some_and(|(_, k)| !k.is_empty() && k.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// Whether `t` reads a voltage or current (`v(ctl)`, `abs(i(R1))`, `vdb(x)`): numparam cannot.
+fn probes(t: &str) -> bool {
+    const F: [&str; 12] = ["v", "i", "vm", "vp", "vr", "vi", "vdb", "im", "ip", "ir", "ii", "idb"];
+    let b = t.as_bytes();
+    let word = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    (0..b.len()).any(|k| {
+        (k == 0 || !word(b[k - 1])) && {
+            let n = b[k..].iter().take_while(|&&c| word(c)).count();
+            n > 0 && t[k + n..].trim_start().starts_with('(') && F.iter().any(|f| t[k..k + n].eq_ignore_ascii_case(f))
+        }
+    })
 }
 
 /// Whether `s` occurs in `t` as a word of its own.
@@ -387,7 +390,13 @@ fn cancel(num: &[f64], den: &[f64]) -> Option<(Vec<f64>, Vec<f64>)> {
         }
         (x, y) = (y, unit(&rem));
     };
-    let (qn, qd) = (divmod(&pn, &g).0, divmod(&pd, &g).0);
+    // (what rounding left of a coefficient that is 0, `s*…` below: 0 again, or an integrator
+    // would read as a pole at ±1e-8)
+    let zeroed = |p: Vec<f64>| {
+        let m = p.iter().fold(0f64, |m, v| m.max(v.abs()));
+        p.into_iter().map(|v| if v.abs() < 1e-9 * m { 0.0 } else { v }).collect::<Vec<_>>()
+    };
+    let (qn, qd) = (zeroed(divmod(&pn, &g).0), zeroed(divmod(&pd, &g).0));
     // (the same function at a few points, or the tolerance took a factor that was not shared:
     // poles far apart, a high order)
     let at = |p: &[f64], z: (f64, f64)| p.iter().rev().fold((0.0, 0.0), |(a, b), &c| (a * z.0 - b * z.1 + c, a * z.1 + b * z.0));
@@ -433,7 +442,8 @@ fn divmod(a: &[f64], b: &[f64]) -> (Vec<f64>, Vec<f64>) {
 /// the states by the lowest power below, so they stay near the input's size (ngspice's voltage
 /// tolerance is 1 µV: unscaled, a 1 MHz pole's state would be ~1e-13 V). Integrators (no s⁰
 /// below) leak through 1 nS, so the operating point exists without a loop around them too (a DC
-/// input on one has none: there it is ~1e9 times the input; `.tran … uic` starts it at 0).
+/// input on one has none: there it is ~1e9 times the input, 1e18 for 1/s²; `.tran … uic`
+/// starts them at 0).
 fn realise(name: &str, n: &[&str], h: &R) -> String {
     let R(num, den) = h;
     let ord = den.len() - 1;
@@ -512,9 +522,10 @@ pub fn rewrite(text: &str, warnings: &mut Vec<String>) -> String {
     let mut out = String::with_capacity(text.len());
     let (mut k, mut subs, mut inside) = (0, Vec::<String>::new(), vec![]);
     while k < lines.len() {
-        let low = lines[k].trim_start().to_ascii_lowercase();
+        let head = lines[k].trim_start();
+        let low = if head.starts_with('.') { head.get(..7).unwrap_or(head).to_ascii_lowercase() } else { String::new() };
         if low.starts_with(".subckt") {
-            subs.push(low.split_whitespace().nth(1).unwrap_or("").to_string());
+            subs.push(head.split_whitespace().nth(1).unwrap_or("").to_ascii_lowercase());
         } else if low.starts_with(".ends") {
             subs.pop();
         }
@@ -559,6 +570,7 @@ pub fn rewrite(text: &str, warnings: &mut Vec<String>) -> String {
     }
     if let Some((_, first)) = inside.first() {
         let mut subs: Vec<&str> = inside.iter().map(|(s, _)| s.as_str()).collect();
+        subs.sort_unstable();
         subs.dedup();
         warnings.push(format!("Laplace sources that cannot run in subcircuit{} {} (ngspice stops if the circuit uses one): {first}", if subs.len() > 1 { "s" } else { "" }, subs.join(", ")));
     }
@@ -642,6 +654,12 @@ mod tests {
         assert!(coefficients("0/0").unwrap_err().contains("denominator is 0"));
         assert_eq!(c("sqrt({k})/(1+s)").0, ["{sqrt((k))}"]);
         assert!(coefficients("v(ctl)/(1+s)").unwrap_err().contains("no voltages"));
+        assert!(coefficients("abs(V (ctl))/(1+s)").unwrap_err().contains("no voltages") && coefficients("vdb(x)/(1+s)").is_err());
+        assert!(coefficients("{vin*2}/(1+s)").is_ok() && coefficients("sqrt(iq)/(1+s)").is_ok(), "names, not calls");
+        assert_eq!(c("{k*{a}}/(1+s)").0, ["{(k)*(a)}"], "nested braces");
+        // a PI zero cancelling the plant's pole: an integrator still (0 below, exactly)
+        let R(_, d) = coefficients("(1+s*0.47m)/(s*0.47m)*3.3/(1+s*0.47m)/(1+s*11u)").unwrap();
+        assert!(d[0] == C::N(0.0) && d.len() == 3, "{d:?}");
         assert_eq!(c("k*(s-1k)/(s+1k)").0, ["{(k)*(-1e3)}", "{k}"]);
         assert!(coefficients("(-2)^0.5/(1+s)").unwrap_err().contains("not a number"));
         assert!(coefficients(&format!("{}1{}", "(".repeat(100_000), ")".repeat(100_000))).unwrap_err().contains("deep"));
