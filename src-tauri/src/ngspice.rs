@@ -383,15 +383,27 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
     api.command("remcirc");
     let id = RUNS.fetch_add(1, Ordering::SeqCst) + 1; // the previous run's results are gone now
     take_log();
-    let decks: Vec<(&str, &str)> = if steps.is_empty() { vec![("", text)] } else { steps.iter().map(|(l, p)| (l.as_str(), p.text())).collect() };
+    let total = steps.as_ref().map_or(1, |s| s.total);
     // (label, plot, log) per step done; a later step that failed: its log, and the rest stop
     let mut done: Vec<(String, String, Vec<String>)> = vec![];
     let mut failed = vec![];
-    for (k, (label, deck)) in decks.iter().enumerate() {
+    for k in 0..total {
+        // each step's deck when it runs (a big deck: not a thousand copies at once)
+        let step = steps.as_ref().map(|s| s.at(k)).transpose().map_err(|e| vec![format!(".step: {e}")]);
+        let (label, deck) = match &step {
+            Ok(Some((l, p))) => (l.as_str(), p.text()),
+            Ok(None) => ("", text),
+            Err(e) if done.is_empty() => return Err(e.clone()),
+            Err(e) => {
+                failed = e.clone();
+                break;
+            }
+        };
         if k > 0 {
             api.command("remcirc"); // (its plot stays)
         }
-        match one_run(api, deck, stop) {
+        // (a step whose analysis made no plot: ngspice's current plot is still the step before's)
+        match one_run(api, deck, stop).and_then(|r| if done.iter().any(|d| d.1 == r.0) { Err(r.1) } else { Ok(r) }) {
             Ok((plot, log, halted)) => {
                 done.push((label.to_string(), plot, log));
                 if halted || stop() {
@@ -410,7 +422,7 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
         Some(n) if n >= 2 => format!("noise{}", n - 1),
         _ => d.1.clone(),
     }).collect();
-    *SENSORS.lock().unwrap_or_else(|e| e.into_inner()) = (id, Some(sensors.clone()), if steps.is_empty() { vec![] } else { plots.clone() });
+    *SENSORS.lock().unwrap_or_else(|e| e.into_inner()) = (id, Some(sensors.clone()), if steps.is_none() { vec![] } else { plots.clone() });
     let plot0 = &done[0].1;
     let sensors = &sensors[..];
     // a sensor's current vector -> its name (`vsense_q1_2#branch` -> `Ib(Q1)`)
@@ -452,13 +464,13 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
     if !scale.is_empty() || plot != *plot0 {
         scale = scale2;
     }
-    let log: Vec<String> = if steps.is_empty() { done[0].2.clone() } else {
+    let log: Vec<String> = if steps.is_none() { done[0].2.clone() } else {
         done.iter().flat_map(|(l, _, log)| std::iter::once(format!("--- .step {l}")).chain(log.iter().cloned())).chain(failed).collect()
     };
     let aborted = log.iter().any(|l| {
         let l = l.to_lowercase();
         l.contains("aborted") || l.contains("timestep too small") || l.contains("simulation interrupted")
-    }) || done.len() < decks.len();
+    }) || done.len() < total;
     // .meas: per step, named with it (`tdelay [R=1k]`)
     let meas = if !crate::schematic::contains_ci(text, ".meas") { vec![] } else {
         let names = meas_names(text);
@@ -467,7 +479,7 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
     // sensor currents listed by their names, which trace expressions take (`I(R1)`, not `vsense_r1#branch`)
     let mut vectors: Vec<String> = vectors.into_iter().map(|v| named.get(&v).map_or(v, |l| l.to_string())).collect();
     vectors.sort();
-    Ok(Run { id, plot, scale, vectors, op, aborted, meas, log, steps: if steps.is_empty() { vec![] } else { done.iter().map(|d| d.0.clone()).collect() } })
+    Ok(Run { id, plot, scale, vectors, op, aborted, meas, log, steps: if steps.is_none() { vec![] } else { done.iter().map(|d| d.0.clone()).collect() } })
 }
 
 /// Load `deck`, run it (background thread, so `halt` can stop it): its plot, its log, whether it
@@ -539,6 +551,7 @@ pub fn trace(expr: &str, scale: &str, run: u64) -> Result<Trace, String> {
     // (the sensors of the run asked about; another run's: the results are gone anyway, see below)
     let (of, sensors, steps) = SENSORS.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let sensors = sensors.filter(|_| of == run).unwrap_or_else(|| std::sync::Arc::from([]));
+    let steps = if of == run { steps } else { vec![] }; // (another run's: gone, the RUNS check below says so)
     let (named, problem) = crate::schematic::sensor_currents(expr, &sensors);
     let (shown, expr) = (expr, named.as_str());
     let unname = |log: String| sensors.iter().fold(log, |l, s| l.replace(&format!("i({})", s.source), &s.label).replace(&format!("{}#branch", s.source), &s.label));
@@ -583,27 +596,36 @@ pub fn trace(expr: &str, scale: &str, run: u64) -> Result<Trace, String> {
         }
         each.push(t);
     }
-    Ok(if each.len() == 1 { each.pop().unwrap() } else { steps_joined(each) })
+    if each.len() == 1 { Ok(each.pop().unwrap()) } else { steps_joined(each) }
 }
 
 /// The steps' curves of one trace as one, end to end over a shared x (each step's own where they
-/// agree, a .ac or .dc; else the union of their x, each step interpolated onto it: .tran picks its
-/// own time points), so the plot shows them as a family like a nested .dc.
-fn steps_joined(each: Vec<Trace>) -> Trace {
+/// agree, a .ac or .dc; else, .tran picking its own time points, the union of their x, or the
+/// densest step's where that would grow past three times it: steps × points stays bounded), each
+/// step interpolated onto it, so the plot shows them as a family like a nested .dc.
+fn steps_joined(each: Vec<Trace>) -> Result<Trace, String> {
     let same = each.windows(2).all(|w| w[0].x.len() == w[1].x.len() && w[0].x.iter().zip(&w[1].x).all(|(a, b)| (a - b).abs() <= 1e-12 * a.abs().max(b.abs())));
     let rising = |x: &[f64]| x.windows(2).all(|w| w[1] >= w[0]);
-    let grid: Vec<f64> = if same || !each.iter().all(|t| rising(&t.x)) {
+    if !same && !each.iter().all(|t| rising(&t.x)) {
+        return Err("the steps' x values differ and do not rise (a nested .dc): no shared axis".into());
+    }
+    let grid: Vec<f64> = if same {
         each[0].x.clone()
     } else {
+        let longest = each.iter().map(|t| &t.x).max_by_key(|x| x.len()).unwrap();
         let mut g: Vec<f64> = each.iter().flat_map(|t| t.x.iter().copied()).collect();
         g.sort_by(|a, b| a.total_cmp(b));
         g.dedup_by(|a, b| (*a - *b).abs() <= 1e-12 * a.abs().max(b.abs()));
-        g
+        if g.len() > 3 * longest.len() { longest.clone() } else { g }
     };
-    // linear between samples, the end value beyond (a step that stopped early)
+    // linear between samples, the end value beyond (a step that stopped early), none where a step
+    // has no data (a gap)
     let onto = |x: &[f64], y: &[f64]| -> Vec<f64> {
-        if same || x.len() < 2 {
+        if same {
             return y.to_vec();
+        }
+        if x.len() < 2 || y.len() < x.len() {
+            return grid.iter().map(|_| y.first().copied().filter(|_| x.len() == 1).unwrap_or(f64::NAN)).collect();
         }
         let mut k = 0;
         grid.iter().map(|&g| {
@@ -615,13 +637,13 @@ fn steps_joined(each: Vec<Trace>) -> Trace {
         }).collect()
     };
     let complex = each.iter().all(|t| t.im.is_some());
-    Trace {
+    Ok(Trace {
         x: each.iter().flat_map(|_| grid.iter().copied()).collect(),
         re: each.iter().flat_map(|t| onto(&t.x, &t.re)).collect(),
         im: complex.then(|| each.iter().flat_map(|t| onto(&t.x, t.im.as_deref().unwrap_or_default())).collect()),
         constant: each.iter().all(|t| t.constant),
         typ: each[0].typ,
-    }
+    })
 }
 
 /// Only numbers (exponents, SPICE suffixes: `1e-3`, `10k`), operators and parentheses: a level the

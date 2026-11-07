@@ -305,8 +305,10 @@ export const Schematic = memo(function Schematic() {
   useEffect(() => {
     let op = "";
     // stale results: auto net names (N001 ...) may now denote other nodes, so no value
-    const v = hoverNet && !stale && sim?.run?.plot.startsWith("op") && sim.run.op.find(([n]) => n.toLowerCase() === hoverNet.toLowerCase());
-    if (v) op = ` = ${v[1].toPrecision(5)} V`;
+    // (a .step run: the net's value per step, `out [R=1k]`, in order)
+    const own = (n: string) => !!hoverNet && (n.toLowerCase() === hoverNet.toLowerCase() || n.toLowerCase().startsWith(`${hoverNet.toLowerCase()} [`));
+    const vs = hoverNet && !stale && sim?.run?.plot.startsWith("op") ? sim.run.op.filter(([n]) => own(n)) : [];
+    if (vs.length) op = ` = ${vs.map((v) => v[1].toPrecision(5)).join(" / ")} V`;
     useStatus.setState({ net: hoverNet ? hoverNet + op : null, zoom: view.k });
   }, [hoverNet, view.k, sim, stale]);
   useEffect(() => {

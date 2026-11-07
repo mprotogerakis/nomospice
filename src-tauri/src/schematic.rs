@@ -616,9 +616,7 @@ pub fn vary_spans(text: &str, target: &str, param_first: bool) -> Option<Vec<(us
         return None;
     }
     let lines = deck_lines(text);
-    let defs: Vec<(usize, usize)> = lines.iter().filter(|l| l.top && l.param())
-        .flat_map(|l| param_defs(l.line, &l.low).into_iter().filter(|(n, _)| n.eq_ignore_ascii_case(t)).map(move |(_, (a, e))| (l.start + a, l.start + e)))
-        .collect();
+    let defs = param_spans(text, t);
     let low = t.to_ascii_lowercase();
     let part = lines.iter().filter(|l| l.top).find(|l| l.low.split_whitespace().next() == Some(low.as_str()))
         .and_then(|l| part_value(l.line).map(|(a, e)| vec![(l.start + a, l.start + e)]));
@@ -802,11 +800,10 @@ impl Prepared {
         &self.1
     }
 
-    /// The deck once per `.step` combination, the first `.step` varying fastest, each with its
-    /// label (`R=1k temp=27`). Empty: no `.step`.
-    pub fn steps(&self) -> Result<Vec<(String, Prepared)>, String> {
+    /// Its `.step` statements, parsed: `Steps::at` builds each step's deck when it runs. None: no `.step`.
+    pub fn steps(&self) -> Result<Option<Steps<'_>>, String> {
         if self.2.is_empty() {
-            return Ok(vec![]);
+            return Ok(None);
         }
         let steps = self.2.iter().map(|s| parse_step(s)).collect::<Result<Vec<_>, _>>()?;
         if steps.len() > 3 {
@@ -816,16 +813,29 @@ impl Prepared {
         if total > MAX_STEPS {
             return Err(format!("{total} steps: at most {MAX_STEPS}"));
         }
-        (0..total).map(|mut k| {
-            let (mut text, mut label) = (self.0.clone(), vec![]);
-            for s in &steps {
-                let v = s.values[k % s.values.len()];
-                k /= s.values.len();
-                text = s.apply(&text, v)?;
-                label.push(format!("{}={}", s.name(), short_num(v)));
-            }
-            Ok((label.join(" "), Prepared(text, self.1.clone(), vec![])))
-        }).collect()
+        Ok(Some(Steps { deck: self, steps, total }))
+    }
+}
+
+/// A deck's `.step` statements: `total` combinations, the first `.step` varying fastest.
+pub struct Steps<'a> {
+    deck: &'a Prepared,
+    steps: Vec<Step>,
+    pub total: usize,
+}
+
+impl Steps<'_> {
+    /// Combination `k`: its label (`R=1k temp=27`) and its deck (one at a time: a big deck times a
+    /// thousand steps would not fit).
+    pub fn at(&self, mut k: usize) -> Result<(String, Prepared), String> {
+        let (mut text, mut label) = (self.deck.0.clone(), vec![]);
+        for s in &self.steps {
+            let v = s.values[k % s.values.len()];
+            k /= s.values.len();
+            text = s.apply(&text, v)?;
+            label.push(format!("{}={}", s.name(), short_num(v)));
+        }
+        Ok((label.join(" "), Prepared(text, self.deck.1.clone(), vec![])))
     }
 }
 
@@ -890,7 +900,8 @@ pub fn parse_step(stmt: &str) -> Result<Step, String> {
     let what = match t.next() {
         Some(w) if w.eq_ignore_ascii_case("param") => Stepped::Param(t.next().ok_or(format!("`{stmt}`: no parameter name"))?.to_string()),
         Some(w) if w.eq_ignore_ascii_case("temp") => Stepped::Temp,
-        Some(w) if w.to_ascii_lowercase().starts_with(['v', 'i']) && !w.contains('(') => Stepped::Source(w.to_string()),
+        // (a source: its values follow; `.step VDMOS IRF530(Rd) …` is a model parameter)
+        Some(w) if w.to_ascii_lowercase().starts_with(['v', 'i']) && !w.contains('(') && !t.peek().is_some_and(|n| n.contains('(')) => Stepped::Source(w.to_string()),
         Some(w) => return Err(format!("`{stmt}`: stepping {w} (a model parameter) is not supported: give the model a {{parameter}} and step that")),
         None => return Err(format!("`{stmt}`: nothing to step")),
     };
@@ -1688,16 +1699,17 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool) -> Netlist {
             let mut stepping = false; // ... of a .step: they belong to it
             for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
                 let l = line.to_lowercase();
+                // (each line without its inline comment: a `;` must not swallow the next line's values)
                 if stepping && l.starts_with('+') {
                     if let Some(s) = nl.steps.last_mut() {
                         s.push(' ');
-                        s.push_str(line[1..].trim());
+                        s.push_str(uncommented(line)[1..].trim());
                     }
                     continue;
                 }
                 stepping = l.starts_with(".step") && l[5..].starts_with(char::is_whitespace);
                 if stepping {
-                    nl.steps.push(line.to_string());
+                    nl.steps.push(uncommented(line).trim_end().to_string());
                     continue;
                 }
                 if skipped && l.starts_with('+') || l == ".end" || l.starts_with(".end ") {
@@ -2380,9 +2392,11 @@ mod tests {
         assert_eq!(short_num(-40.0), "-40");
         // the variants: the first .step fastest; a param added where the deck has none
         let p = Prepared("* t\nR1 a 0 {R}\nV1 a 0 DC 5\n.op\n.end\n".into(), vec![], vec![".step param R list 1k 2k".into(), ".step V1 list 1 2".into()]);
-        let s = p.steps().unwrap();
+        let st = p.steps().unwrap().unwrap();
+        let s: Vec<(String, Prepared)> = (0..st.total).map(|k| st.at(k).unwrap()).collect();
         assert_eq!(s.iter().map(|x| x.0.as_str()).collect::<Vec<_>>(), ["R=1k V1=1", "R=2k V1=1", "R=1k V1=2", "R=2k V1=2"]);
         assert!(s[1].1.text().contains(".param R=2e3\n.end") && s[3].1.text().contains("V1 a 0 DC 2e0"), "{}", s[3].1.text());
+        assert!(parse_step(".step VDMOS IRF530(Rd) 1m 10m 1m").unwrap_err().contains("model parameter"));
     }
 
     #[test]
