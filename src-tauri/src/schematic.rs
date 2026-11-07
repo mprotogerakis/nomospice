@@ -1062,8 +1062,8 @@ pub fn meas_name_at<S: AsRef<str>>(tokens: &[S]) -> usize {
 /// currents directly; ngspice only branch currents).
 fn sensor_currents(s: &str, sensors: &[Sensor]) -> String {
     let mut out = String::with_capacity(s.len());
-    let mut rest = s;
-    while let Some(k) = rest.to_ascii_lowercase().find("i(") {
+    let (mut rest, lower) = (s, s.to_ascii_lowercase()); // (same byte offsets: one copy)
+    while let Some(k) = lower[s.len() - rest.len()..].find("i(") {
         let word = k > 0 && rest[..k].ends_with(|c: char| c.is_ascii_alphanumeric() || c == '_');
         let close = rest[k + 2..].find(')').map(|e| k + 2 + e);
         let sensor = close.filter(|_| !word).and_then(|e| sensors.iter().find(|x| x.inst.eq_ignore_ascii_case(rest[k + 2..e].trim())));

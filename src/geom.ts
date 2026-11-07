@@ -187,6 +187,10 @@ export function dragPlan(items: Item[], lib: Lib, sel: Set<number>) {
     whole.add(i), work.push(i);
   };
   items.forEach((_, i) => join(i));
+  // a selected wire between two resting pins: it moves whole (T-legs on it follow, below), and new
+  // wires keep both pins on it
+  const bridged = items.flatMap((it, i): Wire[] =>
+    it.t === "wire" && sel.has(i) && ends(it).every((p) => fixed.has(key(...p))) && !pinned(it) ? (whole.add(i), work.push(i), [it]) : []);
   // what can follow a whole wire: unselected wire ends and labels on it
   const followers = items.flatMap((o, j): Pt[] => (sel.has(j) ? [] : o.t === "wire" ? ends(o) : o.t === "flag" ? [[o.x, o.y]] : []));
   while (work.length) {
@@ -197,8 +201,6 @@ export function dragPlan(items: Item[], lib: Lib, sel: Set<number>) {
       (atEnd.get(key(...p)) ?? []).forEach(join); // its wire may now move whole too
     }
   }
-  // a selected wire between two resting pins: it moves whole, and new wires keep both pins on it
-  const bridged = items.flatMap((it, i): Wire[] => (sel.has(i) && it.t === "wire" && !pinned(it) && ends(it).every((p) => fixed.has(key(...p))) ? (whole.add(i), [it]) : []));
   const all: Item[] = [], pieces: Item[] = [], groups: number[][] = []; // groups: a cut wire's pieces, in order
   items.forEach((it, i) => {
     if (it.t !== "wire" || whole.has(i) || !(ends(it).some((p) => moving.has(key(...p))) || movingPts.some((p) => inside(p, it)))) return void all.push(it);

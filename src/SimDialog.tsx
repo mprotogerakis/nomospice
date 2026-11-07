@@ -37,7 +37,7 @@ export function SimDialog({ index, kind0, of }: { index?: number; kind0?: Analys
   // more than the form shows (unknown options, `+` lines): OK replaces the whole statement
   const partial = idx >= 0 && !analysisEditableAt(lines, li);
   const plus = new Set(li >= 0 ? continuation(lines, li) : []);
-  const cont = (j: number) => plus.has(j);
+  const cont = (j: number) => plus.has(j); // the analysis' own + lines
   const edited = unchanged ? lines.join("\n") : lines.flatMap((l, j) => (j === li ? [line] : cont(j) ? [] : [l])).join("\n");
 
   const submit = () => {
