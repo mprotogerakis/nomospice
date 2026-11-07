@@ -267,6 +267,7 @@ export const Waveform = memo(function Waveform() {
     });
   }, [polarOn, polar, signals, seg, steps]);
   const curves = polar === "nichols" ? nichols : nyquist;
+  const realLabels = useMemo(() => [...lines, ...signals].filter((t) => !t.data!.im).map((t) => t.label), [lines, signals]);
 
   const host = useRef<HTMLDivElement>(null);
   const paneEls = useRef<(HTMLDivElement | null)[]>([]);
@@ -463,7 +464,7 @@ export const Waveform = memo(function Waveform() {
           // (a loop gain's stability: where it passes -1)
           // (Nyquist/Nichols need a complex trace; without one, only the way back)
           ...(ac && (cplx || polar) ? ([[undefined, "Bode plot", "magnitude and phase"], ["nyquist", "Nyquist plot", "Im over Re"], ["nichols", "Nichols plot", "dB over phase"]] as const)
-            .filter(([m]) => m !== polar && (cplx || !m))
+            .filter(([m]) => m !== polar && ((cplx && !zero) || !m))
             .map(([m, label, hint]) => ({ label, hint, run: () => setPlot({ polar: m }) })) : []),
           ...(tran ? [spec ? { label: "Back to the transient", run: () => showFft(null) }
             : { label: "FFT (spectrum)", hint: a != null && b != null && a !== b ? "of A–B" : zoom ? "of the shown range" : "of the whole run", disabled: !panes.length || !(range[1] > range[0]), run: () => showFft(range) }] : []),
@@ -478,7 +479,7 @@ export const Waveform = memo(function Waveform() {
           { label: "Remove all traces", danger: true, disabled: !traces.length, run: () => useS.setState({ traces: [] }) },
         ]);
       }}>
-        {polarOn ? <Polar key={`${polar}${fitted}`} curves={curves} freqs={xs} mode={polar!} onHover={hoverAt} />
+        {polarOn ? <Polar key={`${polar}${fitted}`} curves={curves} freqs={xs} mode={polar!} onHover={hoverAt} others={realLabels} />
           : panes.map((p, i) => <div key={`${p.unit}-${i}`} ref={(el) => { paneEls.current[i] = el; }} />)}
         {!panes.length && (
           <div className="absolute inset-0 flex items-center justify-center text-xs text-text-tertiary">
@@ -584,11 +585,7 @@ const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot, fixed, s
                 ...(t.data?.im || t.data?.constant || fixed ? [] : panes.filter((p) => p.own && p.unit !== "dB" && p.unit !== "°" && p.unit !== t.unit && !p.series.some((s) => s.t === t) && p.series.every((s) => s.u === p.unit || s.u === t.unit)).map((p) => ({ label: `Into the ${p.unit || "unitless"} pane`, hint: "its right axis", run: () => setTracePane(t.expr, p.unit) }))),
                 ...(t.pane != null && !fixed && !t.data?.im ? [{ label: moved(t) ? `Back to its own pane (${t.unit || "unitless"})` : `Not into the ${t.pane || "unitless"} pane any more`, hint: moved(t) ? undefined : "it would go there with traces of its own", run: () => setTracePane(t.expr, undefined) }] : []),
                 // (an .ac result: -dφ/dω, how long a band of frequencies takes through it)
-                ...(t.data?.im && plot.startsWith("ac") ? [{ label: "Plot group delay", hint: `τg(${t.label})`, run: () => {
-                  // (a real trace: drawn in the Bode plot, not in Nyquist or Nichols)
-                  if (useS.getState().plot.polar) setPlot({ polar: undefined });
-                  void addTrace(`τg(${t.label})`, `group_delay(${t.expr})`, exprUnit(`group_delay(${t.expr})`, undefined, xUnit));
-                } }] : []),
+                ...(t.data?.im && plot.startsWith("ac") ? [{ label: "Plot group delay", hint: `τg(${t.label})`, run: () => void addTrace(`τg(${t.label})`, `group_delay(${t.expr})`, exprUnit(`group_delay(${t.expr})`, undefined, xUnit)) }] : []),
                 { label: "Copy expression", hint: t.expr, run: () => navigator.clipboard.writeText(t.expr) },
                 { label: `Remove ${t.label}`, danger: true, run: () => removeTrace(t.expr) },
               ]))}>

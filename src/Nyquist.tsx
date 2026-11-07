@@ -14,7 +14,8 @@ export type Curve = { label: string; slot: number; x: (number | null)[]; y: (num
 /** A point under the pointer: curve c, frequency index i; m: on the mirror (the negative frequency). */
 type Hit = { c: number; i: number; m?: boolean };
 
-export const Polar = memo(function Polar({ curves, freqs, mode, onHover }: { curves: Curve[]; freqs: number[]; mode: "nyquist" | "nichols"; onHover: (f: number | null) => void }) {
+/** `others`: traces not drawn here (real ones: db(), a group delay, a level), named in a note. */
+export const Polar = memo(function Polar({ curves, freqs, mode, onHover, others }: { curves: Curve[]; freqs: number[]; mode: "nyquist" | "nichols"; onHover: (f: number | null) => void; others: string[] }) {
   const host = useRef<HTMLDivElement>(null);
   const size = useSize(host);
   const nyq = mode === "nyquist";
@@ -132,10 +133,10 @@ export const Polar = memo(function Polar({ curves, freqs, mode, onHover }: { cur
   const lo = val(0, size.h), hi = val(size.w, 0);
   // (Nyquist: one step on both axes, square cells at its one scale)
   const square = tickStep(Math.max(hi.x - lo.x, hi.y - lo.y));
-  const ticks = (a: number, b: number) => {
-    // (degrees: 15/30/45/90 … so -180° + k·360° is a grid line)
-    const deg = [1, 2, 5, 10, 15, 30, 45, 90, 180, 360].find((d) => (b - a) / d <= 8) ?? 360;
-    const step = nyq ? square : a === lo.x ? deg : tickStep(b - a), first = Math.ceil(a / step), n = Math.floor(b / step) - first;
+  const ticks = (a: number, b: number, phase = false) => {
+    // (degrees: 15/30/45/90 … so -180° + k·360° is a grid line; under 8° the usual steps)
+    const deg = b - a >= 8 ? [1, 2, 5, 10, 15, 30, 45, 90, 180, 360].find((d) => (b - a) / d <= 8) ?? 360 : tickStep(b - a);
+    const step = nyq ? square : phase ? deg : tickStep(b - a), first = Math.ceil(a / step), n = Math.floor(b / step) - first;
     if (!isFinite(n) || n < 0 || n > 200) return [];
     return Array.from({ length: n + 1 }, (_, i) => { const x = (first + i) * step; return Math.abs(x) < step * 1e-9 ? 0 : x; });
   };
@@ -149,7 +150,9 @@ export const Polar = memo(function Polar({ curves, freqs, mode, onHover }: { cur
   const fa = useS((s) => s.plot.a), fb = useS((s) => s.plot.b);
   // (outside the sweep: none, as the table shows none)
   const marks = useMemo(() => {
-    const nearest = (f: number | null) => (f == null || !freqs.length || f < freqs[0] || f > freqs[freqs.length - 1] ? -1 : freqs.reduce((best, x, i) => (Math.abs(x - f) < Math.abs(freqs[best] - f) ? i : best), 0));
+    // (nearest on a log scale when the sweep has one: as the Bode plot shows it)
+    const gap = freqs[0] > 0 ? (x: number, f: number) => Math.abs(Math.log(x / f)) : (x: number, f: number) => Math.abs(x - f);
+    const nearest = (f: number | null) => (f == null || !freqs.length || f < freqs[0] || f > freqs[freqs.length - 1] ? -1 : freqs.reduce((best, x, i) => (gap(x, f) < gap(freqs[best], f) ? i : best), 0));
     return ([["A", nearest(fa)], ["B", nearest(fb)]] as const).filter(([, i]) => i >= 0);
   }, [fa, fb, freqs]);
   const h = hit && curves[hit.c];
@@ -160,7 +163,7 @@ export const Polar = memo(function Polar({ curves, freqs, mode, onHover }: { cur
       onMouseDown={(e) => { if (e.button !== 0) return; const r = host.current!.getBoundingClientRect(); drag.current = { X: e.clientX - r.left, Y: e.clientY - r.top, cx: v.cx, cy: v.cy }; }} onMouseUp={() => (drag.current = null)}>
       {size.w > 0 && (
         <svg width={size.w} height={size.h} className="block text-text-secondary">
-          {ticks(lo.x, hi.x).map((t) => { const [x] = px(t, 0); return <g key={`x${t}`}><line x1={x} x2={x} y1={0} y2={size.h} stroke="var(--border)" /><text x={x + 3} y={size.h - 6} fontSize={10} fill="currentColor" className="font-mono">{fmt(t, xu)}</text></g>; })}
+          {ticks(lo.x, hi.x, true).map((t) => { const [x] = px(t, 0); return <g key={`x${t}`}><line x1={x} x2={x} y1={0} y2={size.h} stroke="var(--border)" /><text x={x + 3} y={size.h - 6} fontSize={10} fill="currentColor" className="font-mono">{fmt(t, xu)}</text></g>; })}
           {ticks(lo.y, hi.y).map((t) => { const [, y] = px(0, t); return <g key={`y${t}`}><line x1={0} x2={size.w} y1={y} y2={y} stroke="var(--border)" /><text x={4} y={y - 3} fontSize={10} fill="currentColor" className="font-mono">{nyq && t ? `${t < 0 ? "−" : ""}j${si(Math.abs(t), "", 3)}` : fmt(t, yu)}</text></g>; })}
           {nyq && <>
             <line x1={0} x2={size.w} y1={oy} y2={oy} stroke="var(--text-tertiary)" />
@@ -204,12 +207,13 @@ export const Polar = memo(function Polar({ curves, freqs, mode, onHover }: { cur
         </svg>
       )}
       {h && hx != null && hy != null && (
-        <div className="pointer-events-none absolute rounded-control border border-border bg-surface-panel px-2 py-1 font-mono text-2xs text-text shadow-float" style={{ left: Math.min(px(hx, hy)[0] + 12, size.w - 200), top: Math.max(px(hx, hy)[1] - 56, 4) }}>
+        <div className="pointer-events-none absolute rounded-control border border-border bg-surface-panel px-2 py-1 font-mono text-2xs text-text shadow-float" style={{ left: Math.max(4, Math.min(px(hx, hy)[0] + 12, size.w - 200)), top: Math.max(px(hx, hy)[1] - 56, 4) }}>
           <div className="text-text-tertiary">{h.label}</div>
           <div>f = {hit!.m ? "−" : ""}{si(freqs[hit!.i], "Hz", 4)}</div>
           <div>{nyq ? `${si(hx, "", 4)} ${hy < 0 ? "−" : "+"} j${si(Math.abs(hy), "", 4)}` : `${hy.toFixed(2)} dB ∠ ${hx.toFixed(1)}°`}</div>
         </div>
       )}
+      {!!others.length && <div className="pointer-events-none absolute left-2 top-6 max-w-[60%] truncate text-2xs text-text-tertiary">Only in the Bode plot: {others.join(", ")}</div>}
       <div className="pointer-events-none absolute bottom-6 right-2 text-2xs text-text-tertiary">● lowest frequency{nyq ? " · dashed: negative frequencies" : ""} · drag: pan · wheel: zoom · dbl-click: fit</div>
     </div>
   );
