@@ -333,7 +333,7 @@ export function App() {
   const hint =
     tool.k === "wire" ? "Wire: click to start / add corner · ends on pins and wires · right-click cancels · Esc done"
     : tool.k === "place" ? "Click to place · ⌃R rotate · ⌃E mirror · Esc / right-click done"
-    : tool.k === "paste" ? "Click to paste · Esc cancel"
+    : tool.k === "paste" ? "Click to paste · Esc / right-click cancel"
     : tool.k === "delete" ? "Click items to delete · Esc done"
     : pz ? "Poles × and zeros ○ in the s-plane: hover for f₀ and damping · root locus in the panel on the right"
     : showWave && s.sim?.run?.plot.startsWith("noise") ? "Noise spectra: Add trace → onoise_spectrum / inoise_spectrum · totals in Results"

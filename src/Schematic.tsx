@@ -235,6 +235,7 @@ export const Schematic = memo(function Schematic() {
   const [hFirst, setHFirst] = useState<boolean | null>(null);
   const [hover, setHover] = useState(-1);
   const [hoverPin, setHoverPin] = useState<number>(); // probing: the part's pin under the pointer
+  const pastedAt = useRef(0);
   const [preview, setPreview] = useState<Item[] | null>(null);
   const [boxSel, setBoxSel] = useState<[Pt, Pt] | null>(null);
   const drag = useRef<Drag | null>(null);
@@ -357,6 +358,8 @@ export const Schematic = memo(function Schematic() {
     }
     return out;
   };
+  // named once per paste (not per mouse move): the preview follows the cursor by shifting these
+  const pasteNamed = useMemo(() => (tool.k === "paste" ? pasted(tool.items, [0, 0]) : []), [tool, items, lib]); // eslint-disable-line react-hooks/exhaustive-deps
   const wirePath = (a: Pt, b: Pt): Item[] => {
     const corner: Pt = hFirst ?? true ? [b[0], a[1]] : [a[0], b[1]];
     return dropZeroWires([
@@ -386,9 +389,10 @@ export const Schematic = memo(function Schematic() {
     } else if (tool.k === "place") {
       commit([...items, placed(tool.item, g)]);
     } else if (tool.k === "paste") {
-      const out = pasted(tool.items, g); // (here, selected)
+      const out = pasteNamed.map((it) => shifted(it, g[0], g[1])); // (here, selected)
       commit([...items, ...out], out.map((_, k) => items.length + k));
       useS.setState({ tool: { k: "select" } });
+      pastedAt.current = Date.now();
     } else if (tool.k === "delete") {
       const i = hit(items, lib, p, 6 / view.k);
       if (i >= 0) commit(items.filter((_, j) => j !== i), []), setHover(-1);
@@ -551,6 +555,7 @@ export const Schematic = memo(function Schematic() {
 
   const onDoubleClick = (e: React.MouseEvent) => {
     if (tool.k === "wire") return setWireStart(null);
+    if (Date.now() - pastedAt.current < 500) return; // (the click that placed a paste, doubled: not an edit)
     // while probing, clicks plot (LTspice); editing is right-click there
     if (tool.k !== "select" || probing) return;
     editAt(e);
@@ -586,7 +591,7 @@ export const Schematic = memo(function Schematic() {
     : drag.current?.k === "pan" ? "grabbing" : hover >= 0 ? "pointer" : "default";
   const gap = GRID * view.k;
   const ghost = tool.k === "place" ? placed(tool.item, cursor) : null;
-  const ghosts: Shape[] = tool.k === "paste" ? pasted(tool.items, cursor) : ghost && isShape(ghost) ? [ghost] : [];
+  const ghosts: Shape[] = tool.k === "paste" ? pasteNamed.map((it) => shifted(it, cursor[0], cursor[1])) : ghost && isShape(ghost) ? [ghost] : [];
 
   return (
     <div className="relative h-full w-full overflow-hidden bg-surface-schematic-canvas">

@@ -1,6 +1,6 @@
 // Editing actions shared by the toolbar, hotkeys and context menus.
 import type { Item, Shape } from "./types";
-import { commit, useS } from "./store";
+import { commit, loadSymbols, useS } from "./store";
 import { isShape, rotateInPlace, shifted, snap } from "./geom";
 
 export function deleteSelection() {
@@ -42,17 +42,23 @@ const num = (v: unknown) => typeof v === "number" && Number.isInteger(v) && Math
 const str = (v: unknown) => typeof v === "string" && !/[\u0000-\u0008\u000a-\u001f\u007f]/.test(v); // (a tab is fine)
 const word = (v: unknown) => str(v) && !/\s/.test(v as string) && (v as string).length > 0;
 // (a symbol's WINDOW lines, a label's IOPIN: nothing else rides along to be read as items later)
-const extras = (v: unknown, head: string) => (Array.isArray(v) && v.every((l) => str(l) && (l as string).startsWith(`${head} `)) ? { extra: v as string[] } : {});
+const extras = (v: unknown, head: string) => (Array.isArray(v) && v.every((l) => str(l) && new RegExp(`^\\s*${head}\\s`).test(l as string)) ? { extra: v as string[] } : {});
 /** A pasted item is only taken as one of ours (the clipboard holds whatever was copied anywhere). */
 function shape(v: unknown): Shape | null {
   const it = v as Record<string, unknown>;
   if (!it || typeof it !== "object") return null;
   if (it.t === "wire" && [it.x1, it.y1, it.x2, it.y2].every(num)) return { t: "wire", x1: it.x1 as number, y1: it.y1 as number, x2: it.x2 as number, y2: it.y2 as number };
   if (!num(it.x) || !num(it.y)) return null;
-  if (it.t === "flag" && word(it.name)) return { t: "flag", x: it.x as number, y: it.y as number, name: it.name as string, ...extras(it.extra, "IOPIN") };
-  if (it.t === "text" && typeof it.text === "string" && !/[\u0000-\u0009\u000b-\u001f\u007f]/.test(it.text)) return { t: "text", x: it.x as number, y: it.y as number, text: it.text as string, directive: !!it.directive, ...(str(it.align) && { align: it.align as string }) };
+  // (a label as read from a file may end in spaces: its name is the rest)
+  if (it.t === "flag" && typeof it.name === "string" && word(it.name.trim())) return { t: "flag", x: it.x as number, y: it.y as number, name: it.name.trim(), ...extras(it.extra, "IOPIN") };
+  // (a text keeps its tabs and line breaks; its alignment is one of the .asc's words)
+  if (it.t === "text" && typeof it.text === "string" && !/[\u0000-\u0008\u000b-\u001f\u007f]/.test(it.text)) {
+    const align = typeof it.align === "string" && /^V?(Left|Right|Center|Top|Bottom)$/.test(it.align) ? { align: it.align } : {};
+    return { t: "text", x: it.x as number, y: it.y as number, text: it.text as string, directive: !!it.directive, ...align };
+  }
   const attrs = it.attrs as Record<string, unknown>;
-  if (it.t === "sym" && word(it.sym) && word(it.rot) && attrs && typeof attrs === "object" && Object.keys(attrs).every(word) && Object.values(attrs).every(str)) {
+  // (an attribute's key without spaces, or empty: a bare SYMATTR line of a file)
+  if (it.t === "sym" && word(it.sym) && word(it.rot) && attrs && typeof attrs === "object" && Object.keys(attrs).every((k) => str(k) && !/\s/.test(k)) && Object.values(attrs).every(str)) {
     return { t: "sym", sym: it.sym as string, x: it.x as number, y: it.y as number, rot: it.rot as string, attrs: { ...(attrs as Record<string, string>) }, ...extras(it.extra, "WINDOW") };
   }
   return null;
@@ -100,6 +106,7 @@ export function pasteText(text: string): boolean {
   // (a group wider than any schematic: placed anywhere it would leave the core's coordinates)
   if (xs.some((x) => x - x0 > 2 ** 24) || ys.some((y) => y - y0 > 2 ** 24)) return false;
   useS.setState({ tool: { k: "paste", items: its.map((it) => shifted(it, -x0, -y0)) }, sel: [] });
+  void loadSymbols(its).catch(() => {}); // (parts from another schematic: their symbols, if this one has none)
   return true;
 }
 

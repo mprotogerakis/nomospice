@@ -152,7 +152,7 @@ async function loadSymbolsNow(items: Item[], dir: string | null, { force = false
   // the answer replaces ours, and the backend may have dropped symbols it had cached (switched-off
   // libraries): ask for everything in use — the document, its undo history, a diff on show
   const s = get(), names = new Set(want(items));
-  const placing = s.tool.k === "place" ? [s.tool.item] : []; // the part being placed, too
+  const placing = s.tool.k === "place" ? [s.tool.item] : s.tool.k === "paste" ? s.tool.items : []; // parts being placed, too
   if (!fresh) for (const its of [s.items, ...s.past, ...s.future, s.diff?.items ?? [], placing]) for (const it of its) if (it.t === "sym") names.add(it.sym);
   const defs = await invoke<SymbolDef[]>("symbols", { names: [...names], dir });
   symDir = dir; // only once answered: a failed request is asked again next time
