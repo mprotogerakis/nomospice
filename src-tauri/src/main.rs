@@ -203,7 +203,14 @@ async fn simulate(items: Vec<Item>, dir: Option<String>, lib: tauri::State<'_, L
         let res = ngspice::run_until(&prepared, &|| ngspice::halted_since(op));
         // for the s-plane view's root locus; from the user's deck, not the libraries
         let pz = res.as_ref().is_ok_and(|r| r.plot.starts_with("pz"));
-        let sweepable = if pz { schematic::sweepable(&netlist.text, &netlist.insts) } else { vec![] };
+        // (with the parameters only a .step sets: the locus runs on the first step's deck, where they are)
+        let sweepable = if pz {
+            let mut s = schematic::sweepable(&netlist.text, &netlist.insts);
+            s.extend(schematic::step_params(&netlist.steps).into_iter().filter(|p| !s.iter().any(|x| x.eq_ignore_ascii_case(p))).collect::<Vec<_>>());
+            s
+        } else {
+            vec![]
+        };
         match res {
             Ok(mut run) => Sim { netlist, simulated, sweepable, symbols, log: std::mem::take(&mut run.log), run: Some(run) },
             Err(log) => Sim { netlist, simulated, sweepable, symbols, run: None, log },

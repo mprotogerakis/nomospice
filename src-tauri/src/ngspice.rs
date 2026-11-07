@@ -374,7 +374,11 @@ pub fn run(netlist: &Prepared) -> Result<Run, Vec<String>> {
 /// [`run`], stopped (`bg_halt`, partial data) as soon as `stop()` says so: polled while it runs.
 /// A deck with `.step` runs once per step; the steps' plots stay (traces read them all).
 pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec<String>> {
-    let steps = netlist.steps().map_err(|e| vec![format!(".step: {e}")])?;
+    // (a .step it cannot run, a model parameter: the analysis once, as before, said in the log)
+    let (steps, unstepped) = match netlist.steps() {
+        Ok(s) => (s, None),
+        Err(e) => (None, Some(format!("Warning: .step not run (the analysis runs once): {e}"))),
+    };
     let sensors: std::sync::Arc<[crate::schematic::Sensor]> = netlist.sensors().into();
     let text = netlist.text(); // (the decks' statements: the same in every step)
     let g = engine()?;
@@ -470,7 +474,7 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
     if !scale.is_empty() || plot != *plot0 {
         scale = scale2;
     }
-    let log: Vec<String> = if steps.is_none() { done[0].2.clone() } else {
+    let log: Vec<String> = if steps.is_none() { unstepped.into_iter().chain(done[0].2.iter().cloned()).collect() } else {
         done.iter().flat_map(|(l, _, log)| std::iter::once(format!("--- .step {l}")).chain(log.iter().cloned())).chain(failed).collect()
     };
     let aborted = log.iter().any(|l| {
@@ -615,15 +619,19 @@ fn steps_joined(each: Vec<Trace>) -> Result<Trace, String> {
     let dir = if each[0].x.len() > 1 && each[0].x[1] < each[0].x[0] { -1.0 } else { 1.0 };
     let rising = |x: &[f64]| x.windows(2).all(|w| dir * w[1] >= dir * w[0]);
     if !same && !each.iter().all(|t| rising(&t.x)) {
-        // a nested .dc with a step halted early: the steps on the first one's axis, without the others
+        // a nested .dc: steps halted early (their x the start of the others') left out; steps that
+        // sweep other ranges have no shared axis
         let first = each[0].x.clone();
+        if each.iter().any(|t| t.x != first && !first.starts_with(&t.x)) {
+            return Err("the steps sweep different ranges (a nested .dc): no shared axis to plot them on".into());
+        }
         let whole: Vec<Trace> = each.into_iter().filter(|t| t.x == first).collect();
         return if whole.len() > 1 { steps_joined(whole) } else { whole.into_iter().next().ok_or_else(|| "no step to show".to_string()) };
     }
     let grid: Vec<f64> = if same {
         each[0].x.clone()
     } else {
-        let cap = 3 * each.iter().map(|t| t.x.len()).max().unwrap_or(0);
+        let cap = (3 * each.iter().map(|t| t.x.len()).max().unwrap_or(0)).max(200_000);
         let mut g: Vec<f64> = each.iter().flat_map(|t| t.x.iter().copied()).collect();
         g.sort_by(|a, b| (dir * a).total_cmp(&(dir * b)));
         g.dedup_by(|a, b| (*a - *b).abs() <= 1e-12 * a.abs().max(b.abs()));

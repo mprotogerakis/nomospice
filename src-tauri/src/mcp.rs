@@ -114,9 +114,9 @@ fn call(base: &Path, name: &str, args: &Value) -> Result<Value, String> {
             for expr in args["traces"].as_array().into_iter().flatten().filter_map(Value::as_str) {
                 traces.insert(expr.into(), match ngspice::trace(expr, &run.scale, run.id) {
                     // a .step run: one curve per step (end to end in the trace), each downsampled
-                    Ok(t) if run.steps.len() > 1 && t.x.len() % run.steps.len() == 0 => {
-                        let n = t.x.len() / run.steps.len();
-                        let part = |v: &[f64], k: usize| downsample(&v[k * n..(k + 1) * n], points);
+                    Ok(t) if run.steps.len() > 1 && t.re.len() % run.steps.len() == 0 => {
+                        let n = t.re.len() / run.steps.len(); // (a table, .op: one value per step, no x)
+                        let part = |v: &[f64], k: usize| if v.is_empty() { vec![] } else { downsample(&v[k * n..(k + 1) * n], points) };
                         json!({ "steps": run.steps.iter().enumerate().map(|(k, s)| json!({
                             "step": s, "x": part(&t.x, k), "re": part(&t.re, k), "im": t.im.as_ref().map(|im| part(im, k)),
                         })).collect::<Vec<_>>() })

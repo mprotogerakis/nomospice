@@ -895,7 +895,8 @@ impl Step {
                     .ok_or_else(|| format!("`.step {n}`: there is no source {n}"))?;
                 // `V1 a b 5` or `V1 a b DC 5 …`: the DC value (a SINE or PULSE has none to step)
                 let sp = token_spans(line.line);
-                let k = if sp.get(3).is_some_and(|&(a, e)| line.line[a..e].eq_ignore_ascii_case("dc")) { 4 } else { 3 };
+                // (the DC value where it is written: right after the nodes, or after a `DC` anywhere)
+                let k = sp.iter().skip(3).position(|&(a, e)| line.line[a..e].eq_ignore_ascii_case("dc")).map_or(3, |p| p + 4);
                 match sp.get(k).filter(|&&(a, e)| spice_num(&line.line[a..e]).is_some() || line.line[a..e].starts_with('{')) {
                     Some(&(a, e)) => Ok(splice(text, &[(line.start + a, line.start + e)], v)),
                     // `V1 in 0 AC 1`, a SINE: no DC value written (0): one put after the nodes
@@ -955,6 +956,14 @@ pub fn parse_step(stmt: &str) -> Result<Step, String> {
         return Err(format!("`{stmt}`: more than {MAX_STEPS} steps"));
     }
     Ok(Step { what, values })
+}
+
+/// The parameters `.step` statements set (`.step param C …`): they can be swept like a `.param`.
+pub fn step_params(stmts: &[String]) -> Vec<String> {
+    stmts.iter().filter_map(|s| match parse_step(s).ok()?.what {
+        Stepped::Param(n) => Some(n),
+        _ => None,
+    }).collect()
 }
 
 /// Every top-level `.param` definition of `name` (byte spans of its value).
@@ -1749,8 +1758,9 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool) -> Netlist {
             }
         }
     }
-    // a .step that will not run is said before a run
+    // a .step that will not run is said before a run; the netlist shows them (nomospice runs them)
     nl.warnings.extend(nl.steps.iter().filter_map(|s| parse_step(s).err()));
+    directives.extend(nl.steps.iter().map(|s| format!("* {s} (nomospice: one run per step)")));
     let defined = |name: &str| directives.iter().any(|d| {
         let t: Vec<String> = d.split_whitespace().take(2).map(str::to_lowercase).collect();
         matches!(t.first().map(String::as_str), Some(".model" | ".subckt")) && t.get(1).map(String::as_str) == Some(name)
@@ -2428,6 +2438,8 @@ mod tests {
         let p = Prepared("* t\nV1 a 0 AC 1\n.temp 50\n.end\n".into(), vec![], vec![".step V1 list 3".into(), ".step temp list -40".into()]);
         let t = p.steps().unwrap().unwrap().at(0).unwrap().1;
         assert!(t.text().contains("V1 a 0 DC 3e0 AC 1") && t.text().contains(".temp -4e1") && !t.text().contains("options"), "{}", t.text());
+        let p = Prepared("* t\nV1 a 0 AC 1 DC 2\n.end\n".into(), vec![], vec![".step V1 list 3".into()]);
+        assert!(p.steps().unwrap().unwrap().at(0).unwrap().1.text().contains("V1 a 0 AC 1 DC 3e0"), "the DC value where it is");
         assert!(parse_step(".step VDMOS IRF530(Rd) 1m 10m 1m").unwrap_err().contains("model parameter"));
         assert!(parse_step(".step param x 0 1 1e-300").unwrap_err().contains("more than"), "no overflow");
         assert_eq!(short_num(1000.5), "1.0005k");
