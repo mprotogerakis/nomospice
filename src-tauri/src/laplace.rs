@@ -109,16 +109,19 @@ impl R {
         }
         R(padd(&pmul(&self.0, &o.1), &pmul(&on, &self.1)), pmul(&self.1, &o.1))
     }
-    // ponytail: a factor is cancelled only where it is written alike above and below (G/(1+G):
-    // G's denominator); a numeric polynomial gcd if other forms leave hidden pole-zero pairs
+    // ponytail: with parameters in them, a factor is cancelled only where it is written alike
+    // above and below (G/(1+G): G's denominator; numbers: `cancel`); a gcd of expressions if
+    // other forms leave hidden pole-zero pairs
     fn mul(&self, o: &R) -> R {
-        if self.0 == o.1 {
-            return R(o.0.clone(), self.1.clone());
+        let one = || vec![C::N(1.0)];
+        let (mut n1, mut d1, mut n2, mut d2) = (self.0.clone(), self.1.clone(), o.0.clone(), o.1.clone());
+        if n1.len() > 1 && n1 == d2 {
+            (n1, d2) = (one(), one());
         }
-        if self.1 == o.0 {
-            return R(self.0.clone(), o.1.clone());
+        if d1.len() > 1 && d1 == n2 {
+            (d1, n2) = (one(), one());
         }
-        R(pmul(&self.0, &o.0), pmul(&self.1, &o.1))
+        R(pmul(&n1, &n2), pmul(&d1, &d2))
     }
     fn div(&self, o: &R) -> R {
         self.mul(&R(o.1.clone(), o.0.clone()))
@@ -155,7 +158,7 @@ impl P<'_> {
         let mut a = self.unary()?;
         loop {
             match self.peek() {
-                Some('*') if !self.s[self.i..].starts_with("**") => {
+                Some('*') => {
                     self.i += 1;
                     a = sized(a.mul(&self.unary()?))?;
                 }
@@ -273,7 +276,11 @@ impl P<'_> {
                 if mentions_s(text) {
                     return Err(format!("`{text}`: only a ratio of polynomials in s runs (no delay exp(-s*T), no sqrt(s))"));
                 }
-                Ok(R::c(C::E(text.to_string())))
+                if ["v", "i"].iter().any(|f| name.eq_ignore_ascii_case(f)) && text.len() > name.len() {
+                    return Err(format!("`{text}`: no voltages or currents in it (an E source's input is its control nodes)"));
+                }
+                // (inner braces: one pair around the whole coefficient is what ngspice takes)
+                Ok(R::c(C::E(text.replace('{', "(").replace('}', ")"))))
             }
             _ => Err(format!("cannot read `{}`", &self.s[self.i..])),
         }
@@ -380,7 +387,25 @@ fn cancel(num: &[f64], den: &[f64]) -> Option<(Vec<f64>, Vec<f64>)> {
         }
         (x, y) = (y, unit(&rem));
     };
-    let (n, d) = (scaled(&divmod(&pn, &g).0, 1.0 / w), scaled(&divmod(&pd, &g).0, 1.0 / w));
+    let (qn, qd) = (divmod(&pn, &g).0, divmod(&pd, &g).0);
+    // (the same function at a few points, or the tolerance took a factor that was not shared:
+    // poles far apart, a high order)
+    let at = |p: &[f64], z: (f64, f64)| p.iter().rev().fold((0.0, 0.0), |(a, b), &c| (a * z.0 - b * z.1 + c, a * z.1 + b * z.0));
+    let h = |n: &[f64], d: &[f64], z| {
+        let ((a, b), (c, e)) = (at(n, z), at(d, z));
+        let m = c * c + e * e;
+        ((a * c + b * e) / m, (b * c - a * e) / m)
+    };
+    // (over 24 decades and at 0: a pole and a zero 1e-8 apart look alike at |p| = 1 only)
+    let points = (-12..=12).flat_map(|k| [(0.37, 0.91), (-0.2, 2.1)].map(|(x, y)| (x * 10f64.powi(k), y * 10f64.powi(k)))).chain([(0.0, 0.0)]);
+    for z in points {
+        let ((a, b), (c, e)) = (h(&pn, &pd, z), h(&qn, &qd, z));
+        let ok = |v: f64| v.is_finite();
+        if [a, b, c, e].into_iter().all(ok) && ((a - c).powi(2) + (b - e).powi(2)).sqrt() > 1e-6 * (a * a + b * b).sqrt() {
+            return None;
+        }
+    }
+    let (n, d) = (scaled(&qn, 1.0 / w), scaled(&qd, 1.0 / w));
     let lead = *d.last()?; // (its highest power below 1: the same function)
     Some((n.iter().map(|v| v / lead).collect(), d.iter().map(|v| v / lead).collect()))
 }
@@ -485,16 +510,16 @@ pub fn rewrite(text: &str, warnings: &mut Vec<String>) -> String {
     }
     let lines: Vec<&str> = text.split_inclusive('\n').collect();
     let mut out = String::with_capacity(text.len());
-    let (mut k, mut sub, mut inside) = (0, None::<String>, vec![]);
+    let (mut k, mut subs, mut inside) = (0, Vec::<String>::new(), vec![]);
     while k < lines.len() {
         let low = lines[k].trim_start().to_ascii_lowercase();
         if low.starts_with(".subckt") {
-            sub = low.split_whitespace().nth(1).map(str::to_string);
+            subs.push(low.split_whitespace().nth(1).unwrap_or("").to_string());
         } else if low.starts_with(".ends") {
-            sub = None;
+            subs.pop();
         }
-        // (not the title, whatever it says)
-        if k == 0 || !lines[k].trim_start().starts_with(['E', 'e', 'G', 'g']) {
+        // (not the title, whatever it says; B: said below)
+        if k == 0 || !lines[k].trim_start().starts_with(['E', 'e', 'G', 'g', 'B', 'b']) {
             out.push_str(lines[k]);
             k += 1;
             continue;
@@ -521,7 +546,7 @@ pub fn rewrite(text: &str, warnings: &mut Vec<String>) -> String {
                 out.push('\n');
             }
             other => {
-                match (other, &sub) {
+                match (other, subs.last()) {
                     (Some(Err(e)), None) => warnings.push(format!("`{}`: {e}", whole.trim())),
                     // (a library's: maybe not used at all; said once)
                     (Some(Err(e)), Some(s)) => inside.push((s.clone(), format!("`{}`: {e}", whole.trim()))),
@@ -546,6 +571,9 @@ fn device(l: &str) -> Option<Result<String, String>> {
     let low = t.to_ascii_lowercase();
     // `laplace =`, a word of its own (not a node `laplace_out`)
     let at = low.match_indices("laplace").map(|(k, _)| k).find(|&k| (k == 0 || low.as_bytes()[k - 1].is_ascii_whitespace()) && low[k + 7..].trim_start().starts_with('='))?;
+    if t.starts_with(['B', 'b']) {
+        return Some(Err("a B source's Laplace= does not run here; an E source's does (E1 out 0 in 0 Laplace=…)".into()));
+    }
     let toks: Vec<&str> = t[..at].split_whitespace().collect();
     if toks.len() != 5 {
         return Some(Err("a Laplace source needs its two output and two input nodes (E1 out 0 in 0 Laplace=…)".into()));
@@ -609,6 +637,11 @@ mod tests {
         near("(s+1e6)*(s+3e6)/((s+1e6)*(s+2e6)*(s+4e6))", &[3e6, 1.0], &[8e12, 6e6, 1.0]);
         near("(1+s)/(2+s)*(2+s)/(1+s)", &[1.0], &[1.0]);
         near("(s+1)/(s+2)", &[1.0, 1.0], &[2.0, 1.0]);
+        near("(s+1.1)/((s+1)*(s+1e16))", &[1.1, 1.0], &[1e16, 1e16 + 1.0, 1.0]);
+        assert_eq!(c("1/(s-{a})*(s-{a})"), (v(&["1e0"]), v(&["1e0"])), "parameters: written alike");
+        assert!(coefficients("0/0").unwrap_err().contains("denominator is 0"));
+        assert_eq!(c("sqrt({k})/(1+s)").0, ["{sqrt((k))}"]);
+        assert!(coefficients("v(ctl)/(1+s)").unwrap_err().contains("no voltages"));
         assert_eq!(c("k*(s-1k)/(s+1k)").0, ["{(k)*(-1e3)}", "{k}"]);
         assert!(coefficients("(-2)^0.5/(1+s)").unwrap_err().contains("not a number"));
         assert!(coefficients(&format!("{}1{}", "(".repeat(100_000), ")".repeat(100_000))).unwrap_err().contains("deep"));
@@ -628,6 +661,9 @@ mod tests {
         let mut w = vec![];
         rewrite("* t\n.subckt a 1 2\nE1 1 0 2 0 Laplace=exp(-s)\nE2 1 0 2 0 Laplace=exp(-s)\n.ends\n.subckt b 1 2\nE1 1 0 2 0 Laplace=exp(-s)\n.ends\nE9 o 0 i 0 Laplace=1/(1+s)\n", &mut w);
         assert!(w.len() == 1 && w[0].contains("subcircuits a, b"), "{w:?}");
+        w.clear();
+        rewrite("* t\n.subckt o 1\n.subckt i 1\n.ends i\nE1 1 0 1 0 Laplace=exp(-s)\n.ends o\nB1 o 0 V=V(i) Laplace=1/(1+s)\n", &mut w);
+        assert!(w.len() == 2 && w[0].contains("B source") && w[1].contains("subcircuit o "), "nested .ends: {w:?}");
         w.clear();
         let t = rewrite("* t\nE1 out 0 Laplace=1/s\n", &mut w);
         assert!(w[0].contains("two output and two input") && t.contains("Laplace"), "left as it was, said");
