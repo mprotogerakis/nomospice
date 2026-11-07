@@ -147,7 +147,7 @@ pub struct Local {
     own: HashSet<String>,
     /// a fingerprint of its .asy files when they were (an added, removed, edited, renamed or
     /// replaced symbol changes it)
-    stamp: Option<(usize, u128)>,
+    stamp: Option<(usize, u64)>,
     /// keys of symbols lent by library folders (they go when the libraries change)
     lent: HashSet<String>,
 }
@@ -164,13 +164,13 @@ pub fn folder_symbols(dir: &std::path::Path) -> Vec<(String, std::path::PathBuf)
 
 /// (count, a sum over names, modification times and sizes) of a folder's symbol files (the list
 /// `folder_symbols` gave).
-fn asy_stamp(list: &[(String, std::path::PathBuf)]) -> Option<(usize, u128)> {
+fn asy_stamp(list: &[(String, std::path::PathBuf)]) -> (usize, u64) {
     use std::hash::{Hash, Hasher};
     let mut files: Vec<_> = list.iter().filter_map(|(_, p)| Some((p.file_name()?.to_os_string(), p.metadata().ok()?))).map(|(name, m)| (name, m.modified().ok(), m.len())).collect();
     files.sort(); // (the listing's order is not fixed)
     let mut h = std::collections::hash_map::DefaultHasher::new();
     files.hash(&mut h); // names (a rename counts), mtimes, sizes
-    Some((files.len(), h.finish() as u128))
+    (files.len(), h.finish())
 }
 
 impl Library {
@@ -194,7 +194,7 @@ impl Library {
             return false; // netlisting: no disk access
         }
         let list = dir.map(folder_symbols).unwrap_or_default(); // one listing for the stamp and the load
-        let stamp = dir.and_then(|d| std::fs::metadata(d).ok()).and_then(|_| asy_stamp(&list));
+        let stamp = dir.and_then(|d| std::fs::metadata(d).ok()).map(|_| asy_stamp(&list)); // (None: no such folder)
         if !moved && stamp == self.local.stamp {
             return false;
         }

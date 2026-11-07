@@ -1,5 +1,5 @@
 // "Edit Simulation Command": every analysis as a form (LTspice's dialog, plus .tf, .pz, .sens).
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import type { Item } from "./types";
 import { analysesOf, analysisItem, commit, currentTab, selectTab, useS } from "./store";
 import { ANALYSES, ANY_ANALYSIS, analysisEditableAt, analysisLineIndex, analysisOptions, continuation, formatAnalysis, knownSweep, parseAnalysis, type Analysis, type Fields } from "./spice";
@@ -26,7 +26,7 @@ export function SimDialog({ index, kind0, of }: { index?: number; kind0?: Analys
   });
   const [kind, setKind] = useState<Analysis>(init.kind);
   const [err, setErr] = useState("");
-  const present = useMemo(() => analysesOf(items), [items]); // (once, not per tab below)
+  const present = analysesOf(items); // (cached per items array: once, not per tab below)
   const [forms, setForms] = useState<Partial<Record<Analysis, Fields>>>({ [init.kind]: init.f });
   const f = forms[kind] ?? {};
   const v = (k: string) => f[k] ?? "";

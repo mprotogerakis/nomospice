@@ -2,7 +2,7 @@
 // and suggestion lists (nets, sources) from the open schematic.
 import { useEffect, useMemo, useRef } from "react";
 import { currentNets, useS } from "../store";
-import { defOf, type Lib } from "../geom";
+import { defOf, prefixOf, type Lib } from "../geom";
 import type { Item, Netlist } from "../types";
 import { numInfo } from "../spice";
 import { Button } from "./button";
@@ -161,7 +161,8 @@ export const SpiceLine = ({ children }: { children: React.ReactNode }) => (
 
 /** The parts of the schematic: SPICE instance name (from the netlist when current) and prefix letter. */
 const circuitInsts = (items: Item[], nets: Netlist | null, lib: Lib) =>
-  items.flatMap((it, i) => (it.t === "sym" ? [{ inst: nets?.insts[i] || it.attrs.InstName || "", prefix: defOf(lib, it)?.prefix?.[0]?.toUpperCase() ?? "" }] : [])).filter((x) => x.inst);
+  // (the part's own Prefix wins, as in the netlist: an R symbol with Prefix X is no resistor)
+  items.flatMap((it, i) => (it.t === "sym" ? [{ inst: nets?.insts[i] || it.attrs.InstName || "", prefix: prefixOf(it, defOf(lib, it)) }] : [])).filter((x) => x.inst);
 
 /** <datalist>s for the fields: "nets", "sources" (V/I), "sweepable" (sources, R, TEMP), "vexprs" (V(net)). */
 export function CircuitLists() {

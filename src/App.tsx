@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -453,7 +453,7 @@ export function App() {
  *  traces, zoom and cursors. "+" adds an analysis; double-click edits the tab's. */
 function AnalysisTabs() {
   const items = useS((s) => s.items), tab = useS((s) => s.tab), running = useS((s) => s.running);
-  const opts = useMemo(() => analysesOf(items), [items]);
+  const opts = analysesOf(items); // (cached per items array)
   if (!opts.length) return null;
   const cur = currentTab({ tab, items }, opts);
   const name = (k: string) => ANALYSES.find(([a]) => a === k)?.[1] ?? k;

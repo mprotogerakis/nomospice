@@ -245,7 +245,8 @@ export const analysesOf = (items: Item[]) => {
 
 /** The tab shown: the chosen one while the schematic still has it, else its active analysis. */
 export function currentTab(s: { tab: Analysis | null; items: Item[] }, o = analysesOf(s.items)): Analysis | null {
-  return (s.tab && o.some((x) => x.kind === s.tab) ? s.tab : o.find((x) => x.active)?.kind) ?? null;
+  // (only commented alternatives, LTspice's `;.tran …`: the first of them, so Run has one to run)
+  return (s.tab && o.some((x) => x.kind === s.tab) ? s.tab : (o.find((x) => x.active) ?? o[0])?.kind) ?? null;
 }
 
 /** Index of the text item holding the analysis of `kind` (the active one first). */
@@ -264,7 +265,7 @@ export function simDeck(items: Item[], tab: Analysis | null, opts = analysesOf(i
   // (the form's kinds: an extra .pss beside one .op runs along as written, as before)
   const actives = items.reduce((n, it) => n + (it.t === "text" && it.directive ? it.text.split("\n").filter((l) => ANALYSIS.test(l.trim())).length : 0), 0);
   // (a chosen tab whose analysis is gone: the shown one, as currentTab says)
-  const kind = tab && opts.some((o) => o.kind === tab) ? tab : actives > 1 ? currentTab({ tab, items }, opts) : null;
+  const kind = tab && opts.some((o) => o.kind === tab) ? tab : actives > 1 || !actives ? currentTab({ tab, items }, opts) : null;
   const pick = kind ? opts.find((o) => o.kind === kind) : undefined;
   if (!pick || (pick.active && actives === 1)) return items;
   return [...items.map((it) => (it.t === "text" && it.directive ? { ...it, text: stripAnalyses(it.text) } : it)), { t: "text", x: 0, y: 0, text: pick.line, directive: true } as Item];
