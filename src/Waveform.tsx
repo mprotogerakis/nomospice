@@ -160,14 +160,15 @@ export const Waveform = memo(function Waveform() {
   const ok = useMemo(() => traces.filter((t) => t.data?.x.length), [traces]);
   // the spectrum view: each trace (each .step curve) as its spectrum over lo..hi, in dB; the range
   // as asked, within what this run has (a shorter re-run: no window past its end)
+  const x0 = ok[0]?.data!.x;
   const win = useMemo(() => {
-    const x = ok[0]?.data!.x;
+    const x = x0;
     if (!spec || !x) return null;
     const one = x.slice(0, segment(x));
     const [lo, hi] = [Math.max(fft!.lo, one[0]), Math.min(fft!.hi, one[one.length - 1])];
     const [a, b] = hi > lo ? [lo, hi] : [one[0], one[one.length - 1]];
     return { lo: a, hi: b, n: fftSize(one, a, b) };
-  }, [spec, ok, fft]);
+  }, [spec, x0, fft]);
   const shown = useMemo(() => {
     if (!win) return ok;
     const f = fftFreqs(win.lo, win.hi, win.n); // (x: the frequencies once, shared; the curves end to end in re)
@@ -202,8 +203,12 @@ export const Waveform = memo(function Waveform() {
     const panes: Pane[] = [];
     if (cplx.length) panes.push({ unit: "dB", unit2: "", series: cplx.flatMap((t) => split(t, mag(t), "dB", !!t.right)) }, { unit: "°", unit2: "", series: cplx.flatMap((t) => split(t, phase(t, seg), "°", !!t.right)) });
     // a trace moved to another unit's pane goes there while that pane has traces of its own
+    // (and one other unit per pane, the first moved there: a move kept from another analysis
+    // may bring a second)
     const own = new Set(real.filter((t) => t.pane == null).map((t) => t.unit));
-    const home = (t: Trace) => (t.pane != null && own.has(t.pane) ? t.pane : t.unit);
+    const guestOf = new Map<string, string>();
+    for (const t of real) if (t.pane != null && own.has(t.pane) && t.pane !== t.unit && !guestOf.has(t.pane)) guestOf.set(t.pane, t.unit);
+    const home = (t: Trace) => (t.pane != null && own.has(t.pane) && (t.pane === t.unit || guestOf.get(t.pane) === t.unit) ? t.pane : t.unit);
     const units = [...new Set(real.map(home))].sort((a, b) => (a === "V" ? -1 : b === "V" ? 1 : a.localeCompare(b)));
     for (const unit of units) {
       // a pane holding a trace of another unit: its right axis is that unit's (its own traces left)
@@ -249,20 +254,22 @@ export const Waveform = memo(function Waveform() {
       const el = paneEls.current[pi];
       if (!el) return;
       const last = pi === panes.length - 1;
-      const span = pane.unit === "dB" ? 20 : pane.unit === "°" ? 90 : 0;
+      const spanOf = (unit: string) => (unit === "dB" ? 20 : unit === "°" ? 90 : 0);
+      const span = spanOf(pane.unit);
       const twin = pane.series.some((s) => scaleOf(pane, s) === "y2");
       // dB/phase: at least `span` tall, so 0.1 dB of ripple does not fill the pane like a resonance;
       // a spectrum: at most 140 dB below its peak (rounding's floor at -300 dB is no signal)
-      const yRange = span ? { range: (_u: uPlot, lo: number | null, hi: number | null): uPlot.Range.MinMax => {
+      const rangeOf = (span: number) => (span ? { range: (_u: uPlot, lo: number | null, hi: number | null): uPlot.Range.MinMax => {
         if (lo == null || hi == null) return [lo, hi];
         if (spec && hi - lo > 140) lo = hi - 140;
         if (hi - lo < span) [lo, hi] = [(lo + hi - span) / 2, (lo + hi + span) / 2];
         return uPlot.rangeNum(lo, hi, 0.05, true);
-      } } : {};
-      // the left axis as set: log, a fixed range
+      } } : {});
+      const yRange = rangeOf(span);
+      // the left axis as set: log, a fixed range (on a log axis, only one above 0)
       const ax = yAxes[axisKey(pane.unit, spec)] ?? {};
       const logY = !!ax.log && !span && positive(pane); // (nothing above 0: linear)
-      const fixed = ax.lo != null && ax.hi != null ? { range: (): uPlot.Range.MinMax => [ax.lo!, ax.hi!] } : {};
+      const fixed = ax.lo != null && ax.hi != null && (!logY || ax.lo > 0) ? { range: (): uPlot.Range.MinMax => [ax.lo!, ax.hi!] } : {};
       const values = (unit: string) => (_u: uPlot, v: number[], _i: number, _s: number, incr: number) =>
         v.map((y) => (unit === "dB" || unit === "°" ? `${+y.toFixed(Math.max(0, Math.ceil(-Math.log10(incr))))}${unit}` : si(y, unit, 3)));
       const opts: uPlot.Options = {
@@ -275,7 +282,7 @@ export const Waveform = memo(function Waveform() {
           // exactly the data: a log axis would otherwise round up to whole decades (1 MHz data -> 10 MHz)
           x: { time: false, distr: logX ? 3 : 1, ...(logX ? { range: (_u, lo, hi): uPlot.Range.MinMax => (lo < hi ? [lo, hi] : [lo / 2, hi * 2]) } : {}) },
           y: { ...yRange, ...(logY ? { distr: 3, log: 10 } : {}), ...fixed },
-          ...(twin ? { y2: yRange } : {}),
+          ...(twin ? { y2: rangeOf(spanOf(pane.unit2)) } : {}),
         },
         axes: [
           { stroke: text, grid: { stroke: grid, width: 1 }, ticks: { stroke: grid, width: 1 }, size: last ? 36 : 8, values: last ? (_u, v) => v.map((x) => (x == null ? "" : si(x, xUnit, 3))) : () => [], font: "11px IBM Plex Mono" },
@@ -416,7 +423,7 @@ export const Waveform = memo(function Waveform() {
             : { label: "FFT (spectrum)", hint: a != null && b != null && a !== b ? "of A–B" : zoom ? "of the shown range" : "of the whole run", disabled: !panes.length || !(range[1] > range[0]), run: () => showFft(range) }] : []),
           ...(pane ? ["-" as const,
             { label: ax.log ? "Linear y axis" : "Log y axis", hint: db ? `${pane.unit}: no` : !pos ? "nothing above 0" : undefined, disabled: db || (!ax.log && !pos), run: () => setYAxis(key, { ...ax, log: !ax.log || undefined, ...(!ax.log && ax.lo != null && ax.lo <= 0 ? { lo: undefined, hi: undefined } : {}) }) },
-            { label: "Y range…", hint: ax.lo != null && ax.hi != null ? `${si(ax.lo, pane.unit, 3)} … ${si(ax.hi, pane.unit, 3)}` : "automatic", run: () => useS.setState({ dialog: { k: "yrange", pane: key, unit: pane.unit, log: !!ax.log && !db && pos } }) },
+            { label: "Y range…", hint: ax.lo != null && ax.hi != null ? `${si(ax.lo, pane.unit, 3)} … ${si(ax.hi, pane.unit, 3)}` : "automatic", run: () => useS.setState({ dialog: { k: "yrange", pane: key, unit: pane.unit, log: !!ax.log && !db } }) },
             ...(ax.lo != null ? [{ label: "Automatic y range", run: () => setYAxis(key, { ...ax, lo: undefined, hi: undefined }) }] : []),
           ] : []),
           "-",
@@ -435,7 +442,7 @@ export const Waveform = memo(function Waveform() {
       <div className="flex w-[340px] shrink-0 flex-col border-l border-border bg-surface-panel text-xs">
         {win && (
           <div className="border-b border-border px-2 py-1 font-mono text-2xs text-text-secondary">
-            Spectrum of {si(win!.lo, "s")} … {si(win!.hi, "s")}: {win!.n} points, Hann window, dB of the amplitude (a sine of 1 V or 1 A: 0 dB) ·{" "}
+            Spectrum of {si(win.lo, "s")} … {si(win.hi, "s")}: {win.n} points, Hann window, dB of the amplitude (a sine of 1 V or 1 A: 0 dB) ·{" "}
             <button className="underline hover:text-text-strong" onClick={() => showFft(null)}>back to the transient</button>
           </div>
         )}
@@ -526,7 +533,7 @@ const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot, spec, st
                 // (into another unit's pane: on its right axis there, unless that holds a third unit
                 // already; not the Bode panes, nor in a spectrum)
                 ...(t.data?.im || spec ? [] : panes.filter((p) => p.unit !== "dB" && p.unit !== "°" && p.unit !== t.unit && !p.series.some((s) => s.t === t) && p.series.every((s) => s.u === p.unit || s.u === t.unit)).map((p) => ({ label: `Into the ${p.unit || "unitless"} pane`, hint: "its right axis", run: () => setTracePane(t.expr, p.unit) }))),
-                ...(t.pane != null && !spec ? [{ label: `Back to its own pane (${t.unit || "unitless"})`, run: () => setTracePane(t.expr, undefined) }] : []),
+                ...(moved(t) && !spec ? [{ label: `Back to its own pane (${t.unit || "unitless"})`, run: () => setTracePane(t.expr, undefined) }] : []),
                 { label: "Copy expression", hint: t.expr, run: () => navigator.clipboard.writeText(t.expr) },
                 { label: `Remove ${t.label}`, danger: true, run: () => removeTrace(t.expr) },
               ]))}>

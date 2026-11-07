@@ -684,8 +684,12 @@ function fft(re: Float64Array, im: Float64Array) {
     for (; j & bit; bit >>= 1) j ^= bit;
     j ^= bit;
     if (i < j) {
-      [re[i], re[j]] = [re[j], re[i]];
-      [im[i], im[j]] = [im[j], im[i]];
+      let t = re[i];
+      re[i] = re[j];
+      re[j] = t;
+      t = im[i];
+      im[i] = im[j];
+      im[j] = t;
     }
   }
   // (the twiddles once per size: e^(-2πik/n), k < n/2; a stage of length len takes every (n/len)th)
@@ -700,7 +704,7 @@ function fft(re: Float64Array, im: Float64Array) {
     const step = n / len;
     for (let i = 0; i < n; i += len) {
       for (let k = 0; k < len / 2; k++) {
-        const [cr, ci] = [wr[k * step], wi[k * step]];
+        const cr = wr[k * step], ci = wi[k * step];
         const p = i + k, q = p + len / 2;
         const tr = re[q] * cr - im[q] * ci, ti = re[q] * ci + im[q] * cr;
         re[q] = re[p] - tr;
@@ -720,7 +724,7 @@ export function fftSize(xs: number[], lo: number, hi: number) {
   const steps: number[] = [];
   for (let i = 1; i < xs.length; i++) if (xs[i] > lo && xs[i - 1] < hi && xs[i] > xs[i - 1]) steps.push(xs[i] - xs[i - 1]);
   steps.sort((a, b) => a - b);
-  const m = Math.min(2 ** 20, (hi - lo) / (steps[Math.floor(steps.length * 0.05)] ?? 0)); // (no step there: the most)
+  const m = (hi - lo) / (steps[Math.floor(steps.length * 0.05)] ?? 0); // (no step there: Infinity, the most)
   return Math.min(2 ** 20, Math.max(4096, 2 ** Math.ceil(Math.log2(Math.max(m, 2)))));
 }
 
