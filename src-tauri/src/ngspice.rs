@@ -278,8 +278,7 @@ pub struct Run {
 fn meas_names(deck: &str) -> std::collections::HashMap<String, bool> {
     crate::schematic::statements(deck, &[".meas", ".measure"]).iter().filter_map(|l| {
         let t: Vec<String> = l.split_whitespace().map(str::to_ascii_lowercase).collect();
-        let typed = t.get(1).is_some_and(|w| crate::schematic::TYPES_MEAS.contains(&w.as_str()));
-        let k = if typed { 2 } else { 1 };
+        let k = crate::schematic::meas_name_at(&t);
         let at_x = t.iter().skip(k + 1).any(|w| w == "when") && !t.iter().skip(k + 1).any(|w| ["find", "deriv", "derivative"].contains(&w.as_str()));
         t.first().filter(|w| w.starts_with(".meas")).and_then(|_| Some((t.get(k)?.clone(), at_x)))
     }).collect()
@@ -303,8 +302,7 @@ fn measurements(log: &[String], names: &std::collections::HashMap<String, bool>)
         // `.meas tran x … failed!`, `meas x failed!` or `x failed!`
         if let Some(stmt) = t.strip_suffix("failed!") {
             let w: Vec<&str> = stmt.split_whitespace().collect();
-            let typed = w.get(1).is_some_and(|t| crate::schematic::TYPES_MEAS.contains(&t.to_ascii_lowercase().as_str()));
-            let name = if w.first().is_some_and(|f| f.starts_with('.')) { w.get(if typed { 2 } else { 1 }) } else { w.last() };
+            let name = if w.first().is_some_and(|f| f.starts_with('.')) { w.get(crate::schematic::meas_name_at(&w)) } else { w.last() };
             if let Some((name, x)) = name.and_then(|n| Some((n, at_x(n)?))) {
                 out.push((name.to_string(), None, "failed".into(), x));
             }

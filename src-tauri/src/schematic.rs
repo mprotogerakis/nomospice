@@ -706,7 +706,7 @@ fn directive(line: &str, warnings: &mut Vec<String>) -> Option<String> {
         Some(".tran") => {
             // LTspice: `.tran <stop>` / `.tran 0 <stop> ...`; ngspice needs a real step.
             // An inline `; comment` must not contribute arguments.
-            let tok = spice_tokens(line.split(';').next().unwrap_or_default()).into_iter().skip(1);
+            let tok = spice_tokens(uncommented(line)).into_iter().skip(1);
             const LT_ONLY: [&str; 3] = ["startup", "steady", "nodiscard"];
             let expr = |t: &&str| spice_num(t).is_some() || t.starts_with(['{', '\'']);
             let (rest, lt): (Vec<&str>, Vec<&str>) = tok.partition(|t| !LT_ONLY.contains(&t.to_lowercase().as_str()));
@@ -925,7 +925,8 @@ fn meas_statement(s: &str, sensors: &[Sensor], an: &str) -> Result<String, Strin
             || (v.chars().all(|c| c.is_ascii_alphanumeric() || ".+-".contains(c)) && v.starts_with(|c: char| c.is_ascii_digit() || ".+-".contains(c)) && spice_num(v).is_some())
     };
     let par = |x: &str| format!("par('{}')", x.trim().trim_matches('\''));
-    let typ = toks.get(1).map(|t| low(t)).filter(|t| TYPES_MEAS.contains(&t.as_str())).unwrap_or(an.to_string());
+    let typed = meas_name_at(&toks) == 2;
+    let typ = if typed { low(&toks[1]) } else { an.to_string() };
     // AC: par() is a B-source, linearized there: an expression would come out silently wrong.
     // LTspice's mag()/db()/ph()/re()/im() of a voltage are ngspice's vm/vdb/vp/vr/vi; anything else
     // stays as written (ngspice then reports it failed rather than a wrong number)
@@ -943,7 +944,7 @@ fn meas_statement(s: &str, sensors: &[Sensor], an: &str) -> Result<String, Strin
     const OPTION: [&str; 8] = ["val", "td", "rise", "fall", "cross", "at", "from", "to"];
     let mut out: Vec<String> = toks.iter().take(1).cloned().collect();
     let mut i = 1;
-    if toks.get(1).is_some_and(|t| TYPES_MEAS.contains(&low(t).as_str())) {
+    if typed {
         out.push(toks[1].clone());
         i = 2;
     } else if ["tran", "ac", "dc", "sp"].contains(&an) {
@@ -1041,6 +1042,11 @@ fn meas_statement(s: &str, sensors: &[Sensor], an: &str) -> Result<String, Strin
 }
 
 pub const TYPES_MEAS: [&str; 7] = ["tran", "ac", "dc", "op", "noise", "tf", "sp"];
+
+/// Where a `.meas` statement's name is among its tokens: after the analysis type, if it has one.
+pub fn meas_name_at<S: AsRef<str>>(tokens: &[S]) -> usize {
+    if tokens.get(1).is_some_and(|t| TYPES_MEAS.contains(&t.as_ref().to_ascii_lowercase().as_str())) { 2 } else { 1 }
+}
 
 /// `I(R1)` → `i(vsense_r1)` for the parts that have a current sensor (LTspice measures part
 /// currents directly; ngspice only branch currents).

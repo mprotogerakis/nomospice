@@ -171,7 +171,7 @@ export function dragPlan(items: Item[], lib: Lib, sel: Set<number>) {
   const ends = (w: Wire): Pt[] => [[w.x1, w.y1], [w.x2, w.y2]];
   // pins of parts that stay: a wire must not take a connection away from them
   const fixed = new Set(items.flatMap((it, i) => (it.t === "sym" && !sel.has(i) ? pins(it, defOf(lib, it)).map((p) => key(...p)) : [])));
-  const pinned = (w: Wire) => conn.some((p) => fixed.has(key(...p)) && inside(p, w));
+  const pinned = (w: Wire) => conn.some((p) => inside(p, w) && fixed.has(key(...p))); // (cheap test first)
   // wires that move whole, and what hangs on them: a worklist, each wire once. A wire whose ends
   // both move joins (one with a resting part's pin on it stretches instead: the pin keeps its wires)
   const whole = new Set<number>(), work: number[] = [];

@@ -66,7 +66,15 @@ fn resolve(base: &Path, p: &str) -> PathBuf {
     if p.is_absolute() { p.to_path_buf() } else { base.join(p) }
 }
 
-fn schematic_of(base: &Path, args: &Value) -> Result<(Vec<schematic::Item>, Option<PathBuf>), String> {
+/// The schematic of a request (inline `asc` or a file `path`); `lib` is set to its folder (its own
+/// .asy symbols), as in the app.
+fn schematic_of(base: &Path, args: &Value, lib: &mut schematic::Library) -> Result<(Vec<schematic::Item>, Option<PathBuf>), String> {
+    let (items, path) = schematic_at(base, args)?;
+    lib.set_dir(path.as_deref().and_then(Path::parent), false);
+    Ok((items, path))
+}
+
+fn schematic_at(base: &Path, args: &Value) -> Result<(Vec<schematic::Item>, Option<PathBuf>), String> {
     match (args["asc"].as_str(), args["path"].as_str()) {
         (Some(text), _) => Ok((schematic::parse_asc(text), None)),
         (None, Some(p)) => {
@@ -89,8 +97,7 @@ fn call(base: &Path, name: &str, args: &Value) -> Result<Value, String> {
     let mut lib = schematic::Library::builtin();
     match name {
         "simulate" => {
-            let (items, path) = schematic_of(base, args)?;
-            lib.set_dir(path.as_deref().and_then(Path::parent), false); // its folder's symbols, as in the app
+            let (items, path) = schematic_of(base, args, &mut lib)?;
             let shown = schematic::netlist(&items, &mut lib);
             let sim = schematic::netlist_for_sim(&items, &mut lib);
             let mut warnings = shown.warnings.clone();
@@ -124,14 +131,12 @@ fn call(base: &Path, name: &str, args: &Value) -> Result<Value, String> {
             }))
         }
         "netlist" => {
-            let (items, path) = schematic_of(base, args)?;
-            lib.set_dir(path.as_deref().and_then(Path::parent), false); // its folder's symbols, as in the app
+            let (items, _) = schematic_of(base, args, &mut lib)?;
             let nl = schematic::netlist(&items, &mut lib);
             Ok(json!({ "netlist": nl.text, "warnings": nl.warnings, "nets": nl.nets, "instances": nl.insts, "current_probes": nl.probes }))
         }
         "read_schematic" => {
-            let (items, path) = schematic_of(base, args)?;
-            lib.set_dir(path.as_deref().and_then(Path::parent), false); // its folder's symbols, as in the app
+            let (items, _) = schematic_of(base, args, &mut lib)?;
             let nl = schematic::netlist(&items, &mut lib);
             let mut parts = vec![];
             let mut labels = vec![];

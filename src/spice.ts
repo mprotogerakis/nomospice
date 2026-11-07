@@ -250,6 +250,9 @@ export function analysisOptions(texts: { text: string; directive?: boolean }[]) 
   const found: { kind: Analysis; line: string; active: boolean }[] = [];
   for (const { text, directive } of texts) {
     const lines = text.split("\n");
+    // a comment is an alternative only if it holds nothing but analyses (LTspice's `;.ac …`), not
+    // a note that mentions one ("Try this later:\n.tran 5m")
+    if (!directive && !lines.every((l) => !l.trim() || l.trim().startsWith("+") || (ANALYSIS.test(l.trim()) && plausible(l.trim())))) continue;
     lines.forEach((l, i) => {
       if (!ANALYSIS.test(l.trim()) || (!directive && !plausible(l.trim()))) return;
       const more = continuation(lines, i).map((j) => lines[j].trim());

@@ -150,11 +150,7 @@ async fn export_svg(path: String, svg: String) -> Result<(), String> {
 
 #[tauri::command]
 async fn netlist(items: Vec<Item>, dir: Option<String>, lib: tauri::State<'_, Lib>) -> Result<Netlist, String> {
-    let mut nl = {
-        let mut lib = lib.0.lock().unwrap_or_else(|e| e.into_inner());
-        lib.set_dir(dir.as_deref().map(std::path::Path::new), false);
-        schematic::netlist(&items, &mut lib)
-    };
+    let mut nl = schematic::netlist(&items, &mut lib_at(&lib, dir.as_deref()));
     schematic::prepare_warnings(&nl.text, dir.as_deref().map(std::path::Path::new), &mut nl.warnings);
     Ok(nl)
 }
@@ -170,6 +166,14 @@ struct Sim {
     sweepable: Vec<String>,
 }
 
+/// The symbol library, set to the schematic's folder (its own .asy symbols): every netlisting goes
+/// through here, so none uses another document's folder.
+fn lib_at<'a>(lib: &'a Lib, dir: Option<&str>) -> std::sync::MutexGuard<'a, Library> {
+    let mut lib = lib.0.lock().unwrap_or_else(|e| e.into_inner());
+    lib.set_dir(dir.map(std::path::Path::new), false);
+    lib
+}
+
 /// A root locus loads one .pz deck after another. A sweep holds this lock for its whole run, so a
 /// simulation (which stops it via SWEEP_GEN) waits for it; traces check the run id instead.
 static SWEEP: Mutex<()> = Mutex::new(());
@@ -183,8 +187,7 @@ async fn simulate(items: Vec<Item>, dir: Option<String>, lib: tauri::State<'_, L
     // the UI gets the clean netlist (same nets/insts/probes); the one with current sensors runs
     // both netlists from one state of the library (the UI's nets, insts, probes match what runs)
     let (mut netlist, sim) = {
-        let mut lib = lib.0.lock().unwrap_or_else(|e| e.into_inner());
-        lib.set_dir(dir.as_deref().map(std::path::Path::new), false);
+        let mut lib = lib_at(&lib, dir.as_deref());
         (schematic::netlist(&items, &mut lib), schematic::netlist_for_sim(&items, &mut lib))
     };
     // the newer request wins: a running root locus stops at its next step, then this runs
@@ -211,11 +214,7 @@ async fn simulate(items: Vec<Item>, dir: Option<String>, lib: tauri::State<'_, L
 async fn root_locus(items: Vec<Item>, dir: Option<String>, target: String, values: Vec<f64>, lib: tauri::State<'_, Lib>) -> Result<Vec<Option<Vec<(f64, f64)>>>, String> {
     let op = ngspice::begin();
     let gen = SWEEP_GEN.load(std::sync::atomic::Ordering::SeqCst); // at once: a cancel while netlisting counts
-    let sim = {
-        let mut lib = lib.0.lock().unwrap_or_else(|e| e.into_inner());
-        lib.set_dir(dir.as_deref().map(std::path::Path::new), false);
-        schematic::netlist_for_sim(&items, &mut lib)
-    };
+    let sim = schematic::netlist_for_sim(&items, &mut lib_at(&lib, dir.as_deref()));
     // Halt, a new simulation or the panel's Halt: also mid-step (bg_halt)
     let stop = move || ngspice::halted_since(op) || SWEEP_GEN.load(std::sync::atomic::Ordering::SeqCst) != gen;
     tauri::async_runtime::spawn_blocking(move || {
@@ -281,8 +280,10 @@ async fn folder_symbols(from: String, to: String, names: Vec<String>, copy: bool
             }
             match new.get(&key) {
                 Some(there) => {
+                    // a different file of that name there: it would be used instead (an identical
+                    // one is simply the same symbol: nothing to tell)
                     if std::fs::read(src).ok() != std::fs::read(there).ok() {
-                        out.push((file, true)); // the same symbol already there: nothing to tell
+                        out.push((file, true));
                     }
                 }
                 None => {

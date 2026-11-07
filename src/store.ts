@@ -369,7 +369,11 @@ async function addTraceNow(label: string, expr: string, unit: string) {
     seq = runSeq;
     t = await fetchTrace({ label, expr, unit, slot: 0 });
     // this tab's results are no longer in ngspice (another tab or a root locus ran since): run it again, once
-    if (rerun && seq === runSeq && /replaced by a later run/.test(t.error ?? "")) (rerun = false), await simulate();
+    if (rerun && seq === runSeq && /replaced by a later run/.test(t.error ?? "")) {
+      rerun = false;
+      await idle(); // a run in flight first (simulate would not start a second one)
+      if (seq === runSeq) await simulate();
+    }
     if (seq !== runSeq) await idle(); // a run started meanwhile: evaluate again on its result
   } while (seq !== runSeq);
   if (gen !== docGen || !get().sim?.run || isOp(get().sim)) return;
