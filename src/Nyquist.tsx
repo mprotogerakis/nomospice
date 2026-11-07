@@ -51,7 +51,7 @@ export const Polar = memo(function Polar({ curves, freqs, mode, onHover }: { cur
     setHit(null);
     onHover(null);
   }, [curves]); // eslint-disable-line react-hooks/exhaustive-deps
-  const margin = 32;
+  const margin = Math.min(32, size.w / 4, size.h / 4); // (less in a tiny pane: never a negative scale)
   const base = useMemo(() => {
     const kx = Math.max((size.w - 2 * margin) / (fit.x1 - fit.x0), 1e-30), ky = Math.max((size.h - 2 * margin) / (fit.y1 - fit.y0), 1e-30);
     const k = Math.min(kx, ky);
@@ -133,7 +133,9 @@ export const Polar = memo(function Polar({ curves, freqs, mode, onHover }: { cur
   // (Nyquist: one step on both axes, square cells at its one scale)
   const square = tickStep(Math.max(hi.x - lo.x, hi.y - lo.y));
   const ticks = (a: number, b: number) => {
-    const step = nyq ? square : tickStep(b - a), first = Math.ceil(a / step), n = Math.floor(b / step) - first;
+    // (degrees: 15/30/45/90 … so -180° + k·360° is a grid line)
+    const deg = [1, 2, 5, 10, 15, 30, 45, 90, 180, 360].find((d) => (b - a) / d <= 8) ?? 360;
+    const step = nyq ? square : a === lo.x ? deg : tickStep(b - a), first = Math.ceil(a / step), n = Math.floor(b / step) - first;
     if (!isFinite(n) || n < 0 || n > 200) return [];
     return Array.from({ length: n + 1 }, (_, i) => { const x = (first + i) * step; return Math.abs(x) < step * 1e-9 ? 0 : x; });
   };
@@ -145,13 +147,16 @@ export const Polar = memo(function Polar({ curves, freqs, mode, onHover }: { cur
   const crits = nyq ? [-1] : Number.isFinite(nk) && nk > 0 && nk <= 50 ? Array.from({ length: nk }, (_, k) => -180 + 360 * (k0 + k)) : [];
   // the cursors A and B (set in the Bode plot): where each curve is at their frequencies
   const fa = useS((s) => s.plot.a), fb = useS((s) => s.plot.b);
-  const nearestF = (f: number | null) => (f == null || !freqs.length ? -1 : freqs.reduce((best, x, i) => (Math.abs(x - f) < Math.abs(freqs[best] - f) ? i : best), 0));
-  const marks = ([["A", nearestF(fa)], ["B", nearestF(fb)]] as const).filter(([, i]) => i >= 0);
+  // (outside the sweep: none, as the table shows none)
+  const marks = useMemo(() => {
+    const nearest = (f: number | null) => (f == null || !freqs.length || f < freqs[0] || f > freqs[freqs.length - 1] ? -1 : freqs.reduce((best, x, i) => (Math.abs(x - f) < Math.abs(freqs[best] - f) ? i : best), 0));
+    return ([["A", nearest(fa)], ["B", nearest(fb)]] as const).filter(([, i]) => i >= 0);
+  }, [fa, fb, freqs]);
   const h = hit && curves[hit.c];
   const hx = h ? h.x[hit!.i] : null, hy = h ? ((y) => (y != null && hit!.m ? -y : y))(h.y[hit!.i]) : null;
 
   return (
-    <div ref={host} className="relative h-full min-w-0 flex-1 cursor-grab overflow-hidden active:cursor-grabbing" onMouseMove={onMove} onMouseLeave={() => ((drag.current = null), setHit(null), onHover(null))} onDoubleClick={() => setView(null)}
+    <div ref={host} className="relative h-full min-w-0 flex-1 cursor-grab select-none overflow-hidden active:cursor-grabbing" onMouseMove={onMove} onMouseLeave={() => ((drag.current = null), setHit(null), onHover(null))} onDoubleClick={() => setView(null)}
       onMouseDown={(e) => { if (e.button !== 0) return; const r = host.current!.getBoundingClientRect(); drag.current = { X: e.clientX - r.left, Y: e.clientY - r.top, cx: v.cx, cy: v.cy }; }} onMouseUp={() => (drag.current = null)}>
       {size.w > 0 && (
         <svg width={size.w} height={size.h} className="block text-text-secondary">
@@ -173,8 +178,9 @@ export const Polar = memo(function Polar({ curves, freqs, mode, onHover }: { cur
               </g>
             );
           })}
-          <text x={size.w - 8} y={nyq ? oy - 6 : size.h - 22} fontSize={11} textAnchor="end" fill="currentColor">{nyq ? "Re" : "phase"}</text>
-          <text x={(nyq ? ox : 0) + 6} y={14} fontSize={11} fill="currentColor">{nyq ? "Im" : "gain"}</text>
+          {/* (at the axes, kept inside when the origin is panned away) */}
+          <text x={size.w - 8} y={nyq ? Math.min(Math.max(oy - 6, 14), size.h - 22) : size.h - 22} fontSize={11} textAnchor="end" fill="currentColor">{nyq ? "Re" : "phase"}</text>
+          <text x={nyq ? Math.min(Math.max(ox + 6, 40), size.w - 30) : 6} y={14} fontSize={11} fill="currentColor">{nyq ? "Im" : "gain"}</text>
           {drawn.map(({ d, mirror }, i) => (
             <g key={i} fill="none" stroke={`var(--series-${curves[i].slot + 1})`} strokeLinejoin="round">
               {mirror && <path d={mirror} strokeWidth={1} strokeDasharray="4 3" opacity={0.6} />}

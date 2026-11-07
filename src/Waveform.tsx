@@ -493,7 +493,7 @@ export const Waveform = memo(function Waveform() {
             <button className="underline hover:text-text-strong" onClick={() => showFft(null)}>back to the transient</button>
           </div>
         )}
-        <Readout traces={listed} panes={panes} xs={xs} xUnit={xUnit} plot={spec ? "FFT" : run?.plot ?? ""} spec={spec} steps={run?.steps ?? NO_STEPS} />
+        <Readout traces={listed} panes={panes} xs={xs} xUnit={xUnit} plot={spec ? "FFT" : run?.plot ?? ""} fixed={spec || polarOn} steps={run?.steps ?? NO_STEPS} />
         <Measurements xUnit={xUnitOf(run?.scale ?? "")} />
         <button
           className="m-2 inline-flex h-[22px] items-center justify-center gap-1 rounded-control border border-border-control text-text-secondary hover:bg-surface-hover hover:text-text-strong disabled:opacity-40"
@@ -503,7 +503,8 @@ export const Waveform = memo(function Waveform() {
           <Plus className="h-3 w-3" /> Add trace
         </button>
         <p className="mt-auto px-2 pb-2 text-2xs leading-4 text-text-tertiary">
-          Drag: zoom · shift-drag: range A–B · click: A · shift-click: B · dbl-click: reset · right-click a trace: right axis, another pane · right-click the plot: FFT, y axis
+          {polarOn ? "Hover a curve: its frequency's values above · A, B: the Bode plot's cursors · right-click the plot: Bode plot"
+            : "Drag: zoom · shift-drag: range A–B · click: A · shift-click: B · dbl-click: reset · right-click a trace: right axis, another pane · right-click the plot: FFT, y axis"}
         </p>
       </div>
     </div>
@@ -529,7 +530,8 @@ export function Measurements({ xUnit }: { xUnit: string }) {
 /** Trace table: values under the hover crosshair and at cursors A/B. Own component + hover store,
  *  so mouse moves over the plot re-render only this table. */
 const NO_STEPS: string[] = [];
-const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot, spec, steps }: { traces: Trace[]; panes: Pane[]; xs: number[]; xUnit: string; plot: string; spec: boolean; steps: string[] }) {
+/** `fixed`: axes and panes not the table's to change (the spectrum, Nyquist, Nichols). */
+const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot, fixed, steps }: { traces: Trace[]; panes: Pane[]; xs: number[]; xUnit: string; plot: string; fixed: boolean; steps: string[] }) {
   const hover = useHover((h) => h.x);
   const { a, b } = useS(useShallow((s) => ({ a: s.plot.a, b: s.plot.b })));
   // a trace alone in its pane(s): a right axis would change nothing there
@@ -576,11 +578,11 @@ const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot, spec, st
           {rows.map(({ t, val, delta, named }) => (
             <tr key={t.expr} className="group h-[22px] border-b border-border-subtle align-middle" title={t.error ?? t.expr}
               onContextMenu={(e) => (e.preventDefault(), openMenu(e.clientX, e.clientY, [
-                ...(moved(t) || spec ? [] : [{ label: t.right && !guest(t) ? "Back to the left axis" : "Right axis (own scale)", hint: guest(t) ? "it holds another unit here" : !t.right && alone(t) ? "alone in its pane" : undefined, disabled: guest(t) || (!t.right && alone(t)), run: () => setTraceRight(t.expr, !t.right) }]),
+                ...(moved(t) || fixed ? [] : [{ label: t.right && !guest(t) ? "Back to the left axis" : "Right axis (own scale)", hint: guest(t) ? "it holds another unit here" : !t.right && alone(t) ? "alone in its pane" : undefined, disabled: guest(t) || (!t.right && alone(t)), run: () => setTraceRight(t.expr, !t.right) }]),
                 // (into another unit's pane: on its right axis there, unless that holds a third unit
                 // already; not the Bode panes, nor in a spectrum)
-                ...(t.data?.im || t.data?.constant || spec ? [] : panes.filter((p) => p.own && p.unit !== "dB" && p.unit !== "°" && p.unit !== t.unit && !p.series.some((s) => s.t === t) && p.series.every((s) => s.u === p.unit || s.u === t.unit)).map((p) => ({ label: `Into the ${p.unit || "unitless"} pane`, hint: "its right axis", run: () => setTracePane(t.expr, p.unit) }))),
-                ...(t.pane != null && !spec && !t.data?.im ? [{ label: moved(t) ? `Back to its own pane (${t.unit || "unitless"})` : `Not into the ${t.pane || "unitless"} pane any more`, hint: moved(t) ? undefined : "it would go there with traces of its own", run: () => setTracePane(t.expr, undefined) }] : []),
+                ...(t.data?.im || t.data?.constant || fixed ? [] : panes.filter((p) => p.own && p.unit !== "dB" && p.unit !== "°" && p.unit !== t.unit && !p.series.some((s) => s.t === t) && p.series.every((s) => s.u === p.unit || s.u === t.unit)).map((p) => ({ label: `Into the ${p.unit || "unitless"} pane`, hint: "its right axis", run: () => setTracePane(t.expr, p.unit) }))),
+                ...(t.pane != null && !fixed && !t.data?.im ? [{ label: moved(t) ? `Back to its own pane (${t.unit || "unitless"})` : `Not into the ${t.pane || "unitless"} pane any more`, hint: moved(t) ? undefined : "it would go there with traces of its own", run: () => setTracePane(t.expr, undefined) }] : []),
                 // (an .ac result: -dφ/dω, how long a band of frequencies takes through it)
                 ...(t.data?.im && plot.startsWith("ac") ? [{ label: "Plot group delay", hint: `τg(${t.label})`, run: () => {
                   // (a real trace: drawn in the Bode plot, not in Nyquist or Nichols)
