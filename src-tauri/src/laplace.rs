@@ -270,7 +270,7 @@ impl P<'_> {
                 if mentions_s(text) {
                     return Err(format!("`{text}`: only a ratio of polynomials in s runs (no delay exp(-s*T), no sqrt(s))"));
                 }
-                if calls(text, &["mc", "flat", "gauss", "unif", "aunif", "agauss"]) {
+                if calls(text, &["mc", "flat", "gauss", "unif", "aunif", "agauss", "limit"]) {
                     // (kept as text, it would be drawn anew in each coefficient it lands in)
                     return Err(format!("`{text}`: a random value here is drawn once per coefficient; draw it in a .param (.param tau=mc(1m,0.1)) and use that"));
                 }

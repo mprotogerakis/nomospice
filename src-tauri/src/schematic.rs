@@ -789,6 +789,10 @@ impl Prepared {
         let text = deck_lines(&self.0).iter().map(|l| {
             if !l.skip && OTHER.contains(&l.head.as_str()) { format!("* {}", l.line) } else { l.line.to_string() }
         }).collect::<Vec<_>>().join("\n") + "\n";
+        // (random values, mc(): one sample for all the sweep's steps, not a draw per step)
+        let random = ["unif", "aunif", "agauss", "gauss", "limit"].iter().any(|f| contains_ci(&text, &format!("{f}(")));
+        let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.subsec_nanos() % 1_000_000 + 1);
+        let text = if random { after_title(&text, &format!(".options seed={seed}")) } else { text };
         Prepared(text, self.1.clone(), vec![]) // (one .pz per sweep step: no .step)
     }
     /// This deck with the value at `spans` set to `value` (one step of a sweep such as a root locus).
@@ -1404,7 +1408,9 @@ pub fn prepare(text: &str, dir: Option<&std::path::Path>, warnings: &mut Vec<Str
     let mut x = Expander { warnings, out: String::new(), seen: HashSet::new(), read: true, diode: None, behavioural: vec![] };
     x.expand(text, dir, None, 0);
     x.warn_behavioural();
-    let out = crate::laplace::rewrite(&lt_random(&x.out), x.warnings); // (also in included files)
+    // (also in included files; Laplace first: a random call there is said by its own name)
+    let out = crate::laplace::rewrite(&x.out, x.warnings);
+    let out = lt_random(&out, x.warnings).into_owned();
     Prepared(out, vec![], vec![])
 }
 
@@ -1416,7 +1422,7 @@ pub fn prepare(text: &str, dir: Option<&std::path::Path>, warnings: &mut Vec<Str
 /// file name), and not where the deck has a `.func` of that name.
 /// A `.param` drawn this way is drawn once per run, shared by every part using it (write the call
 /// in each part's value for draws of their own).
-fn lt_random(text: &str) -> std::borrow::Cow<'_, str> {
+fn lt_random<'a>(text: &'a str, warnings: &mut Vec<String>) -> std::borrow::Cow<'a, str> {
     // (a name with `(` after it, blanks between too)
     let calls = |t: &str| {
         let b = t.as_bytes();
@@ -1441,14 +1447,15 @@ fn lt_random(text: &str) -> std::borrow::Cow<'_, str> {
             out.push_str(line);
             continue;
         }
-        // (a `.param` statement's `+` lines are of it too. ponytail: line by line, so a brace or a
-        // call's parentheses open across a `+` line are not seen; join the lines if that occurs)
+        // (a `.param` statement's `+` lines are of it too; a `.func`'s body is an expression too.
+        // ponytail: line by line, so a brace or a call's parentheses open across a `+` line are
+        // not seen; join the lines if that occurs)
         if !t.starts_with('+') {
-            param = t.get(..6).is_some_and(|h| h.eq_ignore_ascii_case(".param"));
+            param = [".param", ".func"].iter().any(|h| t.get(..h.len()).is_some_and(|x| x.eq_ignore_ascii_case(h)) && t[h.len()..].starts_with(char::is_whitespace));
         }
         let code = uncommented(line);
         if calls(code) {
-            out.push_str(&random_calls(code, param, &own));
+            out.push_str(&random_calls(code, param, &own, warnings));
             out.push_str(&line[code.len()..]);
         } else {
             out.push_str(line);
@@ -1460,11 +1467,12 @@ fn lt_random(text: &str) -> std::borrow::Cow<'_, str> {
 const RANDOM: [&str; 3] = ["mc", "flat", "gauss"];
 
 /// `s` with LTspice's random calls translated (see `lt_random`): everywhere if `all`, else in braces.
-fn random_calls(s: &str, all: bool, own: &[String]) -> String {
-    let (b, mut out, mut k, mut braces, mut quoted) = (s.as_bytes(), String::with_capacity(s.len()), 0, 0i32, false);
+fn random_calls(s: &str, all: bool, own: &[String], warnings: &mut Vec<String>) -> String {
+    let (b, mut out, mut k, mut braces, mut quoted, mut ticked) = (s.as_bytes(), String::with_capacity(s.len()), 0, 0i32, false, false);
     let word = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
     while k < b.len() {
-        let call = (!quoted && (all || braces > 0))
+        // (an expression: in braces, between ' ', a whole .param/.func line; not a "file name")
+        let call = (!quoted && (all || braces > 0 || ticked))
             .then(|| RANDOM.into_iter().find(|f| {
                 b.len() >= k + f.len() && b[k..k + f.len()].eq_ignore_ascii_case(f.as_bytes()) && (k == 0 || !word(b[k - 1])) && s[k + f.len()..].trim_start().starts_with('(') && !own.iter().any(|o| o == f)
             }))
@@ -1484,11 +1492,12 @@ fn random_calls(s: &str, all: bool, own: &[String]) -> String {
                 braces = (braces + match c { '{' => 1, '}' => -1, _ => 0 }).max(0); // (a stray } counts for nothing)
             }
             quoted ^= c == '"'; // ("a file{name}.csv")
+            ticked ^= c == '\'' && !quoted;
             out.push(c);
             k += c.len_utf8();
             continue;
         };
-        let inner = random_calls(&s[open + 1..close], true, own);
+        let inner = random_calls(&s[open + 1..close], true, own, warnings);
         let args = {
             let mut d = 0;
             inner.chars().filter(|&c| {
@@ -1500,7 +1509,13 @@ fn random_calls(s: &str, all: bool, own: &[String]) -> String {
             ("mc", 2) => out.push_str(&format!("unif({inner})")),
             ("flat", 1) => out.push_str(&format!("aunif(0,{inner})")),
             ("gauss", 1) => out.push_str(&format!("agauss(0,{inner},1)")),
-            _ => out.push_str(&format!("{}({inner})", &s[k..k + f.len()])),
+            // (ngspice's own gauss(nom, rvar, sigma) has three)
+            ("gauss", 3) => out.push_str(&format!("{}({inner})", &s[k..k + f.len()])),
+            _ => {
+                let text = format!("{}({inner})", &s[k..k + f.len()]);
+                warnings.push(format!("`{text}`: {}", match f { "mc" => "mc takes two arguments, mc(value, tolerance)", "flat" => "flat takes one argument, flat(x): uniform in ±x", _ => "gauss takes one argument, gauss(sigma)" }));
+                out.push_str(&text);
+            }
         }
         k = close + 1;
     }
@@ -2605,25 +2620,37 @@ mod tests {
         assert!((tot("C=1n") / tot("C=4n") - 2.0).abs() < 0.1, "sqrt(kT/C): 4x C, half the noise");
     }
 
+    fn lt_random_t(t: &str) -> std::borrow::Cow<'_, str> {
+        lt_random(t, &mut vec![])
+    }
+
     #[test]
     fn monte_carlo() {
-        assert_eq!(lt_random("R1 a b {mc(1k, tol)}\n.param x=flat(1)+Gauss(2*(1+1)) y=gauss(1,0.1,3) amc(1) mc_x"), "R1 a b {unif(1k, tol)}\n.param x=aunif(0,1)+agauss(0,2*(1+1),1) y=gauss(1,0.1,3) amc(1) mc_x");
-        assert_eq!(lt_random("R1 a b {mc(mc(1k,0.1),0.1)}"), "R1 a b {unif(unif(1k,0.1),0.1)}", "nested");
+        assert_eq!(lt_random_t("R1 a b {mc(1k, tol)}\n.param x=flat(1)+Gauss(2*(1+1)) y=gauss(1,0.1,3) amc(1) mc_x"), "R1 a b {unif(1k, tol)}\n.param x=aunif(0,1)+agauss(0,2*(1+1),1) y=gauss(1,0.1,3) amc(1) mc_x");
+        assert_eq!(lt_random_t("R1 a b {mc(mc(1k,0.1),0.1)}"), "R1 a b {unif(unif(1k,0.1),0.1)}", "nested");
         // not in comments (an unclosed one before does not stop the rest), a B source, a file name, a .func's own
-        assert_eq!(lt_random("* FLAT (zero TC\nR1 a b {mc(1k,0.1)} ; gauss (see\nB1 n 0 V=gauss(1)\nV1 a 0 PWL file=\"gauss (1).csv\"\n"), "* FLAT (zero TC\nR1 a b {unif(1k,0.1)} ; gauss (see\nB1 n 0 V=gauss(1)\nV1 a 0 PWL file=\"gauss (1).csv\"\n");
-        assert_eq!(lt_random(".func flat(x) {x*2}\nR1 a b {flat(1)+mc(1,1)}\n"), ".func flat(x) {x*2}\nR1 a b {flat(1)+unif(1,1)}\n");
-        assert!(matches!(lt_random("XU1 a b MC33078\n"), std::borrow::Cow::Borrowed(_)), "nothing to do: no copy");
-        assert_eq!(lt_random(".param a=1\n+ b=flat(1) f=\"gauss(1).csv\"\nR1 a b } {mc (1k,0.1)}\n.function flat(x) x\n"), ".param a=1\n+ b=aunif(0,1) f=\"gauss(1).csv\"\nR1 a b } {unif(1k,0.1)}\n.function flat(x) x\n");
-        assert_eq!(lt_random("* Größe\nR1 a b {mc\t(1k,0.1)}\nV1 a 0 PWL file=\"r{a.csv\" flat(1)\n"), "* Größe\nR1 a b {unif(1k,0.1)}\nV1 a 0 PWL file=\"r{a.csv\" flat(1)\n", "no panic at a ö; a tab; a quoted {{");
+        assert_eq!(lt_random_t("* FLAT (zero TC\nR1 a b {mc(1k,0.1)} ; gauss (see\nB1 n 0 V=gauss(1)\nV1 a 0 PWL file=\"gauss (1).csv\"\n"), "* FLAT (zero TC\nR1 a b {unif(1k,0.1)} ; gauss (see\nB1 n 0 V=gauss(1)\nV1 a 0 PWL file=\"gauss (1).csv\"\n");
+        assert_eq!(lt_random_t(".func flat(x) {x*2}\nR1 a b {flat(1)+mc(1,1)}\n"), ".func flat(x) {x*2}\nR1 a b {flat(1)+unif(1,1)}\n");
+        assert!(matches!(lt_random_t("XU1 a b MC33078\n"), std::borrow::Cow::Borrowed(_)), "nothing to do: no copy");
+        let mut w = vec![];
+        assert_eq!(lt_random("R1 a b {mc(1k)} 'flat(1)'\n.func f(x) gauss(x)\n", &mut w), "R1 a b {mc(1k)} 'aunif(0,1)'\n.func f(x) agauss(0,x,1)\n");
+        assert!(w.len() == 1 && w[0].contains("two arguments"), "{w:?}");
+        assert_eq!(lt_random_t(".param a=1\n+ b=flat(1) f=\"gauss(1).csv\"\nR1 a b } {mc (1k,0.1)}\n.function flat(x) x\n"), ".param a=1\n+ b=aunif(0,1) f=\"gauss(1).csv\"\nR1 a b } {unif(1k,0.1)}\n.function flat(x) x\n");
+        assert_eq!(lt_random_t("* Größe\nR1 a b {mc\t(1k,0.1)}\nV1 a 0 PWL file=\"r{a.csv\" flat(1)\n"), "* Größe\nR1 a b {unif(1k,0.1)}\nV1 a 0 PWL file=\"r{a.csv\" flat(1)\n", "no panic at a ö; a tab; a quoted {{");
         // each step of `.step param run …` another sample, within the tolerance
         let _s = SIM.lock();
         let deck = prepare("* mc\nV1 a 0 1\nR1 a b {mc(1k,0.5)}\nR2 b 0 1k\n.op\n.end\n", None, &mut vec![]);
-        let run = crate::ngspice::run(&Prepared(deck.0, vec![], vec![".step param run 1 6 1".into()])).unwrap();
+        let run = crate::ngspice::run(&Prepared(deck.0.clone(), vec![], vec![".step param run 1 6 1".into()])).unwrap();
         let v = crate::ngspice::trace("V(b)", &run.scale, run.id).unwrap();
         let mut vs = v.re.clone();
         vs.sort_by(f64::total_cmp);
         vs.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
         assert!(v.re.len() == 6 && vs.len() > 3 && v.re.iter().all(|&x| (0.4 - 1e-9..=2.0 / 3.0 + 1e-9).contains(&x)), "{:?}", v.re);
+        // a sweep's steps (root locus): one sample for all, by a seed
+        let pz = Prepared(deck.0.replace(".op", ".pz a 0 b 0 vol pz"), vec![], vec![]).only_pz();
+        assert!(pz.0.contains(".options seed="), "{}", pz.0);
+        let at = |_: ()| crate::ngspice::trace("V(b)", &"".to_string(), crate::ngspice::run(&Prepared(pz.0.replace(".pz a 0 b 0 vol pz", ".op"), vec![], vec![])).unwrap().id).unwrap().re[0];
+        assert_eq!(at(()), at(()), "the same draw each time");
     }
 
     #[test]
