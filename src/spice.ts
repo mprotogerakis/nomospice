@@ -544,7 +544,7 @@ export function at(xs: number[], ys: (number | null)[], x: number) {
 /** Named units as exponents of V, A and s. */
 const UNITS: [string, number[]][] = [
   ["V", [1, 0, 0]], ["A", [0, 1, 0]], ["W", [1, 1, 0]], ["Ω", [1, -1, 0]], ["S", [-1, 1, 0]], ["J", [1, 1, 1]],
-  ["C", [0, 1, 1]], ["s", [0, 0, 1]], ["Hz", [0, 0, -1]], ["F", [-1, 1, 1]], ["H", [1, -1, 1]],
+  ["C", [0, 1, 1]], ["s", [0, 0, 1]], ["Hz", [0, 0, -1]], // (no F, H: Ω·s is no inductance in a trace)
 ];
 const SUP: Record<string, string> = { "2": "²", "3": "³" };
 /** Exponents of V, A, s of a unit: a named one, or one `unitName` composed ("V/s", "V²·A"). */
@@ -555,7 +555,7 @@ function dimOf(u: string): number[] | null {
   const d = [0, 0, 0], [num, den = ""] = u.split("/");
   for (const [part, sign] of [[num, 1], [den, -1]] as const) {
     for (const f of part.split("·").filter((x) => x && x !== "1")) {
-      const m = /^(V|A|s|W|Ω|S|J|C|Hz|F|H)(²|³|\^(-?[\d.]+))?$/.exec(f);
+      const m = /^(V|A|s|W|Ω|S|J|C|Hz)(²|³|\^(-?[\d.]+))?$/.exec(f);
       if (!m) return null;
       const k = m[2] === "²" ? 2 : m[2] === "³" ? 3 : m[3] ? +m[3] : 1;
       UNITS.find(([n]) => n === m[1])![1].forEach((x, j) => (d[j] += sign * k * x));

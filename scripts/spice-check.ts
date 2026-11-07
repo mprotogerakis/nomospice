@@ -215,6 +215,7 @@ assert.equal(numInfo("1Meg", "Hz")!.text, "= 1MegHz"); // not "1M", the milli tr
   assert.equal(unitTimes("V/s", "s"), "V", "a composed unit is read back");
   assert.equal(unitTimes("V", "Hz"), "V·Hz");
   assert.equal(unitTimes("A", "V"), "A·V", "an integral over a .dc sweep is no power");
+  assert.equal(unitTimes("Ω", "s"), "V·s/A", "no henry");
   assert.equal(exprUnit("deriv(v(out))", undefined, "Hz"), "");
   assert.equal(exprUnit("deriv(i(v1))", undefined, "V"), "", "over a .dc sweep: not named (no S, no W)");
   assert.equal(exprUnit("integ(i(v1))", undefined, "V"), "");

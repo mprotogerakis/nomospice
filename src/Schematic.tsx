@@ -262,7 +262,10 @@ export const Schematic = memo(function Schematic() {
   };
   // probing a part: the status bar names the current a click plots
   const hoverCurrent = probing && hover >= 0 && items[hover]?.t === "sym" && nets ? partCurrent(nets, hover, hoverPin) : "";
-  useEffect(() => useStatus.setState({ probe: hoverCurrent || null }), [hoverCurrent]);
+  useEffect(() => {
+    useStatus.setState({ probe: hoverCurrent || null });
+    return () => useStatus.setState({ probe: null });
+  }, [hoverCurrent]);
 
   const size = useSize(svgRef);
 

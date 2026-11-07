@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import type { GitStatus, Item, Netlist, Sim, SymbolDef, Trace, TraceData } from "./types";
-import { defOf, symKey, vexpr, type Lib } from "./geom";
+import { defOf, prefixOf, symKey, vexpr, type Lib } from "./geom";
 import { ANALYSIS, ANY_ANALYSIS, analysisLineIndex, analysisOptions, continuation, stripAnalyses, type Analysis } from "./spice";
 
 export type Tool =
@@ -463,7 +463,9 @@ export function canProbe(target: Item | undefined, pin?: number) {
   const net = nets?.nets[i]?.[0];
   const ground = net === "0" || (target.t === "flag" && /^(0|gnd)$/i.test(target.name));
   // parts: the backend says which have a current probe; without a fresh netlist, any known symbol
-  const part = target.t === "sym" && (nets ? !!partCurrent(nets, i, pin) : !!defOf(s.lib, target));
+  // (without one: a subcircuit of more than two pins has currents per pin only)
+  const def = target.t === "sym" ? defOf(s.lib, target) : undefined;
+  const part = target.t === "sym" && (nets ? !!partCurrent(nets, i, pin) : !!def && !(prefixOf(target, def) === "X" && def.pins.length > 2));
   return ((target.t === "wire" || target.t === "flag") && !ground) || part;
 }
 
