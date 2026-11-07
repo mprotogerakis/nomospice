@@ -422,7 +422,7 @@ const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot }: { trac
               <td className="truncate pl-2 text-text">
                 <span className="mr-1.5 inline-block h-2 w-2 rounded-full align-middle" style={{ background: `var(--series-${t.slot + 1})` }} />
                 <span className={t.error ? "text-status-danger" : ""}>{t.label}</span>
-                {t.right && !alone(t) && <span className="ml-1 text-text-tertiary" title="on the right axis">⇥</span>}
+                {panes.some((p) => p.series.some((s) => s.t === t && scaleOf(p, s) === "y2")) && <span className="ml-1 text-text-tertiary" title="on the right axis">⇥</span>}
                 <button className="row-actions ml-1 align-middle text-text-tertiary hover:text-text-strong" aria-label={`Remove ${t.label}`} onClick={() => removeTrace(t.expr)}>
                   <X className="inline h-3 w-3" />
                 </button>

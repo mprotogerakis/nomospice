@@ -838,7 +838,8 @@ fn ltspice_meas(text: &str, sensors: &[Sensor], warnings: &mut Vec<String>) -> S
     if !contains_ci(text, ".meas") {
         return text.to_string(); // nothing to rewrite: no pass over a big deck
     }
-    if let Some(w) = statements(text, &[".meas", ".measure"]).iter().find_map(|l| {
+    // (only with the circuit's sensors: the warnings pass before a run has none)
+    if let Some(w) = statements(text, &[".meas", ".measure"]).iter().filter(|_| !sensors.is_empty()).find_map(|l| {
         whole_ic_current(l, sensors).or_else(|| unknown_current(&sensor_currents(l, sensors)).map(|c| format!("no part current {c} in this circuit")))
     }) {
         warnings.push(format!(".meas: {w}"));
@@ -1146,10 +1147,11 @@ pub fn sensor_currents(s: &str, sensors: &[Sensor]) -> String {
 /// A part current's name left in `s` after `sensor_currents` (`Ib(Q9)`, `Ix(U1:NC)`: a typo, a part
 /// without it): ngspice has no such functions, so these names are always ours.
 pub fn unknown_current(s: &str) -> Option<String> {
-    let low = s.to_ascii_lowercase();
-    let k = (0..low.len()).find(|&k| {
-        low[k..].len() > 3 && low.is_char_boundary(k) && low.as_bytes()[k] == b'i' && b"xcbedgs".contains(&low.as_bytes()[k + 1]) && low.as_bytes()[k + 2] == b'('
-            && !low[..k].ends_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
+    // (bytes: the pattern is ASCII, so a match starts on a char boundary whatever else the text holds)
+    let b = s.as_bytes();
+    let word = |c: u8| c.is_ascii_alphanumeric() || c == b'_' || c >= 0x80;
+    let k = (0..b.len().saturating_sub(2)).find(|&k| {
+        b[k].eq_ignore_ascii_case(&b'i') && b"xcbedgs".contains(&b[k + 1].to_ascii_lowercase()) && b[k + 2] == b'(' && (k == 0 || !word(b[k - 1]))
     })?;
     Some(s[k..].split_inclusive(')').next().unwrap_or(&s[k..]).to_string())
 }
@@ -1157,7 +1159,8 @@ pub fn unknown_current(s: &str) -> Option<String> {
 /// `I(U1)` of a subcircuit (as LTspice allows): no single current, its pins have one each. The
 /// explanation, if `s` asks for one.
 pub fn whole_ic_current(s: &str, sensors: &[Sensor]) -> Option<String> {
-    let ics: HashSet<&str> = sensors.iter().filter(|x| x.inst.starts_with('x') && x.label.starts_with("Ix(")).map(|x| x.name.as_str()).collect();
+    // (by its drawn name or the netlist's, XU1)
+    let ics: HashSet<&str> = sensors.iter().filter(|x| x.inst.starts_with('x') && x.label.starts_with("Ix(")).flat_map(|x| [x.name.as_str(), x.inst.as_str()]).collect();
     if ics.is_empty() {
         return None;
     }
@@ -1167,7 +1170,7 @@ pub fn whole_ic_current(s: &str, sensors: &[Sensor]) -> Option<String> {
         let word = rest[..k].ends_with(|c: char| c.is_ascii_alphanumeric() || c == '_');
         let arg = rest[k + 2..].split(')').next().unwrap_or("").trim();
         if let Some(n) = (!word).then_some(arg).filter(|a| ics.contains(a)) {
-            let pin = sensors.iter().find(|x| x.name == n && x.label.starts_with("Ix(")).map_or(String::new(), |x| x.label.clone());
+            let pin = sensors.iter().find(|x| (x.name == n || x.inst == n) && x.label.starts_with("Ix(")).map_or(String::new(), |x| x.label.clone());
             return Some(format!("I({0}) is no single current: {0} has one per pin, e.g. {pin}", n.to_uppercase()));
         }
         rest = &rest[k + 2..];
@@ -1739,7 +1742,7 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool) -> Netlist {
             if sense {
                 lines.push(format!("{src} {} {node} 0", nodes[k]));
                 if !hold.is_empty() {
-                    lines.push(format!("{hold} {node} 0 1T"));
+                    lines.push(format!("{hold} {} 0 1T", nodes[k])); // (the net's side: not in the measured current)
                 }
                 if prefix == 'M' && k == 2 && npins == 3 && nodes.len() == 4 {
                     nodes[3] = node.clone(); // the bulk added for a 3-pin symbol is part of its source pin
@@ -2075,6 +2078,8 @@ mod tests {
         assert_eq!(sensor_currents("I(U1)+ix(u1:in)", &u1), "I(U1)+i(vsense_u1)");
         assert_eq!(unknown_current("v(a)*Ib(Q9)"), Some("Ib(Q9)".into()));
         assert_eq!(unknown_current("i(v1)+mix(1)+vin(a)"), None, "a source's i(), other words");
+        assert_eq!(unknown_current("1µ*Ω°ib(q1)"), None, "non-ASCII before: a word, and no panic");
+        assert_eq!(unknown_current("1µ* Ix(U1:a)"), Some("Ix(U1:a)".into()));
         assert_eq!(m(".meas tran p AVG 1µ*I(R1)"), ".meas tran p AVG par('1µ*i(vsense_r1)')", "multi-byte text: no panic");
         assert_eq!(m(".meas tran a AVG V(out) FROM = 1m TO =2m"), ".meas tran a AVG V(out) FROM=1m TO=2m", "blanks around =");
         assert_eq!(m(".meas tran w WHEN V(out) = 0.5 RISE = 1"), ".meas tran w WHEN V(out)=0.5 RISE=1");
