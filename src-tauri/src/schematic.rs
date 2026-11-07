@@ -1125,8 +1125,11 @@ pub fn sensor_currents(s: &str, sensors: &[Sensor]) -> String {
             let (key, arg) = (format!("{name}({})", rest[open + 1..e].trim()), rest[open + 1..e].trim());
             // (`I(Q1)`: pin 1 of a two-pin part or transistor, by its drawn or netlist name; a
             // subcircuit's currents are per pin)
-            // (an exact name first: a part's own I(T1) before another's alias)
-            sensors.iter().find(|x| x.label.eq_ignore_ascii_case(&key)).or_else(|| sensors.iter().find(|x| {
+            // (an exact name first: a part's own I(T1) before another's alias; then the same names
+            // by the netlist's name, Ib(QT1), Ix(XU1:OUT))
+            let key_lc = key.to_ascii_lowercase();
+            let by_inst = |x: &Sensor| x.label.to_ascii_lowercase().replacen(&format!("({}", x.name), &format!("({}", x.inst), 1) == key_lc;
+            sensors.iter().find(|x| x.label.eq_ignore_ascii_case(&key)).or_else(|| sensors.iter().find(|x| by_inst(x))).or_else(|| sensors.iter().find(|x| {
                 x.pin == 0 && !x.label.starts_with("Ix(") && name.eq_ignore_ascii_case("i") && (x.inst.eq_ignore_ascii_case(arg) || x.name.eq_ignore_ascii_case(arg))
             }))
         });
@@ -1638,7 +1641,7 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool) -> Netlist {
         let prefix = prefix_of(&def, attrs);
         let inst = match attrs.get("InstName").filter(|n| !n.is_empty()) {
             Some(n) => spice_inst(n, prefix),
-            None => auto.get(&i).cloned().unwrap_or_else(|| (1..).map(|n| format!("{prefix}{n}")).find(|n| taken.insert(n.to_uppercase())).unwrap()),
+            None => auto[&i].clone(), // (named up front)
         };
         if !seen.insert(inst.to_uppercase()) {
             nl.warnings.push(format!("duplicate instance name {inst}"));
@@ -2224,7 +2227,7 @@ mod tests {
         let nl = netlist_for_sim(&parse_asc(&src), &mut Library::builtin());
         let q = nl.insts.iter().position(|n| n == "Q1").unwrap();
         assert_eq!(nl.pin_currents[q], ["Ic(Q1)", "Ib(Q1)", "Ie(Q1)"], "{}", nl.text);
-        // a subcircuit: a current per connected pin, none on open ones (they would float), no I(U1)
+        // a subcircuit: a current per pin (open ones held by 1 TΩ, so nothing floats), no I(U1)
         let follower = "WIRE -32 48 -32 0\nWIRE -32 0 48 0\nWIRE 48 0 48 64\nWIRE 48 64 32 64\nWIRE -112 80 -32 80\nFLAG -112 160 0\nFLAG 48 64 out\nSYMBOL Opamps\\opamp 0 0 R0\nSYMATTR InstName U1\nSYMBOL voltage -112 64 R0\nSYMATTR InstName V1\nSYMATTR Value 2\nTEXT 0 200 Left 2 !.op\n";
         let f = netlist_for_sim(&parse_asc(follower), &mut Library::builtin());
         let u = f.insts.iter().position(|n| n == "XU1").unwrap();
@@ -2242,6 +2245,7 @@ mod tests {
         assert_eq!(z.pin_currents[d], ["I(D1)", ""], "{}", z.text);
         let t1 = [Sensor { source: "vsense_qt1".into(), node: "y".into(), inst: "qt1".into(), pin: 0, label: "Ic(T1)".into(), name: "t1".into(), hold: String::new() }];
         assert_eq!(sensor_currents("I(T1)+I(QT1)", &t1), "i(vsense_qt1)+i(vsense_qt1)", "pin 1 by the drawn name too");
+        assert_eq!(sensor_currents("Ic(QT1)", &t1), "i(vsense_qt1)", "a name by the netlist's name");
         let run = crate::ngspice::run(&prepare(&nl.text, None, &mut vec![]).with_sensors(nl.sensors.clone())).unwrap();
         let get = |n: &str| run.op.iter().find(|o| o.0 == n).map(|o| o.1).unwrap_or_else(|| panic!("{n}: {:?}", run.op));
         let (ic, ib, ie) = (get("Ic(Q1)"), get("Ib(Q1)"), get("Ie(Q1)"));

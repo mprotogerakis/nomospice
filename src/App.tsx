@@ -52,12 +52,13 @@ const typing = (e: KeyboardEvent) =>
 
 /** Unsaved-changes guard for everything that closes the document (or quits): save, don't, or stay.
  *  (custom buttons answer with their label; some platforms with Yes/No) */
-async function discardOk() {
+async function discardOk(): Promise<boolean> {
   const { dirty, path } = useS.getState();
   if (!dirty) return true;
   const name = fileName(path);
   const r = await message("Your changes are lost if you don't save them.", { title: `Save the changes to “${name}”?`, kind: "warning", buttons: { yes: "Save", no: "Don't Save", cancel: "Cancel" } });
-  if (r === "Save" || r === "Yes") return saveFile(); // (written; the save dialog cancelled or a failure: stay)
+  // (not written: stay; written, but changed meanwhile: asked again about those changes)
+  if (r === "Save" || r === "Yes") return (await saveFile()) && (!useS.getState().dirty || discardOk());
   return r === "Don't Save" || r === "No";
 }
 /** Recovery mirror: debounce timer and the last save in flight (a clear must come after it). */
