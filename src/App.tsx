@@ -504,21 +504,25 @@ function drag(e: React.PointerEvent, move: (ev: PointerEvent) => void, done?: ()
   if (e.button !== 0) return;
   const el = e.currentTarget as HTMLElement, id = e.pointerId;
   el.setPointerCapture(id);
+  const mine = (ev: PointerEvent) => ev.pointerId === id && move(ev); // (not a second finger's)
   const end = (ev: PointerEvent) => {
     if (ev.pointerId !== id) return;
-    el.removeEventListener("pointermove", move);
+    el.removeEventListener("pointermove", mine);
     window.removeEventListener("pointerup", end);
     window.removeEventListener("pointercancel", end);
     done?.();
   };
-  el.addEventListener("pointermove", move);
+  el.addEventListener("pointermove", mine);
   window.addEventListener("pointerup", end);
   window.addEventListener("pointercancel", end);
 }
 
 /** How tall pane `el` may get by dragging: its height plus what the schematic ([data-fill]) has
- *  above its strip. (Too little room later, a smaller window: the panes shrink, see below.) */
-const roomFor = (el: HTMLElement) => el.offsetHeight + Math.max(0, (el.parentElement!.querySelector<HTMLElement>(":scope > [data-fill]")?.offsetHeight ?? 48) - 48);
+ *  above its min-height strip. (Too little room later, a smaller window: the panes shrink, see App.) */
+const roomFor = (el: HTMLElement) => {
+  const fill = el.parentElement!.querySelector<HTMLElement>(":scope > [data-fill]");
+  return el.offsetHeight + (fill ? Math.max(0, fill.offsetHeight - parseFloat(getComputedStyle(fill).minHeight)) : 0);
+};
 
 function BottomPanel() {
   const { panel, sim, nets } = useS(useShallow((s) => ({ panel: s.panel, sim: s.sim, nets: s.nets })));
@@ -541,8 +545,7 @@ function BottomPanel() {
         className="relative z-10 -mt-[3px] h-[5px] shrink-0 cursor-row-resize hover:bg-selection/40" />
       <div className="flex h-[26px] shrink-0 items-center border-b border-border bg-surface-panel-head px-1">
         {tabs.map(([k, label]) => (
-          // (the open tab clicked again: the panel closes)
-          <button key={k} onClick={() => useS.setState({ panel: panel === k ? null : k })}
+          <button key={k} onClick={() => useS.setState({ panel: k })}
             className={cn("h-full border-b-2 px-3 text-xs", panel === k ? "border-selection text-text-strong" : "border-transparent text-text-secondary hover:text-text-strong")}>
             {label}
           </button>
