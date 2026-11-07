@@ -14,6 +14,7 @@ enum C {
 impl C {
     fn text(&self) -> String {
         match self {
+            C::N(v) if *v < 0.0 => format!("({v:e})"), // (`k*(-1e3)`, not `k*-1e3`)
             C::N(v) => format!("{v:e}"),
             C::E(e) => format!("({e})"),
         }
@@ -200,6 +201,7 @@ impl P<'_> {
         if let Some(x) = constant(&a) {
             // (no s: one constant, as ngspice reads it)
             return Ok(R::c(match (&x, &y) {
+                (C::N(x), C::N(y)) if !x.powf(*y).is_finite() => return Err(NAN.into()),
                 (C::N(x), C::N(y)) => C::N(x.powf(*y)),
                 _ => C::E(format!("pow({},{})", x.text(), y.text())),
             }));
@@ -240,7 +242,7 @@ impl P<'_> {
             Some(c) if c.is_ascii_digit() || c == '.' => {
                 let rest = &self.s[self.i..];
                 let n = rest.char_indices().find(|&(k, c)| !(c.is_alphanumeric() || c == '.' || ((c == '+' || c == '-') && k > 0 && rest[..k].ends_with(['e', 'E']) && rest[..k].bytes().all(|b| b.is_ascii_digit() || b == b'.' || b == b'e' || b == b'E')))).map_or(rest.len(), |p| p.0);
-                let v = crate::schematic::spice_num(&rest[..n]).ok_or_else(|| format!("`{}` is not a number", &rest[..n]))?;
+                let v = crate::schematic::spice_num(&rest[..n]).filter(|v| v.is_finite()).ok_or_else(|| format!("`{}` is not a number", &rest[..n]))?;
                 self.i += n;
                 Ok(R::c(C::N(v)))
             }
@@ -329,9 +331,75 @@ fn coefficients(expr: &str) -> Result<R, String> {
         return Err("its denominator is 0".into());
     }
     if num.iter().chain(&den).any(|c| matches!(c, C::N(v) if !v.is_finite())) {
-        return Err("a coefficient is not a number (a division by 0, a root of a negative number)".into());
+        return Err(NAN.into());
+    }
+    let nums = |p: &Poly| p.iter().map(|c| if let C::N(v) = c { Some(*v) } else { None }).collect::<Option<Vec<f64>>>();
+    if let (Some(n), Some(d)) = (nums(&num), nums(&den)) {
+        if let Some((n, d)) = cancel(&n, &d) {
+            return Ok(R(n.into_iter().map(C::N).collect(), d.into_iter().map(C::N).collect()));
+        }
     }
     Ok(R(num, den))
+}
+
+const NAN: &str = "a coefficient is not a number (a division by 0, a root of a negative number)";
+
+/// num/den (ascending, numbers) with the factor they share divided out, if any: Euclid's
+/// algorithm on them in p = s/w (w as in `realise`: coefficients of one size), what is below
+/// 1e-9 of the largest coefficient taken as 0. A shared factor would otherwise be a hidden state
+/// (`(s-1)/((s-1)*(s+2))`: one growing like e^t in .tran).
+fn cancel(num: &[f64], den: &[f64]) -> Option<(Vec<f64>, Vec<f64>)> {
+    let ord = den.len() - 1;
+    let r = den.iter().position(|&v| v != 0.0)?;
+    let w = if ord > r { (den[r] / den[ord]).abs().powf(1.0 / (ord - r) as f64) } else { 1.0 };
+    let w = if w.is_finite() && w > 0.0 { w } else { 1.0 };
+    let scaled = |p: &[f64], f: f64| p.iter().enumerate().map(|(k, v)| v * f.powi(k as i32)).collect::<Vec<_>>();
+    let unit = |p: &[f64]| {
+        let m = p.iter().fold(0f64, |m, v| m.max(v.abs()));
+        let mut p: Vec<f64> = p.iter().map(|v| v / m).collect();
+        while p.len() > 1 && p.last().is_some_and(|v| v.abs() < 1e-9) {
+            p.pop();
+        }
+        p
+    };
+    let (pn, pd) = (scaled(num, w), scaled(den, w));
+    if pn.iter().all(|&v| v == 0.0) {
+        return None;
+    }
+    let (mut x, mut y) = (unit(&pd), unit(&pn));
+    if y.len() > x.len() {
+        std::mem::swap(&mut x, &mut y);
+    }
+    let g = loop {
+        if y.len() == 1 {
+            return None; // (nothing shared but a constant)
+        }
+        let rem = divmod(&x, &y).1;
+        if rem.iter().all(|v| v.abs() < 1e-9) {
+            break y;
+        }
+        (x, y) = (y, unit(&rem));
+    };
+    let (n, d) = (scaled(&divmod(&pn, &g).0, 1.0 / w), scaled(&divmod(&pd, &g).0, 1.0 / w));
+    let lead = *d.last()?; // (its highest power below 1: the same function)
+    Some((n.iter().map(|v| v / lead).collect(), d.iter().map(|v| v / lead).collect()))
+}
+
+/// a / b: quotient and remainder (ascending coefficients, b's highest nonzero).
+fn divmod(a: &[f64], b: &[f64]) -> (Vec<f64>, Vec<f64>) {
+    let (n, m) = (a.len(), b.len());
+    if n < m {
+        return (vec![0.0], a.to_vec());
+    }
+    let (mut q, mut r) = (vec![0.0; n - m + 1], a.to_vec());
+    for k in (0..=n - m).rev() {
+        q[k] = r[k + m - 1] / b[m - 1];
+        for j in 0..m {
+            r[k + j] -= q[k] * b[j];
+        }
+    }
+    r.truncate((m - 1).max(1));
+    (q, r)
 }
 
 /// H(s) = num/den as plain elements, in the controllable canonical form: a state per power of s
@@ -417,8 +485,14 @@ pub fn rewrite(text: &str, warnings: &mut Vec<String>) -> String {
     }
     let lines: Vec<&str> = text.split_inclusive('\n').collect();
     let mut out = String::with_capacity(text.len());
-    let mut k = 0;
+    let (mut k, mut sub, mut inside) = (0, None::<String>, vec![]);
     while k < lines.len() {
+        let low = lines[k].trim_start().to_ascii_lowercase();
+        if low.starts_with(".subckt") {
+            sub = low.split_whitespace().nth(1).map(str::to_string);
+        } else if low.starts_with(".ends") {
+            sub = None;
+        }
         // (not the title, whatever it says)
         if k == 0 || !lines[k].trim_start().starts_with(['E', 'e', 'G', 'g']) {
             out.push_str(lines[k]);
@@ -447,13 +521,21 @@ pub fn rewrite(text: &str, warnings: &mut Vec<String>) -> String {
                 out.push('\n');
             }
             other => {
-                if let Some(Err(e)) = other {
-                    warnings.push(format!("`{}`: {e}", whole.trim()));
+                match (other, &sub) {
+                    (Some(Err(e)), None) => warnings.push(format!("`{}`: {e}", whole.trim())),
+                    // (a library's: maybe not used at all; said once)
+                    (Some(Err(e)), Some(s)) => inside.push((s.clone(), format!("`{}`: {e}", whole.trim()))),
+                    _ => {}
                 }
                 lines[k..j].iter().for_each(|l| out.push_str(l));
             }
         }
         k = j;
+    }
+    if let Some((_, first)) = inside.first() {
+        let mut subs: Vec<&str> = inside.iter().map(|(s, _)| s.as_str()).collect();
+        subs.dedup();
+        warnings.push(format!("Laplace sources that cannot run in subcircuit{} {} (ngspice stops if the circuit uses one): {first}", if subs.len() > 1 { "s" } else { "" }, subs.join(", ")));
     }
     out
 }
@@ -517,6 +599,17 @@ mod tests {
         assert!(!mentions_s("tau") && mentions_s("2*s+1") && !mentions_s("sigma"));
         assert!(internal("e1#lapz1") && internal("x1.e1#lapy") && !internal("out") && !internal("clk_lapz1") && !internal("a#lapz1x"));
         assert_eq!(c("(1/(s-1))/(1+10/(s-1))"), (v(&["1e0"]), v(&["9e0", "1e0"])), "G/(1+G): no hidden pole at +1");
+        let near = |e: &str, n: &[f64], d: &[f64]| {
+            let R(a, b) = coefficients(e).unwrap();
+            let f = |p: &Poly| p.iter().map(|c| if let C::N(v) = c { *v } else { f64::NAN }).collect::<Vec<_>>();
+            let (a, b) = (f(&a), f(&b));
+            assert!(a.len() == n.len() && b.len() == d.len() && a.iter().zip(n).chain(b.iter().zip(d)).all(|(x, y)| (x - y).abs() < 1e-9 * y.abs().max(1.0)), "{e}: {a:?} / {b:?}");
+        };
+        near("(s-1)/((s-1)*(s+2))", &[1.0], &[2.0, 1.0]);
+        near("(s+1e6)*(s+3e6)/((s+1e6)*(s+2e6)*(s+4e6))", &[3e6, 1.0], &[8e12, 6e6, 1.0]);
+        near("(1+s)/(2+s)*(2+s)/(1+s)", &[1.0], &[1.0]);
+        near("(s+1)/(s+2)", &[1.0, 1.0], &[2.0, 1.0]);
+        assert_eq!(c("k*(s-1k)/(s+1k)").0, ["{(k)*(-1e3)}", "{k}"]);
         assert!(coefficients("(-2)^0.5/(1+s)").unwrap_err().contains("not a number"));
         assert!(coefficients(&format!("{}1{}", "(".repeat(100_000), ")".repeat(100_000))).unwrap_err().contains("deep"));
     }
@@ -532,6 +625,10 @@ mod tests {
         assert!(t.contains("E5 o 0 e5#lapy 0 1"), "a no-break space: {t}");
         assert!(t.starts_with("G title Laplace=1/(1+s)\n"), "the title as it was: {t}");
         assert!(rewrite("* t\nE1 o 0 i 0 Laplace=1/(s*1n)\n", &mut w).contains("CE1_z1 e1#lapz1 0 1e-9"), "an integrator scaled at its crossover");
+        let mut w = vec![];
+        rewrite("* t\n.subckt a 1 2\nE1 1 0 2 0 Laplace=exp(-s)\nE2 1 0 2 0 Laplace=exp(-s)\n.ends\n.subckt b 1 2\nE1 1 0 2 0 Laplace=exp(-s)\n.ends\nE9 o 0 i 0 Laplace=1/(1+s)\n", &mut w);
+        assert!(w.len() == 1 && w[0].contains("subcircuits a, b"), "{w:?}");
+        w.clear();
         let t = rewrite("* t\nE1 out 0 Laplace=1/s\n", &mut w);
         assert!(w[0].contains("two output and two input") && t.contains("Laplace"), "left as it was, said");
     }
@@ -547,6 +644,8 @@ mod tests {
         assert!((op.re[0] - 2.0).abs() < 1e-6 && (op.re[op.re.len() - 1] - 2.0).abs() < 1e-6, "{:?}", &op.re[..3]);
         let g = run("* op\n.param tau=1m\nV1 in 0 DC 1\nG1 0 o2 in 0 Laplace=3/(1+s*tau)\nR2 o2 0 1\n.tran 10u 1m\n.end\n", "V(o2)");
         assert!((g.re[0] - 3.0).abs() < 1e-6, "G: {}", g.re[0]);
+        let x = run("* sub\nV1 in 0 DC 1\nX1 in o lp\n.subckt lp a b\nE1 b 0 a 0 Laplace=4/(1+s*1m)\n.ends\n.tran 10u 1m\n.end\n", "V(o)");
+        assert!((x.re[0] - 4.0).abs() < 1e-6, "in a subcircuit: {}", x.re[0]);
         let ramp = run("* integ\nV1 in 0 PULSE(0 1 1m 1n 1n 1 2)\nE1 out 0 in 0 Laplace=1k/s\n.tran 10u 3m\n.end\n", "V(out)");
         let at = |t: f64| ramp.re[ramp.x.iter().position(|&x| x >= t).unwrap()];
         assert!(at(0.5e-3).abs() < 1e-6 && (at(3e-3) - 2.0).abs() < 0.02, "{} {}", at(0.5e-3), at(3e-3));
