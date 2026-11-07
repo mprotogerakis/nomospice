@@ -335,8 +335,11 @@ function YRangeDialog({ pane, unit, log }: { pane: string; unit: string; log: bo
   };
   return (
     <Modal title="Y Range" onSubmit={submit}>
-      <NumField label="From" value={lo} set={setLo} unit={unit} autofocus />
-      <NumField label="To" value={hi} set={setHi} unit={unit} hint="both empty: automatic" />
+      {/* (degrees: no SPICE reading to show; ° typed is fine) */}
+      {((Num) => <>
+        <Num label="From" value={lo} set={setLo} unit={unit} autofocus />
+        <Num label="To" value={hi} set={setHi} unit={unit} hint="both empty: automatic" />
+      </>)(unit === "°" ? TextField : NumField)}
       {bad && <p className="text-2xs text-status-warning">⚠ {bad}</p>}
     </Modal>
   );

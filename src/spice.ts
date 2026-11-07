@@ -723,6 +723,7 @@ function fft(re: Float64Array, im: Float64Array) {
  *  breakpoints count for nothing, edges for what they last.
  *  ponytail: past 2^20 it folds; average down first if such runs matter. */
 export function fftSize(xs: number[], lo: number, hi: number) {
+  if (!(hi > lo)) return 4096;
   const steps: number[] = [];
   for (let i = 1; i < xs.length; i++) if (xs[i] > lo && xs[i - 1] < hi && xs[i] > xs[i - 1]) steps.push(xs[i] - xs[i - 1]);
   steps.sort((a, b) => a - b);

@@ -171,17 +171,24 @@ export const Waveform = memo(function Waveform() {
     const one = x.slice(0, segment(x));
     const [lo, hi] = [Math.max(fft!.lo, one[0]), Math.min(fft!.hi, one[one.length - 1])];
     const [a, b] = hi > lo ? [lo, hi] : [one[0], one[one.length - 1]];
+    if (!(b > a)) return null; // (a run of one time point)
     // (a .step family: at most 2^22 points in all, its curves fewer each)
     const curves = Math.max(1, Math.floor(x.length / one.length));
-    return { lo: a, hi: b, n: Math.min(fftSize(one, a, b), Math.max(4096, 2 ** Math.floor(Math.log2(2 ** 22 / curves)))) };
+    return { lo: a, hi: b, n: Math.min(fftSize(one, a, b), Math.max(512, 2 ** Math.floor(Math.log2(2 ** 22 / curves)))), curves };
   }, [spec, x0, fft]);
   const shown = useMemo(() => {
     if (!win) return ok;
     const f = fftFreqs(win.lo, win.hi, win.n); // (x: the frequencies once, shared; the curves end to end in re)
-    return ok.filter((t) => !t.data!.constant && !t.data!.im).map((t): Trace => ({ ...t, unit: "dB", right: undefined, pane: undefined, data: { ...t.data!, x: f, re: spectra(t.data!, win.lo, win.hi, win.n) as number[], constant: undefined } }));
+    return ok.filter((t) => !t.data!.constant && !t.data!.im).map((t): Trace => {
+      const db = spectra(t.data!, win.lo, win.hi, win.n);
+      // (none at all: said, not just blank)
+      const error = db.every((v) => v == null) ? "No spectrum: in this range it has a gap (a step that halted) or a value that is not a number (1/0, ln(0))" : t.error;
+      return { ...t, unit: "dB", right: undefined, pane: undefined, error, data: { ...t.data!, x: f, re: db as number[], constant: undefined } };
+    });
   }, [ok, win]);
   useEffect(() => {
     if (!spec) SPECTRA = new WeakMap();
+    useHover.setState({ x: null }); // (an x of the other axis: seconds read as Hz)
   }, [spec]);
   // the table's rows: in the spectrum also the traces without one (an error, a level: still listed, removable)
   const listed = useMemo(() => (spec ? [...shown, ...traces.filter((t) => !shown.some((s) => s.expr === t.expr))] : traces), [spec, shown, traces]);
@@ -449,7 +456,7 @@ export const Waveform = memo(function Waveform() {
       <div className="flex w-[340px] shrink-0 flex-col border-l border-border bg-surface-panel text-xs">
         {win && (
           <div className="border-b border-border px-2 py-1 font-mono text-2xs text-text-secondary">
-            Spectrum of {si(win.lo, "s")} … {si(win.hi, "s")}: {win.n} points, Hann window, dB of the amplitude (a sine of 1 V or 1 A: 0 dB) ·{" "}
+            Spectrum of {si(win.lo, "s")} … {si(win.hi, "s")}: {win.n} points, Hann window, dB of the amplitude (a sine of 1 V or 1 A: 0 dB){win.curves > 1 ? "; of each step's curve as fetched for the plot (thinned: what lies above its points' Nyquist frequency folds in)" : ""} ·{" "}
             <button className="underline hover:text-text-strong" onClick={() => showFft(null)}>back to the transient</button>
           </div>
         )}
@@ -540,7 +547,7 @@ const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot, spec, st
                 // (into another unit's pane: on its right axis there, unless that holds a third unit
                 // already; not the Bode panes, nor in a spectrum)
                 ...(t.data?.im || t.data?.constant || spec ? [] : panes.filter((p) => p.own && p.unit !== "dB" && p.unit !== "°" && p.unit !== t.unit && !p.series.some((s) => s.t === t) && p.series.every((s) => s.u === p.unit || s.u === t.unit)).map((p) => ({ label: `Into the ${p.unit || "unitless"} pane`, hint: "its right axis", run: () => setTracePane(t.expr, p.unit) }))),
-                ...(t.pane != null && !spec ? [{ label: moved(t) ? `Back to its own pane (${t.unit || "unitless"})` : `Not into the ${t.pane || "unitless"} pane any more`, hint: moved(t) ? undefined : "it would go there with traces of its own", run: () => setTracePane(t.expr, undefined) }] : []),
+                ...(t.pane != null && !spec && !t.data?.im ? [{ label: moved(t) ? `Back to its own pane (${t.unit || "unitless"})` : `Not into the ${t.pane || "unitless"} pane any more`, hint: moved(t) ? undefined : "it would go there with traces of its own", run: () => setTracePane(t.expr, undefined) }] : []),
                 { label: "Copy expression", hint: t.expr, run: () => navigator.clipboard.writeText(t.expr) },
                 { label: `Remove ${t.label}`, danger: true, run: () => removeTrace(t.expr) },
               ]))}>
