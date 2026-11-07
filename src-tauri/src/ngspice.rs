@@ -50,8 +50,8 @@ static LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
 static BG_DONE: AtomicBool = AtomicBool::new(true);
 /// Counts runs: each one destroys the results of the one before (see `Run::id`, `trace`).
 static RUNS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-/// The latest run's current sensors: trace expressions name part currents (`I(R1)`, `Ib(Q1)`).
-static SENSORS: Mutex<Vec<crate::schematic::Sensor>> = Mutex::new(Vec::new());
+/// The latest run's id and current sensors: trace expressions name part currents (`I(R1)`, `Ib(Q1)`).
+static SENSORS: Mutex<(u64, Option<std::sync::Arc<[crate::schematic::Sensor]>>)> = Mutex::new((0, None));
 /// Counts Halt presses. An operation (a simulation, a root locus) notes the count when it begins
 /// (`begin`) and is halted once the count moves on (`halted_since`): a Halt stops what was running
 /// when it was pressed, never something started afterwards, and no later start can undo it. Only
@@ -370,14 +370,14 @@ pub fn run(netlist: &Prepared) -> Result<Run, Vec<String>> {
 
 /// [`run`], stopped (`bg_halt`, partial data) as soon as `stop()` says so: polled while it runs.
 pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec<String>> {
-    let sensors = netlist.sensors().to_vec();
+    let sensors: std::sync::Arc<[crate::schematic::Sensor]> = netlist.sensors().into();
     let netlist = netlist.text();
     let g = engine()?;
     let api = g.as_ref().unwrap();
     api.command("destroy all");
     api.command("remcirc");
     let id = RUNS.fetch_add(1, Ordering::SeqCst) + 1; // the previous run's results are gone now
-    *SENSORS.lock().unwrap_or_else(|e| e.into_inner()) = sensors.clone();
+    *SENSORS.lock().unwrap_or_else(|e| e.into_inner()) = (id, Some(sensors.clone()));
     take_log();
     let lines: Vec<CString> = netlist.lines().map(|l| CString::new(l).unwrap_or_default()).collect();
     let mut ptrs: Vec<*const c_char> = lines.iter().map(|l| l.as_ptr()).collect();
@@ -482,9 +482,12 @@ fn plot_vectors(api: &Api, plot: &str, sensors: &[crate::schematic::Sensor], par
 pub fn trace(expr: &str, scale: &str, run: u64) -> Result<Trace, String> {
     // part currents by name (`I(R1)-I(R2)`, `Ib(Q1)`): the latest run's sensors; messages show the
     // expression as written, ngspice's with the names (not the hidden sensor sources)
-    let (named, problem) = crate::schematic::sensor_currents(expr, &SENSORS.lock().unwrap_or_else(|e| e.into_inner()));
+    // (the sensors of the run asked about; another run's: the results are gone anyway, see below)
+    let (of, sensors) = SENSORS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let sensors = sensors.filter(|_| of == run).unwrap_or_else(|| std::sync::Arc::from([]));
+    let (named, problem) = crate::schematic::sensor_currents(expr, &sensors);
     let (shown, expr) = (expr, named.as_str());
-    let unname = |log: String| SENSORS.lock().unwrap_or_else(|e| e.into_inner()).iter().fold(log, |l, s| l.replace(&format!("i({})", s.source), &s.label).replace(&format!("{}#branch", s.source), &s.label));
+    let unname = |log: String| sensors.iter().fold(log, |l, s| l.replace(&format!("i({})", s.source), &s.label).replace(&format!("{}#branch", s.source), &s.label));
     // ngspice's command line is csh-like (`;` chains, backquotes run sh, `!` history, `$` vars):
     // only characters an expression needs may pass.
     let ok = |c: char| c.is_ascii_alphanumeric() || " _()[]@#+-*/^.,:\"'<>=&|%".contains(c);
