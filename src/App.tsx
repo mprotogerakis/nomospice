@@ -6,7 +6,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { listen } from "@tauri-apps/api/event";
 import { ask, message, open, save } from "@tauri-apps/plugin-dialog";
 import {
-  Code, Component, Copy, FilePlus, FlipHorizontal2, FolderOpen, Moon, MousePointer2, Play, Redo2, RotateCw, Save,
+  Code, Component, Copy, FilePlus, FlipHorizontal2, FolderOpen, Moon, MousePointer2, Move, Play, Redo2, RotateCw, Save,
   Info, Plus, Scissors, X, ScrollText, SlidersHorizontal, Spline, Square, Sun, Tag, Type, Undo2, Zap,
 } from "lucide-react";
 import type { Item } from "./types";
@@ -321,6 +321,7 @@ export function App() {
         delete: deleteSelection, backspace: deleteSelection,
         f5: () => (useS.getState().sel.length ? deleteSelection() : useS.setState({ tool: { k: "delete" } })),
         f6: duplicate, f9: e.shiftKey ? redo : undo,
+        f7: () => useS.setState({ tool: { k: "move" } }), f8: () => useS.setState({ tool: { k: "select" } }),
         " ": () => window.dispatchEvent(new Event("nomospice:fit")),
       };
       if (map[k]) run(map[k]);
@@ -371,7 +372,8 @@ export function App() {
         <ToolbarButton label="Edit simulation command" icon={<SlidersHorizontal />} onClick={() => useS.setState({ dialog: { k: "sim" } })} />
         <ToolbarButton label="Live: re-run on every edit" icon={<Zap />} pressable active={s.live} onClick={() => useS.setState({ live: !s.live })} />
         <ToolbarSeparator />
-        <ToolbarButton label="Select" hotkey="Esc" icon={<MousePointer2 />} pressable active={tool.k === "select"} onClick={() => useS.setState({ tool: { k: "select" } })} />
+        <ToolbarButton label="Select (drag: wires follow)" hotkey="Esc / F8" icon={<MousePointer2 />} pressable active={tool.k === "select"} onClick={() => useS.setState({ tool: { k: "select" } })} />
+        <ToolbarButton label="Move (wires stay)" hotkey="F7" icon={<Move />} pressable active={tool.k === "move"} onClick={() => useS.setState({ tool: { k: "move" } })} />
         <ToolbarButton label="Wire" hotkey="W / F3" icon={<Spline />} pressable active={tool.k === "wire"} onClick={() => useS.setState({ tool: { k: "wire" } })} />
         <ToolbarButton label="Ground" hotkey="G" icon={G.gnd} pressable active={tool.k === "place" && tool.item.t === "flag" && tool.item.name === "0"} onClick={() => placeFlag("0")} />
         <ToolbarButton label="Net label" hotkey="N / F4" icon={<Tag />} onClick={() => newItem({ t: "flag", x: 0, y: 0, name: "" })} />

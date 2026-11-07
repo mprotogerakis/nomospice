@@ -436,9 +436,11 @@ export const Schematic = memo(function Schematic() {
         if (e.shiftKey || e.metaKey || e.ctrlKey) next = selSet.has(i) ? sel.filter((j) => j !== i) : [...sel, i];
         else if (!selSet.has(i)) next = [i];
         useS.setState({ sel: next });
-        // the plan is built on the first move (a click or a probe never needs it)
+        // the plan is built on the first move (a click or a probe never needs it); the move tool:
+        // the selection alone, its wires left where they are
         let built: ReturnType<typeof dragPlan> | null = null;
-        const plan = (dx: number, dy: number) => (built ??= dragPlan(items, lib, new Set(next)))(dx, dy);
+        const alone = (dx: number, dy: number) => items.map((it, j) => (next.includes(j) && isShape(it) ? shifted(it, dx, dy) : it));
+        const plan = tool.k === "move" ? alone : (dx: number, dy: number) => (built ??= dragPlan(items, lib, new Set(next)))(dx, dy);
         drag.current = { k: "move", start: g, plan, moved: false, index: i, at: [0, 0], base: items, pin: probing ? pinAt(items[i], p) : undefined };
       } else if (e.shiftKey) {
         drag.current = { k: "box", start: p, end: p };
@@ -452,7 +454,7 @@ export const Schematic = memo(function Schematic() {
     const p = toWorld(e), g: Pt = [snap(p[0]), snap(p[1])];
     if (g[0] !== useStatus.getState().x || g[1] !== useStatus.getState().y) useStatus.setState({ x: g[0], y: g[1] });
     // the snapped cursor is state only while a ghost / wire preview follows it (select mode: no re-render)
-    if (tool.k !== "select" && (g[0] !== cursor[0] || g[1] !== cursor[1])) setCursor(g);
+    if (tool.k !== "select" && tool.k !== "move" && (g[0] !== cursor[0] || g[1] !== cursor[1])) setCursor(g);
     if (wireStart && hFirst === null && (g[0] !== wireStart[0] || g[1] !== wireStart[1]))
       setHFirst(Math.abs(g[0] - wireStart[0]) >= Math.abs(g[1] - wireStart[1]));
     const d = drag.current;
@@ -593,7 +595,7 @@ export const Schematic = memo(function Schematic() {
     const pa = pastedAt.current;
     if (Date.now() - pa.t < 2000 && Math.hypot(e.clientX - pa.x, e.clientY - pa.y) < 6) return;
     // while probing, clicks plot (LTspice); editing is right-click there
-    if (tool.k !== "select" || probing) return;
+    if ((tool.k !== "select" && tool.k !== "move") || probing) return;
     editAt(e);
   };
 
@@ -622,6 +624,7 @@ export const Schematic = memo(function Schematic() {
   const hoverProbe = probing && hover >= 0 && canProbe(items[hover], hoverPin);
   const cursorStyle =
     tool.k === "delete" ? "not-allowed"
+    : tool.k === "move" ? (hover >= 0 ? "move" : "default")
     : tool.k !== "select" ? "crosshair"
     : hoverProbe ? (hoverIsSym ? PROBE_I : PROBE_V)
     : drag.current?.k === "pan" ? "grabbing" : hover >= 0 ? "pointer" : "default";
@@ -684,7 +687,7 @@ export const Schematic = memo(function Schematic() {
               {wirePath(wireStart, cursor).map((w, i) => w.t === "wire" && <line key={i} x1={w.x1} y1={w.y1} x2={w.x2} y2={w.y2} />)}
             </g>
           )}
-          {tool.k !== "select" && (
+          {tool.k !== "select" && tool.k !== "move" && (
             <circle cx={cursor[0]} cy={cursor[1]} r={3} fill="none" stroke="var(--selection)" strokeWidth={1} vectorEffect="non-scaling-stroke" />
           )}
           {boxSel && (

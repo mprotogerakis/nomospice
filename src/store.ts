@@ -10,7 +10,9 @@ export type Tool =
   | { k: "place"; item: Item }
   /** pasted items following the cursor (positions relative to it), placed with a click */
   | { k: "paste"; items: Shape[] }
-  | { k: "delete" };
+  | { k: "delete" }
+  /** like select, but a drag moves the parts alone: their wires stay (LTspice's Move, F7) */
+  | { k: "move" };
 
 export type Dialog =
   /** raw: a directive as plain text, even when a form could edit it */
