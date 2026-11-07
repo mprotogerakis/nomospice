@@ -10,7 +10,7 @@ import { closeDialog as close, Field, FIELD, Modal, numHelp, NumField, Rows, Tex
 import { SourceEditor } from "./SourceEditor";
 import { SimDialog } from "./SimDialog";
 import { DirectiveDialog } from "./DirectiveDialog";
-import { analysisEditable, analysisEditableAt, analysisLine, analysisLineIndex, analysisOptions, exprUnit, getParam, setParam, spiceNum, tokens, xUnitOf } from "./spice";
+import { analysisEditable, analysisEditableAt, analysisLine, analysisLineIndex, analysisOptions, balanced, exprUnit, getParam, setParam, spiceNum, tokens, xUnitOf } from "./spice";
 import { cn } from "@/lib/utils";
 import thirdParty from "./third-party.json";
 import { checkForUpdate } from "./updater";
@@ -57,7 +57,9 @@ function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: 
   };
   // independent sources (V, I; not the controlled E/G/F/H) get the waveform form
   // the part's own Prefix wins, as in the netlist — as typed in the rows below, live
-  const prefixRow = extra.filter(([k]) => k.trim().toLowerCase() === "prefix").at(-1)?.[1] ?? ""; // the last row wins, as saved
+  const row = (name: string) => extra.filter(([k]) => k.trim().toLowerCase() === name).at(-1)?.[1] ?? ""; // the last row wins, as saved
+  const prefixRow = row("prefix");
+  const [drafts, setDrafts] = useState<Record<string, string | undefined>>({});
   const prefix = it.t === "sym" ? prefixOf({ ...it, attrs: { ...it.attrs, Prefix: prefixRow } }, def) : "";
   const source = prefix === "V" || prefix === "I";
   // R, C, L: show how SPICE reads a single value (1M is a milliohm, 10F ten femtofarad)
@@ -76,12 +78,18 @@ function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: 
                 {...(valueHelp ?? {})} hint={unit ? "e.g. 4.7k, 100n, 1Meg; LTspice extras like Rser=0.1 may follow" : undefined} />
               {/* (D, Q, M: their common instance parameters as fields; Value2 holds them, as SPICE reads them) */}
               {INSTANCE[prefix]?.map(([k, label, u, hint]) => {
-                const v = getParam(attr("Value2"), k), set = (x: string) => setAttr("Value2", setParam(attr("Value2"), k, x));
+                // (a value being typed, `{2*` or `'a`: shown as typed, written once it is closed, so
+                // the open brace does not swallow the rest of Value2)
+                const v = drafts[k] ?? getParam(attr("Value2"), k);
+                const set = (x: string) => {
+                  setDrafts({ ...drafts, [k]: balanced(x) ? undefined : x });
+                  if (balanced(x)) setAttr("Value2", setParam(attr("Value2"), k, x));
+                };
                 // (the netlist line is Value Value2 SpiceLine SpiceLine2, and SPICE takes the last of a
                 // key: one in SpiceLine (or the symbol's) or SpiceLine2 wins over this field, said)
                 const has = (n: string, line: string) => ((x) => (x ? [`${n} has ${k}=${x}`] : []))(getParam(line, k));
-                const before = has("Value", attr("Value"));
-                const after = [...has("SpiceLine", it.attrs.SpiceLine ?? def?.spice_line ?? ""), ...has("SpiceLine2", extra.find(([n]) => n.trim().toLowerCase() === "spiceline2")?.[1] ?? "")];
+                const before = has("Value", it.attrs.Value ?? def?.value ?? ""); // (the symbol's Value if the part has none, as the netlist does)
+                const after = [...has("SpiceLine", it.attrs.SpiceLine ?? def?.spice_line ?? ""), ...has("SpiceLine2", row("spiceline2"))];
                 const note = after.length ? `${after.join("; ")}, which comes later on the line and wins` : before.length && v ? `${before[0]}; this one wins` : before.length ? `${before[0]}, in effect` : hint;
                 return <NumField key={k} label={label} value={v} set={set} unit={u} placeholder={k === "m" || k === "area" ? "1" : "model default"} hint={note} />;
               })}

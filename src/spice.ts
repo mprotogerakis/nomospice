@@ -778,7 +778,7 @@ const paramTokens = (line: string) => {
   for (let i = 0; i < t.length; i++) {
     let x = t[i];
     if (!x.includes("=") && t[i + 1]?.startsWith("=")) x += t[++i];
-    if (x.endsWith("=") && t[i + 1] && !t[i + 1].includes("=")) x += t[++i];
+    if (x.endsWith("=") && t[i + 1] && !/^[A-Za-z_]\w*=/.test(t[i + 1])) x += t[++i]; // (a value, {a==1?1u:2u} too; not the next key=)
     out.push(x);
   }
   return out;
@@ -788,8 +788,20 @@ export const getParam = (line: string, k: string) => ((t) => t?.slice(k.length +
 /** `line` with `k=v` set (in the first one's place, others of that key gone, else appended); v
  *  empty: taken out. */
 export function setParam(line: string, k: string, v: string) {
-  const val = v.replace(/\s+/g, ""), t = paramTokens(line);
+  const val = tokens(v).join(""), t = paramTokens(line); // (blanks between items go, those in {…} stay)
   const first = t.findIndex((x) => isParam(x, k));
   const out = t.flatMap((x, i) => (!isParam(x, k) ? [x] : i === first && val ? [`${k}=${val}`] : []));
   return (first < 0 && val ? [...out, `${k}=${val}`] : out).join(" ");
+}
+
+/** Whether `s` closes every brace, parenthesis and quote it opens (a value still being typed: not). */
+export function balanced(s: string) {
+  let depth = 0, q = "";
+  for (const c of s) {
+    if (q) q = c === q ? "" : q;
+    else if (c === "'" || c === '"') q = c;
+    else depth += c === "{" || c === "(" ? 1 : c === "}" || c === ")" ? -1 : 0;
+    if (depth < 0) return false;
+  }
+  return !depth && !q;
 }
