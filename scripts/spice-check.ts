@@ -168,6 +168,10 @@ assert.equal(numInfo("1Meg", "Hz")!.text, "= 1MegHz"); // not "1M", the milli tr
   assert.ok(bridgedOut[2].y1 === 20 && bridgedOut.length === 5 && [0, 50].every((x) => bridgedOut.some((w) => w.t === "wire" && w.x1 === x && w.y1 === 0 && w.y2 === 20)), JSON.stringify(bridgedOut));
   const legOut = dragPlan([...twoPins, W(25, 0, 25, 50)] as never, lib as never, new Set([2]))(0, 20) as ReturnType<typeof W>[];
   assert.ok(legOut[3].y1 === 20 && legOut[3].y2 === 50, `a T-leg on a bridged wire follows it: ${JSON.stringify(legOut)}`);
+  // with a resting pin inside it as well: bridged there too (it moved not at all)
+  const threePins = [...twoPins.slice(0, 2), { t: "sym" as const, sym: "r", x: 25, y: 0, rot: "R0", attrs: {} }, W(0, 0, 50, 0)];
+  const threeOut = dragPlan(threePins as never, lib as never, new Set([3]))(0, 20) as ReturnType<typeof W>[];
+  assert.ok(threeOut[3].y1 === 20 && threeOut.filter((w) => w.t === "wire" && w.y1 === 0 && w.y2 === 20).length === 3, JSON.stringify(threeOut));
   // a selected label on a resting pin still takes its wires along (as before)
   const flagOnPin = [{ t: "sym" as const, sym: "r", x: 0, y: 0, rot: "R0", attrs: {} }, { t: "flag" as const, x: 0, y: 0, name: "0" }, W(0, 0, 0, 50)];
   const flagOut = dragPlan(flagOnPin as never, lib as never, new Set([1]))(20, 0) as ReturnType<typeof W>[];

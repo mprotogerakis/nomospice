@@ -188,9 +188,11 @@ export function dragPlan(items: Item[], lib: Lib, sel: Set<number>) {
   };
   items.forEach((_, i) => join(i));
   // a selected wire between two resting pins: it moves whole (T-legs on it follow, below), and new
-  // wires keep both pins on it
-  const bridged = items.flatMap((it, i): Wire[] =>
-    it.t === "wire" && sel.has(i) && ends(it).every((p) => fixed.has(key(...p))) && !pinned(it) ? (whole.add(i), work.push(i), [it]) : []);
+  // wires keep those pins on it — its ends' and any resting pin inside it
+  const bridged = items.flatMap((it, i): [Wire, Pt[]][] =>
+    it.t === "wire" && sel.has(i) && ends(it).every((p) => fixed.has(key(...p)))
+      ? (whole.add(i), work.push(i), [[it, [...ends(it), ...conn.filter((p) => fixed.has(key(...p)) && inside(p, it))]]])
+      : []);
   // what can follow a whole wire: unselected wire ends and labels on it
   const followers = items.flatMap((o, j): Pt[] => (sel.has(j) ? [] : o.t === "wire" ? ends(o) : o.t === "flag" ? [[o.x, o.y]] : []));
   while (work.length) {
@@ -232,7 +234,7 @@ export function dragPlan(items: Item[], lib: Lib, sel: Set<number>) {
     return gone.size ? out.filter((_, i) => !gone.has(i)) : out; // only appended pieces go: indices below stay
   };
   const bridges = (dx: number, dy: number): Item[] =>
-    bridged.flatMap((w) => ends(w).map(([x, y]) => ({ ...w, x1: x, y1: y, x2: x + dx, y2: y + dy })));
+    bridged.flatMap(([w, at]) => [...new Map(at.map((p) => [key(...p), p])).values()].map(([x, y]) => ({ ...w, x1: x, y1: y, x2: x + dx, y2: y + dy })));
   return (dx: number, dy: number): Item[] => [
     ...rejoin(all.map((it, i) => {
       if (it.t === "raw") return it;

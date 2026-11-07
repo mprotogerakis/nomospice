@@ -204,9 +204,8 @@ impl Library {
         for k in self.local.own.drain() {
             self.defs.remove(&k);
         }
-        if moved {
-            self.misses.clear(); // a name missing before may be in the new folder (a rescan keeps the misses: they cost disk scans)
-        }
+        // (misses stay: they were looked up in LTspice's and the library folders, which did not
+        // change; a name the new folder has is taken off them below)
         self.local.dir = dir.map(std::path::Path::to_path_buf);
         for (key, p) in list {
             match std::fs::read(&p) {

@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import type { GitStatus, Item, Netlist, Sim, SymbolDef, Trace, TraceData } from "./types";
 import { currentLabel, defOf, symKey, vexpr, type Lib } from "./geom";
-import { ANALYSIS, analysisOptions, stripAnalyses, type Analysis } from "./spice";
+import { ANALYSIS, ANY_ANALYSIS, analysisOptions, stripAnalyses, type Analysis } from "./spice";
 
 export type Tool =
   | { k: "select" }
@@ -81,11 +81,16 @@ export const useStatus = create(() => ({ x: 0, y: 0, net: null as string | null,
 
 // ---------------------------------------------------------------- document
 
-export const dirOf = (path: string | null) => (path ? path.replace(/[\\/][^\\/]*$/, "") : null);
+export const dirOf = (path: string | null) => {
+  if (!path) return null;
+  const d = path.replace(/[\\/][^\\/]*$/, "");
+  // a file at a root: "/" and "C:\" (a bare "C:" would be the current directory on that drive)
+  return d === "" ? path[0] : /^[a-z]:$/i.test(d) ? `${d}\\` : d;
+};
 /** `p` relative to the open schematic's folder when inside it (as LTspice writes includes). */
 export const relToDoc = (p: string) => {
-  const dir = dirOf(useS.getState().path);
-  if (!dir) return p;
+  const dir = dirOf(useS.getState().path)?.replace(/[\\/]+$/, ""); // (a root's own separator off)
+  if (dir == null) return p;
   // Windows paths compare without case (a dialog may return c:\ for C:\); slashes: portablePaths at commit
   const [d, q] = /^[a-z]:/i.test(dir) ? [dir.toLowerCase(), p.toLowerCase()] : [dir, p];
   return q.startsWith(`${d}/`) || q.startsWith(`${d}\\`) ? p.slice(dir.length + 1) : p;
@@ -263,9 +268,12 @@ export function simDeck(items: Item[], tab: Analysis | null, opts = analysesOf(i
   // several active analyses (ngspice would run them all and show the last): the shown tab's alone;
   // the schematic's only active analysis runs as it is (the live netlist stays the schematic's)
   // (the form's kinds: an extra .pss beside one .op runs along as written, as before)
-  const actives = items.reduce((n, it) => n + (it.t === "text" && it.directive ? it.text.split("\n").filter((l) => ANALYSIS.test(l.trim())).length : 0), 0);
+  const count = (re: RegExp) => items.reduce((n, it) => n + (it.t === "text" && it.directive ? it.text.split("\n").filter((l) => re.test(l.trim())).length : 0), 0);
+  // (none of ngspice's at all: only commented alternatives run the shown one; an active .pss alone
+  // runs as written, and is not replaced by an alternative)
+  const actives = count(ANALYSIS), any = count(ANY_ANALYSIS);
   // (a chosen tab whose analysis is gone: the shown one, as currentTab says)
-  const kind = tab && opts.some((o) => o.kind === tab) ? tab : actives > 1 || !actives ? currentTab({ tab, items }, opts) : null;
+  const kind = tab && opts.some((o) => o.kind === tab) ? tab : actives > 1 || !any ? currentTab({ tab, items }, opts) : null;
   const pick = kind ? opts.find((o) => o.kind === kind) : undefined;
   if (!pick || (pick.active && actives === 1)) return items;
   return [...items.map((it) => (it.t === "text" && it.directive ? { ...it, text: stripAnalyses(it.text) } : it)), { t: "text", x: 0, y: 0, text: pick.line, directive: true } as Item];
