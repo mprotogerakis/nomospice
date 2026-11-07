@@ -5,6 +5,7 @@
 // can be read.
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { si } from "./spice";
+import { useS } from "./store";
 import { tickStep } from "./PoleZero";
 import { useSize } from "./lib/useSize";
 
@@ -22,14 +23,16 @@ export const Polar = memo(function Polar({ curves, freqs, mode, onHover }: { cur
   // unit circle (a loop gain with an integrator is 10^5 at low frequencies: -1 would be a dot);
   // zooming out shows the rest
   const fit = useMemo(() => {
-    let [x0, x1, y0, y1] = [Infinity, -Infinity, Infinity, -Infinity];
-    const any = nyq && curves.some((c) => c.x.some((a, i) => a != null && c.y[i] != null && Math.hypot(a, c.y[i]!) <= 10));
-    const near = (x: number, y: number) => !any || Math.hypot(x, y) <= 10; // (none that near: all of it)
+    // (one pass: the bounds of all points and of the near ones; the near ones if there are any)
+    const all = [Infinity, -Infinity, Infinity, -Infinity], close = [...all];
+    const grow = (b: number[], x: number, y: number) => ((b[0] = Math.min(b[0], x)), (b[1] = Math.max(b[1], x)), (b[2] = Math.min(b[2], y, nyq ? -y : y)), (b[3] = Math.max(b[3], y, nyq ? -y : y)));
     for (const c of curves) c.x.forEach((x, i) => {
       const y = c.y[i];
-      if (x == null || y == null || !Number.isFinite(x) || !Number.isFinite(y) || !near(x, y)) return;
-      [x0, x1, y0, y1] = [Math.min(x0, x), Math.max(x1, x), Math.min(y0, y, nyq ? -y : y), Math.max(y1, y, nyq ? -y : y)];
+      if (x == null || y == null || !Number.isFinite(x) || !Number.isFinite(y)) return;
+      grow(all, x, y);
+      if (nyq && x * x + y * y <= 100) grow(close, x, y);
     });
+    let [x0, x1, y0, y1] = close[0] <= close[1] ? close : all;
     const crit = nyq ? -1 : x0 > x1 ? -180 : -180 + 360 * Math.round(((x0 + x1) / 2 + 180) / 360);
     [x0, x1, y0, y1] = [Math.min(x0, crit, nyq ? 0 : crit), Math.max(x1, crit, nyq ? 0 : crit), Math.min(y0, 0), Math.max(y1, 0)];
     const [sx, sy] = [x1 - x0 || 1, y1 - y0 || 1];
@@ -40,14 +43,14 @@ export const Polar = memo(function Polar({ curves, freqs, mode, onHover }: { cur
   const [view, setView] = useState<{ cx: number; cy: number; kx: number; ky: number } | null>(null);
   const [hit, setHit] = useState<Hit | null>(null);
   // (another mode or other curves: fitted afresh; a re-run of the same ones keeps the zoom)
-  const which = curves.map((c) => c.label).join("\n"); // (another mode: a new Polar, keyed by it)
+  const which = useMemo(() => curves.map((c) => c.label).join("\n"), [curves]); // (another mode: a new Polar, keyed by it)
+  useEffect(() => setView(null), [which]);
+  useEffect(() => () => onHover(null), [onHover]); // (gone: the table's hover value with it)
+  // (a re-run: its points are others)
   useEffect(() => {
-    setView(null);
     setHit(null);
     onHover(null);
-  }, [which]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => () => onHover(null), [onHover]); // (gone: the table's hover value with it)
-  useEffect(() => (setHit(null), onHover(null)), [curves]); // eslint-disable-line react-hooks/exhaustive-deps -- (a re-run: its points are others)
+  }, [curves]); // eslint-disable-line react-hooks/exhaustive-deps
   const margin = 32;
   const base = useMemo(() => {
     const kx = Math.max((size.w - 2 * margin) / (fit.x1 - fit.x0), 1e-30), ky = Math.max((size.h - 2 * margin) / (fit.y1 - fit.y0), 1e-30);
@@ -101,7 +104,7 @@ export const Polar = memo(function Polar({ curves, freqs, mode, onHover }: { cur
     const h = best as Hit | null;
     if (h?.c !== hit?.c || h?.i !== hit?.i || h?.m !== hit?.m) {
       setHit(h);
-      onHover(h ? freqs[h.i] ?? null : null);
+      onHover(h && !h.m ? freqs[h.i] ?? null : null); // (the mirror's -f: the table has no such column)
     }
   };
   // wheel: zoom around the cursor (a mouse's lines as pixels), a sideways swipe pans; not passive,
@@ -140,6 +143,10 @@ export const Polar = memo(function Polar({ curves, freqs, mode, onHover }: { cur
   // the critical points in view: -1; 0 dB at -180° + k·360°
   const k0 = Math.ceil((lo.x + 180) / 360), nk = Math.floor((hi.x + 180) / 360) - k0 + 1;
   const crits = nyq ? [-1] : Number.isFinite(nk) && nk > 0 && nk <= 50 ? Array.from({ length: nk }, (_, k) => -180 + 360 * (k0 + k)) : [];
+  // the cursors A and B (set in the Bode plot): where each curve is at their frequencies
+  const fa = useS((s) => s.plot.a), fb = useS((s) => s.plot.b);
+  const nearestF = (f: number | null) => (f == null || !freqs.length ? -1 : freqs.reduce((best, x, i) => (Math.abs(x - f) < Math.abs(freqs[best] - f) ? i : best), 0));
+  const marks = ([["A", nearestF(fa)], ["B", nearestF(fb)]] as const).filter(([, i]) => i >= 0);
   const h = hit && curves[hit.c];
   const hx = h ? h.x[hit!.i] : null, hy = h ? ((y) => (y != null && hit!.m ? -y : y))(h.y[hit!.i]) : null;
 
@@ -181,6 +188,12 @@ export const Polar = memo(function Polar({ curves, freqs, mode, onHover }: { cur
             const [X, Y] = px(c.x[k]!, c.y[k]!);
             return <circle key={`s${i}`} cx={X} cy={Y} r={3} fill={`var(--series-${c.slot + 1})`} />;
           })}
+          {marks.flatMap(([name, i]) => curves.map((c, j) => {
+            const [x, y] = [c.x[i], c.y[i]];
+            if (x == null || y == null) return null;
+            const [X, Y] = px(x, y);
+            return <g key={`${name}${j}`} fill="var(--selection)"><circle cx={X} cy={Y} r={3} /><text x={X + 5} y={Y - 5} fontSize={10}>{name}</text></g>;
+          }))}
           {h && hx != null && hy != null && (() => { const [X, Y] = px(hx, hy); return <circle cx={X} cy={Y} r={4} fill="none" stroke="var(--text-strong)" strokeWidth={1.5} />; })()}
         </svg>
       )}

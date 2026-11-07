@@ -249,22 +249,24 @@ export const Waveform = memo(function Waveform() {
   // an .ac result as Nyquist (Im over Re) or Nichols (dB over phase) curves, one per step
   const polar = useS((s) => s.plot.polar);
   const cplx = signals.some((t) => t.data!.im);
-  const polarOn = ac && !!polar && cplx;
+  const polarOn = ac && !!polar && cplx && !zero;
   const [fitted, refit] = useState(0); // (Reset zoom there: a new Polar)
   const steps = run?.steps ?? NO_STEPS;
   // (Nichols: the Bode panes' dB and phase series, curve by curve; Nyquist: re and im as they are)
-  const curves = useMemo<Curve[]>(() => {
-    if (!polarOn) return [];
-    if (polar === "nichols") {
-      const ph = panes[1]?.series ?? [];
-      return (panes[0]?.series ?? []).filter((s) => s.t.data!.im).map((s) => ({ label: curveLabel(s.t, s.k, s.n, steps), slot: s.t.slot, x: ph.find((p) => p.t === s.t && p.k === s.k)?.y ?? [], y: s.y }));
-    }
+  const nichols = useMemo<Curve[]>(() => {
+    if (!polarOn || polar !== "nichols") return [];
+    const ph = panes[1]?.series ?? [];
+    return (panes[0]?.series ?? []).filter((s) => s.t.data!.im).map((s) => ({ label: curveLabel(s.t, s.k, s.n, steps), slot: s.t.slot, x: ph.find((p) => p.t === s.t && p.k === s.k)?.y ?? [], y: s.y }));
+  }, [polarOn, polar, panes, steps]);
+  const nyquist = useMemo<Curve[]>(() => {
+    if (!polarOn || polar !== "nyquist") return [];
     return signals.filter((t) => t.data!.im).flatMap((t) => {
       const n = Math.max(1, Math.floor(t.data!.re.length / seg));
       const part = <T,>(a: T[], k: number) => (a.length === seg ? a : a.slice(k * seg, (k + 1) * seg)); // (a halted step's part: left out, as split does)
       return Array.from({ length: n }, (_, k) => ({ label: curveLabel(t, k, n, steps), slot: t.slot, x: part(t.data!.re, k), y: part(t.data!.im!, k) }));
     });
-  }, [polarOn, polar, signals, seg, steps, panes]);
+  }, [polarOn, polar, signals, seg, steps]);
+  const curves = polar === "nichols" ? nichols : nyquist;
 
   const host = useRef<HTMLDivElement>(null);
   const paneEls = useRef<(HTMLDivElement | null)[]>([]);
@@ -580,7 +582,11 @@ const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot, spec, st
                 ...(t.data?.im || t.data?.constant || spec ? [] : panes.filter((p) => p.own && p.unit !== "dB" && p.unit !== "°" && p.unit !== t.unit && !p.series.some((s) => s.t === t) && p.series.every((s) => s.u === p.unit || s.u === t.unit)).map((p) => ({ label: `Into the ${p.unit || "unitless"} pane`, hint: "its right axis", run: () => setTracePane(t.expr, p.unit) }))),
                 ...(t.pane != null && !spec && !t.data?.im ? [{ label: moved(t) ? `Back to its own pane (${t.unit || "unitless"})` : `Not into the ${t.pane || "unitless"} pane any more`, hint: moved(t) ? undefined : "it would go there with traces of its own", run: () => setTracePane(t.expr, undefined) }] : []),
                 // (an .ac result: -dφ/dω, how long a band of frequencies takes through it)
-                ...(t.data?.im && plot.startsWith("ac") ? [{ label: "Plot group delay", hint: `τg(${t.label})`, run: () => void addTrace(`τg(${t.label})`, `group_delay(${t.expr})`, exprUnit(`group_delay(${t.expr})`, undefined, xUnit)) }] : []),
+                ...(t.data?.im && plot.startsWith("ac") ? [{ label: "Plot group delay", hint: `τg(${t.label})`, run: () => {
+                  // (a real trace: drawn in the Bode plot, not in Nyquist or Nichols)
+                  if (useS.getState().plot.polar) setPlot({ polar: undefined });
+                  void addTrace(`τg(${t.label})`, `group_delay(${t.expr})`, exprUnit(`group_delay(${t.expr})`, undefined, xUnit));
+                } }] : []),
                 { label: "Copy expression", hint: t.expr, run: () => navigator.clipboard.writeText(t.expr) },
                 { label: `Remove ${t.label}`, danger: true, run: () => removeTrace(t.expr) },
               ]))}>
