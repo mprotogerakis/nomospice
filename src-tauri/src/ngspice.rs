@@ -390,6 +390,8 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
     let api = g.as_ref().unwrap();
     api.command("destroy all");
     api.command("remcirc");
+    // ponytail: a .step run keeps every step's plot in ngspice until the next run (traces read them
+    // when asked): steps × full vectors in memory, bounded by MAX_STEPS; free them if that bites
     let id = RUNS.fetch_add(1, Ordering::SeqCst) + 1; // the previous run's results are gone now
     take_log();
     let total = steps.as_ref().map_or(1, |s| s.total);
@@ -605,7 +607,6 @@ pub fn trace(expr: &str, scale: &str, run: u64) -> Result<Trace, String> {
     }
     // the plot as it is, or (a .step run) each step's in turn
     let mut each = vec![];
-    let mut failure = None;
     for plot in steps.iter().map(Some).chain(steps.is_empty().then_some(None)) {
         if let Some(p) = plot {
             api.command(&format!("setplot {p}"));
@@ -622,7 +623,7 @@ pub fn trace(expr: &str, scale: &str, run: u64) -> Result<Trace, String> {
                     return Err(why); // (the first step already: the expression, not a step's data)
                 }
                 // one step of several (halted, aborted: no data there): a gap; all of them: the error
-                failure = Some(why);
+                let _ = why; // (the first step already returned it: the expression is fine, this step has no data)
                 Trace { x: vec![], re: vec![], im: None, constant: false, typ: 0, steps: None }
             }
         };
@@ -643,16 +644,14 @@ pub fn trace(expr: &str, scale: &str, run: u64) -> Result<Trace, String> {
             // each step thinned as it is read (its own samples, evenly): steps × points stays bounded
             let cap = 4 * (STEP_VALUES / steps.len()).clamp(200, 200_000);
             let sweep = t.x.windows(2).all(|w| w[1] >= w[0]) || t.x.windows(2).all(|w| w[1] <= w[0]); // (not a nested .dc)
-            if t.x.len() > cap && t.re.len() == t.x.len() && sweep {
+            // (a gap step's x too: thinned like the others', so equal grids stay equal)
+            if t.x.len() > cap && (t.re.len() == t.x.len() || t.re.is_empty()) && sweep {
                 let keep = even(t.x.len(), cap);
-                let pick = |v: &[f64]| keep.iter().map(|&k| v[k]).collect::<Vec<f64>>();
+                let pick = |v: &[f64]| if v.is_empty() { vec![] } else { keep.iter().map(|&k| v[k]).collect::<Vec<f64>>() };
                 (t.x, t.re, t.im) = (pick(&t.x), pick(&t.re), t.im.as_deref().map(pick));
             }
         }
         each.push((each.len(), t));
-    }
-    if let Some(why) = failure.filter(|_| each.iter().all(|(_, t)| t.re.is_empty())) {
-        return Err(why);
     }
     if each.len() == 1 {
         let (k, mut t) = each.pop().unwrap();

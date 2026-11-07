@@ -410,7 +410,8 @@ export async function simulate() {
       if (get().traces.length) { /* the user already plotted something */ }
       else if (sim.run.plot.startsWith("noise")) await addTraceNow("onoise", "onoise_spectrum", "V/√Hz"); // .noise v(...): volts
       else {
-        for (const n of [...nets].filter((n) => n && n !== "0").slice(0, 6)) await addTraceNow(`V(${n})`, vexpr(n), "V");
+        // (a .step run: fewer, each is a family of curves)
+        for (const n of [...nets].filter((n) => n && n !== "0").slice(0, sim.run.steps?.length ? 3 : 6)) await addTraceNow(`V(${n})`, vexpr(n), "V");
         // DC rails (vcc ...) would squash the signals on a shared axis: drop flat ones if any trace varies
         // (a loop: spreading 70k samples of a stepped trace into Math.min overflows the stack; gaps skipped)
         const flat = (t: Trace) => {
