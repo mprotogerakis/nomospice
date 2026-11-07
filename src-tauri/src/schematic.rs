@@ -319,7 +319,7 @@ macro_rules! examples {
 }
 pub const EXAMPLES: &[(&str, &str)] =
     examples!("rc_transient", "rc_bode", "opamp_inverting", "ce_amplifier", "diode_sweep", "bjt_curves", "noise_rc", "phasor_rlc", "pz_sallen_key",
-        "meas_rc_timing", "buck_converter", "rectifier_rms", "analysis_tabs", "zener_prefix", "step_rc");
+        "meas_rc_timing", "buck_converter", "rectifier_rms", "analysis_tabs", "zener_prefix", "step_rc", "laplace_lowpass");
 
 /// LTspice writes ASCII, Latin-1 or UTF-16LE.
 pub fn decode(bytes: &[u8]) -> String {
@@ -1404,7 +1404,8 @@ pub fn prepare(text: &str, dir: Option<&std::path::Path>, warnings: &mut Vec<Str
     let mut x = Expander { warnings, out: String::new(), seen: HashSet::new(), read: true, diode: None, behavioural: vec![] };
     x.expand(text, dir, None, 0);
     x.warn_behavioural();
-    Prepared(x.out, vec![], vec![])
+    let out = crate::laplace::rewrite(&x.out, x.warnings); // (also in included files)
+    Prepared(out, vec![], vec![])
 }
 
 /// The warnings `prepare` would give for the schematic's own lines, without reading any
@@ -1413,7 +1414,7 @@ pub fn prepare_warnings(text: &str, dir: Option<&std::path::Path>, warnings: &mu
     let mut x = Expander { warnings, out: String::new(), seen: HashSet::new(), read: false, diode: None, behavioural: vec![] };
     x.expand(text, dir, None, 0);
     x.warn_behavioural();
-    let expanded = std::mem::take(&mut x.out);
+    let expanded = crate::laplace::rewrite(&std::mem::take(&mut x.out), x.warnings);
     ltspice_meas(&expanded, &[], warnings); // a .meas left out is said before a run too (the schematic's own: included files are read only by a run)
 }
 
@@ -2669,6 +2670,16 @@ mod tests {
                         assert!(warnings.is_empty() && nl.warnings.is_empty(), "{name} {alt}: {warnings:?} {:?}", nl.warnings);
                         assert!(r.plot.starts_with(&alt[1..]) && !r.aborted && !r.scale.is_empty(), "{name} {alt}: {} {}", r.plot, r.scale);
                     }
+                }
+                "laplace_lowpass" => {
+                    near(meas("fc"), 159.15, 0.02); // 1/(2*pi*tau)
+                    // its transient: the step response 1 - exp(-t/tau), 63 % one tau after the step at 1 ms
+                    let tr = src.replace("!.ac dec 20 1 10k", ";.ac dec 20 1 10k").replace(";.tran 6m", "!.tran 6m").replace("!.meas ac fc", ";.meas ac fc");
+                    let nl = netlist_for_sim(&parse_asc(&tr), &mut Library::builtin());
+                    let r = crate::ngspice::run(&nl.prepared(None, &mut vec![])).unwrap();
+                    let out = crate::ngspice::trace("V(out)", &r.scale, r.id).unwrap();
+                    let at = |t: f64| out.re[out.x.iter().position(|&x| x >= t).unwrap()];
+                    assert!((at(2e-3) - 0.632).abs() < 0.02 && at(0.9e-3).abs() < 0.01, "{name}: {} {}", at(2e-3), at(0.9e-3));
                 }
                 "step_rc" => {
                     assert_eq!(run.steps, ["C=47n", "C=100n", "C=220n"], "{name}");

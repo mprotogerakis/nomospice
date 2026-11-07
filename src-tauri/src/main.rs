@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod git;
+mod laplace;
 mod library;
 mod mcp;
 mod ngspice;

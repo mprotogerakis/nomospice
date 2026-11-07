@@ -22,6 +22,8 @@ files — with a modern UI, ngspice as the engine, a Rust core and a React front
 - **Parameter sweeps**: `.step param C list 47n 100n 220n` (also lin/oct/dec, a source's DC value,
   `temp`, up to three nested) runs the analysis once per value; every trace becomes a family of
   curves, one per step, and `.meas` is measured per step.
+- **Laplace sources**: an E or G source with `Laplace=1/(1+s*tau)` (any ratio of polynomials in s,
+  `.param`s inside) works in `.ac` and `.tran`.
 - **Measurements**: `.meas` results are listed with the plot.
 - **Poles and zeros**: `.pz` results as a map in the s-plane (× poles, ○ zeros, unstable half-plane
   shaded, f₀ and damping ζ per pole) and a **root locus**: sweep a `.param` or an R/C/L value and see
@@ -44,7 +46,7 @@ files — with a modern UI, ngspice as the engine, a Rust core and a React front
 - **Examples** on the start screen, one per feature: RC transient and Bode, inverting op-amp, CE
   amplifier, diode sweep, BJT curves, noise, phasors, Sallen-Key poles and root locus, RC timing with
   `.meas`, buck converter (efficiency), rectifier (RMS, power), result tabs, `Prefix X` subcircuit,
-  `.step` of a capacitor.
+  `.step` of a capacitor, a Laplace low-pass.
 - Context menus everywhere, light/dark theme, crash recovery for unsaved work, automatic updates
   from the GitHub releases, macOS / Windows / Linux.
 
