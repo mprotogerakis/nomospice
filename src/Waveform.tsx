@@ -118,12 +118,11 @@ export const Waveform = memo(function Waveform() {
   const freq = run?.scale === "frequency";
   const xUnit = freq ? "Hz" : run?.scale === "time" ? "s" : run?.scale.startsWith("i") ? "A" : run?.scale.endsWith("sweep") && run.scale.startsWith("v") ? "V" : "";
   const ok = useMemo(() => traces.filter((t) => t.data?.x.length), [traces]);
+  // constants (reference lines: 0.5, 500m, -3) are drawn on the top pane's axis, whatever it is
+  // now: dB in a Bode plot, else volts first
+  const [lines, signals] = useMemo(() => [ok.filter((t) => spiceNum(t.expr) !== null), ok.filter((t) => spiceNum(t.expr) === null)], [ok]);
   // .ac without an AC source: every value is exactly 0 (no dB at all, phase flat) - say so instead
-  // (reference lines, constants, do not count)
-  const zero = useMemo(() => {
-    const signals = ok.filter((t) => spiceNum(t.expr) === null);
-    return ac && signals.length > 0 && signals.every((t) => t.data!.re.every((v, i) => !v && !t.data!.im?.[i]));
-  }, [ac, ok]);
+  const zero = useMemo(() => ac && signals.length > 0 && signals.every((t) => t.data!.re.every((v, i) => !v && !t.data!.im?.[i])), [ac, signals]);
   const all = ok[0]?.data!.x ?? [];
   // nested .dc (family curves): one series per outer step over the first segment's x
   const seg = useMemo(() => segment(all), [all]);
@@ -136,14 +135,11 @@ export const Waveform = memo(function Waveform() {
     const split = (t: Trace, y: (number | null)[]): Series[] =>
       Array.from({ length: Math.max(1, Math.floor(y.length / seg)) }, (_, k) => ({ t, y: y.slice(k * seg, (k + 1) * seg) }));
     // complex vectors (.ac, AC .sens) -> magnitude (dB) + phase panes; real ones (db(), ph() ...) as they are
-    const cplx = ok.filter((t) => t.data!.im);
-    const real = ok.filter((t) => !cplx.includes(t));
+    const cplx = signals.filter((t) => t.data!.im);
+    const real = signals.filter((t) => !t.data!.im);
     const panes: Pane[] = [];
     if (cplx.length) panes.push({ unit: "dB", series: cplx.flatMap((t) => split(t, mag(t))) }, { unit: "°", series: cplx.flatMap((t) => split(t, phase(t))) });
-    // constants (reference lines: 0.5, 500m, -3) are drawn on the top pane's axis, whatever it is
-    // now: dB in a Bode plot, else volts first
-    const lines = real.filter((t) => spiceNum(t.expr) !== null);
-    const units = [...new Set(real.filter((t) => !lines.includes(t)).map((t) => t.unit))].sort((a, b) => (a === "V" ? -1 : b === "V" ? 1 : a.localeCompare(b)));
+    const units = [...new Set(real.map((t) => t.unit))].sort((a, b) => (a === "V" ? -1 : b === "V" ? 1 : a.localeCompare(b)));
     for (const unit of units) {
       const series = real.filter((t) => t.unit === unit).flatMap((t) => split(t, t.data!.re));
       const same = panes.find((p) => p.unit === unit); // db(...) joins the dB pane
@@ -153,7 +149,7 @@ export const Waveform = memo(function Waveform() {
     if (lines.length && !panes.length) panes.push({ unit: "", series: [] });
     panes[0]?.series.push(...lines.flatMap((t) => split(t, t.data!.re)));
     return panes;
-  }, [ok, zero, seg]);
+  }, [ok, lines, signals, zero, seg]);
 
   const host = useRef<HTMLDivElement>(null);
   const paneEls = useRef<(HTMLDivElement | null)[]>([]);

@@ -499,14 +499,11 @@ function CursorStatus() {
   );
 }
 
-/** ⌘L: the bottom panel closed, or open again on the tab it was closed on (not a run's results:
- *  they may be gone by then). */
+/** ⌘L: the bottom panel closed, or open again on the tab last shown (not a run's results: they
+ *  may be gone by then). */
 let lastPanel: Exclude<ReturnType<typeof useS.getState>["panel"], null> = "log";
-function togglePanel() {
-  const p = useS.getState().panel;
-  if (p && p !== "op") lastPanel = p;
-  useS.setState({ panel: p ? null : lastPanel });
-}
+useS.subscribe((s) => void (s.panel && s.panel !== "op" && (lastPanel = s.panel)));
+const togglePanel = () => useS.setState({ panel: useS.getState().panel ? null : lastPanel });
 
 /** A drag on a splitter handle (left button): `move` gets the pointer (captured by the handle, so
  *  none once it is unmounted) until the button is up or the gesture cancelled; then `done`. */
