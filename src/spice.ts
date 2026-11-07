@@ -770,10 +770,19 @@ export function spectrum(xs: number[], ys: (number | null)[], lo: number, hi: nu
   return db;
 }
 
-/** An instance line's `key=value` items, by the brace- and quote-aware tokens (blanks around =
- *  taken out): whether item `x` is `k=…` (any case). */
+/** Whether an instance line's item `x` (brace- and quote-aware, see paramTokens) is `k=…` (any case). */
 const isParam = (x: string, k: string) => x.length > k.length && x[k.length] === "=" && x.slice(0, k.length).toLowerCase() === k.toLowerCase();
-const paramTokens = (line: string) => tokens(line.replace(/\s*=\s*/g, "="));
+const paramTokens = (line: string) => {
+  // ("l = 1u", "l =1u", "l= 1u" are one item; "l= w=1u" two: an empty l)
+  const t = tokens(line), out: string[] = [];
+  for (let i = 0; i < t.length; i++) {
+    let x = t[i];
+    if (!x.includes("=") && t[i + 1]?.startsWith("=")) x += t[++i];
+    if (x.endsWith("=") && t[i + 1] && !t[i + 1].includes("=")) x += t[++i];
+    out.push(x);
+  }
+  return out;
+};
 /** The value of `k=…` in an instance line: the last one's, as SPICE takes it. */
 export const getParam = (line: string, k: string) => ((t) => t?.slice(k.length + 1) ?? "")(paramTokens(line).filter((x) => isParam(x, k)).pop());
 /** `line` with `k=v` set (in the first one's place, others of that key gone, else appended); v

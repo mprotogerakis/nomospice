@@ -258,5 +258,8 @@ assert.equal(getParam("l={2 * Lmin} w=1u", "l"), "{2 * Lmin}", "an expression wh
 assert.equal(setParam("l={2 * Lmin} w=1u", "l", "3u"), "l=3u w=1u");
 assert.equal(getParam("m=2 off m=4", "m"), "4", "the last, as SPICE takes it");
 assert.equal(setParam("m=2 off m=4", "m", "8"), "m=8 off");
+assert.equal(getParam("l= w=1u", "w"), "1u", "an empty l is no w");
+assert.equal(setParam("l= w=1u", "l", "2u"), "l=2u w=1u");
+assert.equal(getParam("m = 4 temp =27", "temp"), "27");
 
 console.log("spice-check: ok");
