@@ -167,7 +167,9 @@ async function saveFile(as = false) {
     if (doc !== docId()) return; // another document was loaded meanwhile
     if (carry) await invoke("folder_symbols", { from, to, names, copy: true }).catch(fail("Cannot copy all symbols"));
     const moved = path !== useS.getState().path; // relative .include paths now resolve elsewhere
-    useS.setState({ path, dirty: useS.getState().items !== items, ...(moved && useS.getState().sim && { stale: true }) });
+    // another folder: includes and folder symbols resolve elsewhere, for every tab's results
+    const tabs = Object.fromEntries(Object.entries(useS.getState().tabs).map(([k, t]) => [k, { ...t, stale: true }]));
+    useS.setState({ path, dirty: useS.getState().items !== items, ...(moved && { tabs, ...(useS.getState().sim && { stale: true }) }) });
     if (moved) void loadSymbols(useS.getState().items).catch(() => {}).finally(refreshNets); // the new folder's symbols
     refreshGit();
   } catch (e) {

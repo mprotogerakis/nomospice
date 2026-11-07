@@ -126,9 +126,17 @@ pub fn sym_key(name: &str) -> String {
     name.rsplit(['\\', '/']).next().unwrap_or(name).to_lowercase()
 }
 
-/// Symbol definitions by key, cached misses, the library generation the `subckt:` entries were
-/// generated for, and the symbols loaded from the schematic's folder.
-pub struct Library(pub HashMap<String, SymbolDef>, HashSet<String>, u64, Local);
+/// The symbols netlisting and drawing use.
+pub struct Library {
+    /// definitions by key
+    pub defs: HashMap<String, SymbolDef>,
+    /// keys looked for and not found (no disk search for them again)
+    misses: HashSet<String>,
+    /// the library generation the `subckt:` boxes and lent symbols belong to
+    generation: u64,
+    /// where symbols came from (the schematic's folder, library folders)
+    local: Local,
+}
 
 /// Where symbols came from, so they can go again.
 #[derive(Default)]
@@ -167,7 +175,12 @@ fn asy_stamp(list: &[(String, std::path::PathBuf)]) -> Option<(usize, u128)> {
 
 impl Library {
     pub fn builtin() -> Self {
-        Library(BUILTIN_SYMBOLS.iter().map(|(n, s)| (n.to_string(), parse_asy(n, s))).collect(), HashSet::new(), crate::library::generation(), Local::default())
+        Library {
+            defs: BUILTIN_SYMBOLS.iter().map(|(n, s)| (n.to_string(), parse_asy(n, s))).collect(),
+            misses: HashSet::new(),
+            generation: crate::library::generation(),
+            local: Local::default(),
+        }
     }
 
     /// The schematic's folder: its symbols (LTspice looks there first) are all loaded, so the
@@ -175,29 +188,29 @@ impl Library {
     /// comes back with another folder), not a built-in symbol. Another folder (or
     /// none) drops them again; `rescan` reloads the same folder (a symbol saved meanwhile).
     pub fn set_dir(&mut self, dir: Option<&std::path::Path>, rescan: bool) {
-        let moved = self.3.dir.as_deref() != dir;
+        let moved = self.local.dir.as_deref() != dir;
         if !moved && !rescan {
             return; // netlisting: no disk access
         }
         let list = dir.map(folder_symbols).unwrap_or_default(); // one listing for the stamp and the load
         let stamp = dir.and_then(|d| std::fs::metadata(d).ok()).and_then(|_| asy_stamp(&list));
-        if !moved && stamp == self.3.stamp {
+        if !moved && stamp == self.local.stamp {
             return;
         }
-        self.3.stamp = stamp;
-        for k in self.3.own.drain() {
-            self.0.remove(&k);
+        self.local.stamp = stamp;
+        for k in self.local.own.drain() {
+            self.defs.remove(&k);
         }
         if moved {
-            self.1.clear(); // a name missing before may be in the new folder (a rescan keeps the misses: they cost disk scans)
+            self.misses.clear(); // a name missing before may be in the new folder (a rescan keeps the misses: they cost disk scans)
         }
-        self.3.dir = dir.map(std::path::Path::to_path_buf);
+        self.local.dir = dir.map(std::path::Path::to_path_buf);
         for (key, p) in list {
             if let Ok(bytes) = std::fs::read(&p) {
-                self.0.insert(key.clone(), parse_asy(&key, &decode(&bytes)));
-                self.1.remove(&key);
-                self.3.lent.remove(&key); // the folder's own now, no longer lent
-                self.3.own.insert(key);
+                self.defs.insert(key.clone(), parse_asy(&key, &decode(&bytes)));
+                self.misses.remove(&key);
+                self.local.lent.remove(&key); // the folder's own now, no longer lent
+                self.local.own.insert(key);
             }
         }
     }
@@ -208,7 +221,7 @@ impl Library {
     pub fn get(&mut self, name: &str) -> Option<&SymbolDef> {
         let key = sym_key(name);
         self.sync();
-        if self.1.contains(&key) {
+        if self.misses.contains(&key) {
             return None;
         }
         self.load(name, key)
@@ -217,27 +230,27 @@ impl Library {
     /// The library sources changed (generation): forget what they lent or lacked.
     pub fn sync(&mut self) {
         let g = crate::library::generation();
-        if self.2 != g {
+        if self.generation != g {
             // other libraries now: regenerate subckt boxes, drop symbols a library folder lent (it
             // may be off now: they come back from where they are), retry what was missing
-            for k in self.3.lent.drain() {
-                self.0.remove(&k);
+            for k in self.local.lent.drain() {
+                self.defs.remove(&k);
             }
-            self.0.retain(|k, _| !k.starts_with("subckt:"));
-            self.1.clear();
-            self.2 = g;
+            self.defs.retain(|k, _| !k.starts_with("subckt:"));
+            self.misses.clear();
+            self.generation = g;
         }
     }
 
     fn load(&mut self, name: &str, key: String) -> Option<&SymbolDef> {
-        if let (false, Some(sub)) = (self.0.contains_key(&key), key.strip_prefix("subckt:")) {
+        if let (false, Some(sub)) = (self.defs.contains_key(&key), key.strip_prefix("subckt:")) {
             // a library subcircuit placed from the library browser: generated box symbol
             match crate::library::subckt_symbol(sub) {
-                Some(def) => self.0.insert(key.clone(), def),
-                None => return self.1.insert(key).then_some(None).flatten(),
+                Some(def) => self.defs.insert(key.clone(), def),
+                None => return self.misses.insert(key).then_some(None).flatten(),
             };
         }
-        if !self.0.contains_key(&key) {
+        if !self.defs.contains_key(&key) {
             let file = format!("{key}.asy");
             // (the library folders are asked for only when LTspice's do not have it)
             let folders = std::iter::once_with(|| crate::library::sources().into_iter().filter(|s| s.enabled).map(|s| (s.path, true))).flatten();
@@ -251,15 +264,15 @@ impl Library {
                 Some((parse_asy(&key, &decode(&std::fs::read(path).ok()?)), lent))
             });
             let Some((def, lent)) = found else {
-                self.1.insert(key);
+                self.misses.insert(key);
                 return None;
             };
             if lent {
-                self.3.lent.insert(key.clone());
+                self.local.lent.insert(key.clone());
             }
-            self.0.insert(key.clone(), def);
+            self.defs.insert(key.clone(), def);
         }
-        self.0.get(&key)
+        self.defs.get(&key)
     }
 }
 
@@ -1101,6 +1114,7 @@ pub fn prepare_warnings(text: &str, dir: Option<&std::path::Path>, warnings: &mu
     let mut x = Expander { warnings, out: String::new(), seen: HashSet::new(), read: false, diode: None, behavioural: vec![] };
     x.expand(text, dir, None, 0);
     x.warn_behavioural();
+    ltspice_meas(text, &[], warnings); // a .meas left out is said before a run, too
 }
 
 /// `.lib "path with spaces.lib" section` -> (path, section)
@@ -1336,7 +1350,12 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool) -> Netlist {
                     }).collect();
 
                 }
-                None => nl.warnings.push(format!("unknown symbol `{sym}`")),
+                None => {
+                    let w = format!("symbol `{sym}` not found: its parts are left out (its .asy is not next to the schematic, in LTspice or a library folder)");
+                    if !nl.warnings.contains(&w) {
+                        nl.warnings.push(w);
+                    }
+                }
             },
             Item::Text { .. } | Item::Raw { .. } => {}
         }
@@ -1477,17 +1496,12 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool) -> Netlist {
         }
         _ => None,
     }).collect();
-    let (mut seen, mut missing) = (HashSet::new(), HashSet::new());
+    let mut seen = HashSet::new();
     let mut jumped: HashMap<String, String> = HashMap::new(); // nets already tied by jumpers
     let mut any_ac = false; // some V/I source has an AC amplitude (else .ac results are all 0)
     for (i, it) in items.iter().enumerate() {
         let Item::Sym { sym, attrs, .. } = it else { continue };
-        let Some(def) = lib.get(sym).cloned() else {
-            if missing.insert(sym_key(sym)) {
-                nl.warnings.push(format!("symbol `{sym}` not found: its parts are left out (its .asy is not next to the schematic, in LTspice or a library folder)"));
-            }
-            continue;
-        };
+        let Some(def) = lib.get(sym).cloned() else { continue }; // (said in step 1)
 
         let prefix = prefix_of(&def, attrs);
         let inst = match attrs.get("InstName").filter(|n| !n.is_empty()) {
@@ -1938,14 +1952,14 @@ mod tests {
         std::fs::write(dir.join("nmos_018.asy"), BUILTIN_SYMBOLS.iter().find(|(n, _)| *n == "nmos").unwrap().1).unwrap();
         let mut lib = Library::builtin();
         lib.set_dir(Some(&dir), false);
-        assert!(lib.0.contains_key("nmos_018"), "the folder's symbols are listed");
+        assert!(lib.defs.contains_key("nmos_018"), "the folder's symbols are listed");
         // the manual's step: Prefix X calls the subcircuit NM from the model library
         let attrs: BTreeMap<String, String> = [("InstName", "M1"), ("Value", "NM"), ("Value2", "l=0.18u w=1u"), ("Prefix", "X")].map(|(k, v)| (k.to_string(), v.to_string())).into();
         let nl = netlist(&[Item::Sym { sym: "nmos_018".into(), x: 0, y: 0, rot: "R0".into(), attrs, extra: vec![] }], &mut lib);
         let line = nl.text.lines().find(|l| l.starts_with("XM1 ")).unwrap_or_else(|| panic!("{}", nl.text));
         assert!(line.ends_with(" NM l=0.18u w=1u"), "{line}");
         lib.set_dir(None, false);
-        assert!(!lib.0.contains_key("nmos_018"), "another schematic: gone");
+        assert!(!lib.defs.contains_key("nmos_018"), "another schematic: gone");
         std::fs::remove_dir_all(dir).ok();
     }
 

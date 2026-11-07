@@ -353,6 +353,7 @@ const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot }: { trac
   const zoom = useS((s) => s.plot.zoom);
   const [lo, hi] = dx != null ? [Math.min(a!, b!), Math.max(a!, b!)] : zoom ?? [Math.min(xs[0], xs[xs.length - 1]), Math.max(xs[0], xs[xs.length - 1])];
   // (time and DC sweeps: over a frequency axis an average or integral of a magnitude means little)
+  const num = (v: number, u: string) => (Number.isNaN(v) ? "–" : si(v, u)); // (no data in the range)
   const stats = useMemo(() => xUnit === "Hz" ? [] : traces.flatMap((t) => panes.flatMap((p) => p.series.filter((s) => s.t === t && p.unit !== "dB" && p.unit !== "°").map((s) => ({ t, unit: p.unit, ...integrate(xs, s.y, lo, hi) })))),
     [traces, panes, xs, lo, hi, xUnit]); // not per hover move
   return (
@@ -398,7 +399,7 @@ const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot }: { trac
           <div className="text-text-tertiary">{dx != null ? "A–B" : zoom ? "shown range" : "whole run"}: average · RMS · integral</div>
           {stats.map(({ t, unit, avg, rms, area }, k) => (
             <div key={`${t.expr}${k}`} className="truncate" title={`${t.label} from ${si(lo, xUnit)} to ${si(hi, xUnit)}`}>
-              {t.label}: {si(avg, unit)} · {si(rms, unit)} · {si(area, unit && xUnit ? `${unit}·${xUnit}` : unit || xUnit)}
+              {t.label}: {num(avg, unit)} · {num(rms, unit)} · {num(area, unit && xUnit ? `${unit}·${xUnit}` : unit || xUnit)}
             </div>
           ))}
         </div>

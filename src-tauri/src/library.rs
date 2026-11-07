@@ -42,8 +42,8 @@ pub struct Index {
     cache: Mutex<Vec<(PathBuf, Arc<String>)>>,
 }
 
-/// The `file` of the built-in models' entries (no file on disk).
-const BUILTIN: &str = "<built-in>";
+/// The `file` of the built-in models' entries: none (an empty path; the UI shows no file line).
+const BUILTIN: &str = "";
 
 fn mtime(p: &Path) -> Option<std::time::SystemTime> {
     std::fs::metadata(p).and_then(|m| m.modified()).ok()

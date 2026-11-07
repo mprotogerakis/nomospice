@@ -20,7 +20,7 @@ async fn symbols(names: Vec<String>, dir: Option<String>, lib: tauri::State<'_, 
     lib.sync(); // library sources switched off: their symbols go
     lib.set_dir(dir.as_deref().map(std::path::Path::new), true); // a symbol saved there meanwhile counts
     names.iter().for_each(|n| _ = lib.get(n));
-    Ok(lib.0.values().cloned().collect())
+    Ok(lib.defs.values().cloned().collect())
 }
 
 #[tauri::command]

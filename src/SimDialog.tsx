@@ -1,5 +1,5 @@
 // "Edit Simulation Command": every analysis as a form (LTspice's dialog, plus .tf, .pz, .sens).
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type { Item } from "./types";
 import { analysesOf, analysisItem, commit, currentTab, selectTab, useS } from "./store";
 import { ANALYSES, ANY_ANALYSIS, analysisEditableAt, analysisLineIndex, analysisOptions, continuation, formatAnalysis, knownSweep, parseAnalysis, type Analysis, type Fields } from "./spice";
@@ -26,6 +26,7 @@ export function SimDialog({ index, kind0, of }: { index?: number; kind0?: Analys
   });
   const [kind, setKind] = useState<Analysis>(init.kind);
   const [err, setErr] = useState("");
+  const present = useMemo(() => analysesOf(items), [items]); // (once, not per tab below)
   const [forms, setForms] = useState<Partial<Record<Analysis, Fields>>>({ [init.kind]: init.f });
   const f = forms[kind] ?? {};
   const v = (k: string) => f[k] ?? "";
@@ -90,7 +91,7 @@ export function SimDialog({ index, kind0, of }: { index?: number; kind0?: Analys
       <CircuitLists />
       {alternate && <p className="text-2xs text-text-tertiary">Added as an alternative analysis with its own result tab. It is kept as a comment, the way LTspice keeps alternatives, so the schematic's own analysis stays as it is.</p>}
       {partial && <p className="text-2xs text-status-warning">⚠ The form does not cover all of “{lines[li].trim()}”{lines.some((_, j) => cont(j)) ? " and its + lines" : ""}: a change here replaces it with the line below. “Edit as text” keeps it.</p>}
-      <Tabs tabs={kind0 ? ANALYSES.filter(([k]) => k === kind0 || !analysesOf(items).some((o) => o.kind === k)) : ANALYSES} value={kind} set={setKind} />
+      <Tabs tabs={kind0 ? ANALYSES.filter(([k]) => k === kind0 || !present.some((o) => o.kind === k)) : ANALYSES} value={kind} set={setKind} />
       {kind === "tran" && (
         <>
           <NumField label="Stop time" value={v("stop")} set={set("stop")} unit="s" placeholder="1m" autofocus />
