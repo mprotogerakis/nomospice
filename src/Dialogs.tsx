@@ -327,9 +327,11 @@ function TraceDialog() {
 function findable(it: Item): { fields: string[]; shown: string; kind: string } | null {
   if (it.t === "sym") {
     const a = it.attrs, kind = it.sym.split(/[\\/]/).pop() ?? it.sym; // (the symbol's name, not its library's folders)
-    return { fields: [a.InstName, a.Value, a.Value2, a.SpiceLine, kind].filter(Boolean), shown: [a.InstName, a.Value].filter(Boolean).join("  ") || kind, kind };
+    const shown = [a.InstName, a.Value].filter(Boolean).join("  ") || kind;
+    // (every attribute: SpiceModel, Prefix …; and the row as listed, "R1  10k")
+    return { fields: [...Object.values(a), kind, shown].filter(Boolean), shown, kind };
   }
-  if (it.t === "flag") return { fields: [it.name], shown: it.name, kind: it.name === "0" ? "ground" : "net label" };
+  if (it.t === "flag") return it.name === "0" ? null : { fields: [it.name], shown: it.name, kind: "net label" }; // (grounds: everywhere, found by every 0)
   if (it.t === "text") return { fields: [it.text], shown: it.text.split("\n").find((l) => l.trim()) ?? "", kind: it.directive ? "directive" : "comment" };
   return null;
 }
@@ -340,11 +342,12 @@ function FindDialog() {
   const items = useS((s) => s.items);
   const [q, setQ] = useState("");
   const hits = useMemo(() => {
-    const t = q.trim().toLowerCase();
+    const norm = (x: string) => x.toLowerCase().replace(/\s+/g, " "); // ("R1 10k" finds the row "R1  10k")
+    const t = norm(q.trim());
     if (!t) return [];
     return items.flatMap((it, i) => {
       const f = findable(it);
-      return f?.fields.some((x) => x.toLowerCase().includes(t)) ? [{ i, ...f }] : [];
+      return f?.fields.some((x) => norm(x).includes(t)) ? [{ i, ...f }] : [];
     });
   }, [items, q]);
   const show = (idx: number[]) => {
@@ -353,7 +356,7 @@ function FindDialog() {
     setTimeout(() => window.dispatchEvent(new CustomEvent("nomospice:show", { detail: idx })));
   };
   return (
-    <Modal title="Find" ok={hits.length > 1 ? `Select all ${hits.length}` : "Select"} onSubmit={() => hits.length && show(hits.map((h) => h.i))}>
+    <Modal title="Find" ok={hits.length > 1 ? `Select all ${hits.length}` : hits.length ? "Select" : "Close"} onSubmit={() => (hits.length ? show(hits.map((h) => h.i)) : close())}>
       <Field label="Name, value or text" hint={q.trim() ? (hits.length ? undefined : "nothing found") : "a part's name or value (R1, 10k, BC547), a net label, a directive"}>
         <input data-autofocus className={FIELD} value={q} onChange={(e) => setQ(e.target.value)} spellCheck={false} />
       </Field>
