@@ -1,29 +1,23 @@
 # nomospice
 
-A circuit simulator that works like LTspice — schematic capture, click-to-probe waveforms, `.asc`
+A circuit simulator with schematic capture, click-to-probe waveforms, `.asc`
 files — with a modern UI, ngspice as the engine, a Rust core and a React frontend (Tauri 2).
 
 ## What it does
 
-- **LTspice workflow**: `R C L D V I G W N S T` place parts, wires, labels and directives; `⌃R`/`⌃E`
+- **Workflow**: `R C L D V I G W N S T` place parts, wires, labels and directives; `⌃R`/`⌃E`
   rotate and mirror; `F2`/`P`/`⌘K` opens the component library; `⌘↵` runs. After a run, click a wire
   to plot its voltage, a part to plot its current (`I`, `Ic`, `Id`) — in `.tran`, `.dc` **and `.ac`**
   (every R C L D Q M J gets a 0 V current sensor in the simulated netlist, so currents have phase).
-- **LTspice files**: opens and saves `.asc` (Latin-1/UTF-16 like LTspice, every unknown line kept;
-  checked against 2,321 LTspice example files). Symbols from a local LTspice install are used for
-  parts nomospice does not ship. LTspice-only syntax is translated or reported (`.tran 1m`, `SINE`,
-  `Rser=`/`Lser=`/`Rpar=`/`Cpar=`, diode `N=`, `ako:` models, `MISC\JUMPER`, `.step` …). Symbols
-  (`.asy`) next to the schematic are found; a part's own attributes such as `Prefix X` work as in LTspice.
+- **File format**: opens and saves `.asc` (Latin-1/UTF-16, every unknown line kept). 
 - **Forms instead of syntax**: sources (sine, pulse, exp, FM, PWL with a waveform preview, AC, Rser/Cpar),
   every analysis, `.param`, `.model` (parameters explained), `.meas`, `.ic`, `.temp`, `.include` are edited
   in forms that show the SPICE text they write; number fields show how SPICE reads them and catch
   `1M` (milli, not mega) and `10F` (femto). Typing SPICE directly still works everywhere.
 - **Analyses**: `.tran`, `.ac` (Bode: magnitude + phase panes), `.dc` (nested sweeps as curve
   families), `.op`, `.noise` (spectrum + totals), `.tf`, `.pz`, `.sens`; Live mode re-runs on every edit.
-  **A result tab per analysis**: keep e.g. a transient and an AC analysis in one schematic (the
-  alternatives as LTspice keeps them, `;.ac …` comments), each tab with its own traces, zoom and cursors.
-- **Measurements**: `.meas` results are listed with the plot; LTspice's syntax is translated for
-  ngspice (expressions such as `AVG -I(V1)*V(VDD)`, levels such as `VAL=0.5*V(VDD)`, `PARAM`, `I(R1)`).
+  **A result tab per analysis**: keep e.g. a transient and an AC analysis in one schematic, each tab with its own traces, zoom and cursors.
+- **Measurements**: `.meas` results are listed with the plot.
 - **Poles and zeros**: `.pz` results as a map in the s-plane (× poles, ○ zeros, unstable half-plane
   shaded, f₀ and damping ζ per pole) and a **root locus**: sweep a `.param` or an R/C/L value and see
   the poles move, one `.pz` run per step.
@@ -33,7 +27,7 @@ files — with a modern UI, ngspice as the engine, a Rust core and a React front
   (magnitude ∠ phase) instead of a plot.
 - **SVG export** for slides and papers (right-click the canvas or the plot): the schematic or the plots as
   shown, in a light print style, readable by Inkscape, browsers, PowerPoint and Keynote.
-- **Model libraries**: indexes LTspice's `lib/cmp` + `lib/sub`, the freeware **Micro-Cap 12** library
+- **Model libraries**: the freeware **Micro-Cap 12** library
   (one click downloads the original package from the Internet Archive; ~45,000 models and
   subcircuits) and your own folders. Search, preview, place — subcircuits get a generated box symbol;
   definitions and their dependencies are pulled into the netlist automatically.
@@ -96,7 +90,7 @@ Tools: `simulate` (traces downsampled), `netlist`, `read_schematic`, `write_sche
 | `src-tauri/src/ngspice.rs` | libngspice via `libloading`: run, traces, halt, reload after fatal errors |
 | `src-tauri/src/library.rs` | model/subckt index, dependency resolution, generated subckt symbols |
 | `src-tauri/src/git.rs`, `mcp.rs`, `main.rs` | git, MCP server, Tauri commands, atomic save, recovery |
-| `src-tauri/symbols/*.asy` | built-in symbols (LTspice-compatible pins) |
+| `src-tauri/symbols/*.asy` | built-in symbols |
 | `src/Schematic.tsx`, `Waveform.tsx`, `Dialogs.tsx`, `History.tsx`, `Menu.tsx` | canvas, plots, dialogs, version history, context menus |
 | `src/store.ts`, `actions.ts`, `geom.ts` | state, editing actions, geometry |
 
@@ -106,4 +100,4 @@ AGPL-3.0-or-later (it includes code from OpenPCB). Third-party software and its 
 (overview) and [THIRD-PARTY-LICENSES.txt](THIRD-PARTY-LICENSES.txt) (every component with its full license
 text); in the app under About (ⓘ in the toolbar).
 
-LTspice is a trademark of Analog Devices, Inc.; Micro-Cap of Spectrum Software. nomospice is an independent project, not affiliated with or endorsed by them, and ships none of their files: it reads and writes the LTspice file formats for compatibility. Its built-in symbols are original drawings with LTspice-compatible pin positions; its default device models are its own estimates from public datasheets.
+LTspice is a trademark of Analog Devices, Inc.; Micro-Cap is a trademark of Spectrum Software. nomospice is an independent project, not affiliated with or endorsed by them, and ships none of their files. It may read and write the LTspice file formats for compatibility and import the Micro-Cap library.
