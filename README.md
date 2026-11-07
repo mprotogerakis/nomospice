@@ -6,7 +6,7 @@ files — with a modern UI, ngspice as the engine, a Rust core and a React front
 ## What it does
 
 - **Workflow**: `R C L D V I G W N S T` place parts, wires, labels and directives; `⌃R`/`⌃E`
-  rotate and mirror; dragging a part pulls its wires along, `F7` moves parts off their wires;
+  rotate and mirror; dragging a part pulls its wires along, `F7` moves parts off their wires (`F8` back);
   `⌘C`/`⌘X`/`⌘V` copy, cut and paste (also from one schematic into another);
   `F2`/`P`/`⌘K` opens the component library; `⌘F` finds parts, labels and texts; `⌘↵` runs. After a run, click a wire
   to plot its voltage, a part to plot its current — in `.tran`, `.dc` **and `.ac`** (0 V current

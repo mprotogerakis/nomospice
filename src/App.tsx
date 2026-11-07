@@ -337,6 +337,7 @@ export function App() {
     : tool.k === "place" ? "Click to place · ⌃R rotate · ⌃E mirror · Esc / right-click done"
     : tool.k === "paste" ? "Click to paste · Esc / right-click cancel"
     : tool.k === "delete" ? "Click items to delete · Esc done"
+    : tool.k === "move" ? "Move: drag parts off their wires (the wires stay) · F8 / Esc: drag with wires again"
     : pz ? "Poles × and zeros ○ in the s-plane: hover for f₀ and damping · root locus in the panel on the right"
     : showWave && s.sim?.run?.plot.startsWith("noise") ? "Noise spectra: Add trace → onoise_spectrum / inoise_spectrum · totals in Results"
     : showWave && s.sim?.run?.plot.startsWith("sens") ? "Sensitivities: Add trace → a part name (e.g. r1) · right-click to edit"
@@ -409,7 +410,7 @@ export function App() {
             next to a tall panel) they give way (flex-shrink), the bottom panel first */}
         <div data-fill style={{ minHeight: `${FILL_MIN * 100}%` }} className="relative flex-1">
           <Schematic />
-          {!s.hasItems && tool.k === "select" && (
+          {!s.hasItems && (tool.k === "select" || tool.k === "move") && (
             <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
               <div className="pointer-events-auto max-h-full w-[440px] overflow-auto rounded-float border border-border bg-surface-panel p-4 shadow-float">
                 <div className="text-sm font-medium text-text-strong">Start a schematic</div>
