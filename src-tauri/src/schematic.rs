@@ -820,9 +820,10 @@ impl Prepared {
             k /= s.values.len();
             format!("{}={}", s.name(), short_num(v))
         }).collect::<Vec<_>>().join(" ")).collect();
-        for k in 0..total {
-            if labels.iter().filter(|l| **l == labels[k]).count() > 1 {
-                labels[k] = format!("{} #{}", labels[k], k + 1);
+        let shared: Vec<bool> = labels.iter().map(|l| labels.iter().filter(|m| *m == l).count() > 1).collect(); // (counted before any is changed)
+        for (k, l) in labels.iter_mut().enumerate() {
+            if shared[k] {
+                l.push_str(&format!(" #{}", k + 1));
             }
         }
         Ok(Some(Steps { deck: self, steps, total, labels }))
