@@ -30,7 +30,7 @@ export function duplicate() {
 const CLIP = "nomospice-items:";
 
 /** The selection as clipboard text, or null: nothing to copy. */
-export function copyText(): string | null {
+function copyText(): string | null {
   const { items, sel } = useS.getState();
   const its = [...sel].sort((a, b) => a - b).map((i) => items[i]).filter((it): it is Shape => !!it && isShape(it)); // (document order)
   return its.length ? CLIP + JSON.stringify(its) : null;
@@ -60,9 +60,11 @@ function shape(v: unknown): Shape | null {
     return { t: "text", x: it.x as number, y: it.y as number, text: it.text as string, directive: !!it.directive, ...align };
   }
   const attrs = it.attrs as Record<string, unknown>;
-  // (an attribute's key without spaces, or empty: a bare SYMATTR line of a file)
-  if (it.t === "sym" && word(it.sym) && typeof it.rot === "string" && /^[RM](0|90|180|270)$/.test(it.rot) && attrs && typeof attrs === "object" && !Array.isArray(attrs) && Object.keys(attrs).every((k) => str(k) && !/\s/.test(k)) && Object.values(attrs).every(str)) {
-    return { t: "sym", sym: it.sym as string, x: it.x as number, y: it.y as number, rot: it.rot as string, attrs: { ...(attrs as Record<string, string>) }, ...extras(it.extra, "WINDOW") };
+  // (an attribute's key: spaces become _, as a SYMATTR line can only hold one word there; empty: a
+  // bare SYMATTR line of a file)
+  if (it.t === "sym" && word(it.sym) && typeof it.rot === "string" && /^[RM](0|90|180|270)$/.test(it.rot) && attrs && typeof attrs === "object" && !Array.isArray(attrs) && Object.keys(attrs).every(str) && Object.values(attrs).every(str)) {
+    const keyed = Object.fromEntries(Object.entries(attrs as Record<string, string>).map(([k, v]) => [k.trim().replace(/\s+/g, "_"), v]));
+    return { t: "sym", sym: it.sym as string, x: it.x as number, y: it.y as number, rot: it.rot as string, attrs: keyed, ...extras(it.extra, "WINDOW") };
   }
   return null;
 }
@@ -94,7 +96,7 @@ export function pasteClipboard() {
 
 /** Paste clipboard text: the items follow the cursor (held at their top-left grid point) until a
  *  click places them. False: not items of ours. */
-export function pasteText(text: string): boolean {
+function pasteText(text: string): boolean {
   if (!text.startsWith(CLIP)) return false;
   let raw: unknown;
   try {

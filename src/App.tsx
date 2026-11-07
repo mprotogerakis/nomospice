@@ -283,7 +283,7 @@ export function App() {
       if (panelText && modKey && e.key.toLowerCase() === "a") return e.preventDefault(), sel!.selectAllChildren(panelText);
       if (panelText && (e.key === "Delete" || e.key === "Backspace")) return;
       const mod = e.metaKey || e.ctrlKey, k = e.key.toLowerCase();
-      if (e.repeat && mod && "sonw".includes(k)) return e.preventDefault(); // held ⌘S/⌘O/⌘N: once
+      if (e.repeat && mod && "sonwv".includes(k)) return e.preventDefault(); // held ⌘S/⌘O/⌘N/⌘V: once
       // deferred: a dialog opened by this key must not receive the same keystroke
       const run = (f: () => unknown) => (e.preventDefault(), setTimeout(f));
       if (mod) {

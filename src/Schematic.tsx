@@ -350,7 +350,8 @@ export const Schematic = memo(function Schematic() {
   const pasted = (its: Shape[]): Shape[] => {
     const out: Shape[] = [], taken = new Set(items.flatMap((it) => (it.t === "sym" && it.attrs.InstName ? [it.attrs.InstName.toUpperCase()] : [])));
     // (an analysis pasted next to the schematic's own: an alternative, as "+" on the result tabs adds them)
-    const active = items.some((it) => it.t === "text" && it.directive && it.text.split("\n").some((l) => ANY_ANALYSIS.test(l.trim())));
+    const runs = (it: Item) => it.t === "text" && it.directive && it.text.split("\n").some((l) => ANY_ANALYSIS.test(l.trim()));
+    let active = items.some(runs); // (also once one pasted here stays active: the others become alternatives)
     for (const it of its) {
       let s = it;
       if (s.t === "text" && s.directive && active) {
@@ -365,9 +366,10 @@ export const Schematic = memo(function Schematic() {
           continue;
         }
       }
+      if (runs(s)) active = true;
       if (s.t === "sym") {
         // (its symbol not loaded yet: the prefix its own name has, R1 -> R2, not U1)
-        const prefix = prefixOf(s, defOf(lib, s)) || /^[a-z]+/i.exec(s.attrs.InstName ?? "")?.[0].toUpperCase() || "X";
+        const prefix = prefixOf(s, defOf(lib, s)) || /^[a-z]/i.exec(s.attrs.InstName ?? "")?.[0].toUpperCase() || "X";
         // (numbered past the pasted parts' own names too: R1 R2 into a document with R1 -> R3 R2)
         if (!s.attrs.InstName || taken.has(s.attrs.InstName.toUpperCase())) s = { ...s, attrs: { ...s.attrs, InstName: nextInst([...items, ...its, ...out], prefix) } };
         taken.add(s.attrs.InstName.toUpperCase());
