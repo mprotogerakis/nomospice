@@ -32,14 +32,16 @@ const CLIP = "nomospice-items:";
 /** The selection as clipboard text, or null: nothing to copy. */
 export function copyText(): string | null {
   const { items, sel } = useS.getState();
-  const its = sel.map((i) => items[i]).filter((it): it is Shape => !!it && isShape(it));
+  const its = [...sel].sort((a, b) => a - b).map((i) => items[i]).filter((it): it is Shape => !!it && isShape(it)); // (document order)
   return its.length ? CLIP + JSON.stringify(its) : null;
 }
 
 // (what the core takes: i32 coordinates; no line breaks or control characters a saved .asc line
 // would carry into lines of its own, no spaces in a symbol name or an attribute's key)
 const num = (v: unknown) => typeof v === "number" && Number.isInteger(v) && Math.abs(v) < 2 ** 30;
-const str = (v: unknown) => typeof v === "string" && !/[\u0000-\u0008\u000a-\u001f\u007f]/.test(v); // (a tab is fine)
+// (control characters but the tab; a text's own line breaks too)
+const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f]/;
+const str = (v: unknown) => typeof v === "string" && !CONTROL.test(v) && !v.includes("\n");
 const word = (v: unknown) => str(v) && !/\s/.test(v as string) && (v as string).length > 0;
 // (a symbol's WINDOW lines, a label's IOPIN: nothing else rides along to be read as items later)
 const extras = (v: unknown, head: string) => (Array.isArray(v) && v.every((l) => str(l) && new RegExp(`^\\s*${head}\\s`).test(l as string)) ? { extra: v as string[] } : {});
@@ -47,18 +49,19 @@ const extras = (v: unknown, head: string) => (Array.isArray(v) && v.every((l) =>
 function shape(v: unknown): Shape | null {
   const it = v as Record<string, unknown>;
   if (!it || typeof it !== "object") return null;
-  if (it.t === "wire" && [it.x1, it.y1, it.x2, it.y2].every(num)) return { t: "wire", x1: it.x1 as number, y1: it.y1 as number, x2: it.x2 as number, y2: it.y2 as number };
+  if (it.t === "wire" && [it.x1, it.y1, it.x2, it.y2].every(num) && (it.x1 !== it.x2 || it.y1 !== it.y2)) return { t: "wire", x1: it.x1 as number, y1: it.y1 as number, x2: it.x2 as number, y2: it.y2 as number };
   if (!num(it.x) || !num(it.y)) return null;
   // (a label as read from a file may end in spaces: its name is the rest)
   if (it.t === "flag" && typeof it.name === "string" && word(it.name.trim())) return { t: "flag", x: it.x as number, y: it.y as number, name: it.name.trim(), ...extras(it.extra, "IOPIN") };
   // (a text keeps its tabs and line breaks; its alignment is one of the .asc's words)
-  if (it.t === "text" && typeof it.text === "string" && !/[\u0000-\u0008\u000b-\u001f\u007f]/.test(it.text)) {
-    const align = typeof it.align === "string" && /^V?(Left|Right|Center|Top|Bottom)$/.test(it.align) ? { align: it.align } : {};
+  if (it.t === "text" && typeof it.text === "string" && !CONTROL.test(it.text)) {
+    // ("Left 2": the alignment and the font size)
+    const align = typeof it.align === "string" && /^V?(Left|Right|Center|Top|Bottom) \d+$/.test(it.align) ? { align: it.align } : {};
     return { t: "text", x: it.x as number, y: it.y as number, text: it.text as string, directive: !!it.directive, ...align };
   }
   const attrs = it.attrs as Record<string, unknown>;
   // (an attribute's key without spaces, or empty: a bare SYMATTR line of a file)
-  if (it.t === "sym" && word(it.sym) && word(it.rot) && attrs && typeof attrs === "object" && Object.keys(attrs).every((k) => str(k) && !/\s/.test(k)) && Object.values(attrs).every(str)) {
+  if (it.t === "sym" && word(it.sym) && typeof it.rot === "string" && /^[RM](0|90|180|270)$/.test(it.rot) && attrs && typeof attrs === "object" && Object.keys(attrs).every((k) => str(k) && !/\s/.test(k)) && Object.values(attrs).every(str)) {
     return { t: "sym", sym: it.sym as string, x: it.x as number, y: it.y as number, rot: it.rot as string, attrs: { ...(attrs as Record<string, string>) }, ...extras(it.extra, "WINDOW") };
   }
   return null;

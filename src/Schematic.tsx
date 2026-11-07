@@ -235,7 +235,7 @@ export const Schematic = memo(function Schematic() {
   const [hFirst, setHFirst] = useState<boolean | null>(null);
   const [hover, setHover] = useState(-1);
   const [hoverPin, setHoverPin] = useState<number>(); // probing: the part's pin under the pointer
-  const pastedAt = useRef(0);
+  const pastedAt = useRef({ t: 0, x: 0, y: 0 });
   const [preview, setPreview] = useState<Item[] | null>(null);
   const [boxSel, setBoxSel] = useState<[Pt, Pt] | null>(null);
   const drag = useRef<Drag | null>(null);
@@ -346,12 +346,14 @@ export const Schematic = memo(function Schematic() {
   };
   /** Pasted items at `at`: a part whose name is taken (or pasted twice) renumbered, as LTspice does
    *  (the preview shows the names the click gives). */
-  const pasted = (its: Shape[], [x, y]: Pt): Shape[] => {
+  const pasted = (its: Shape[]): Shape[] => {
     const out: Shape[] = [], taken = new Set(items.flatMap((it) => (it.t === "sym" && it.attrs.InstName ? [it.attrs.InstName.toUpperCase()] : [])));
     for (const it of its) {
-      let s = shifted(it, x, y);
+      let s = it;
       if (s.t === "sym") {
-        if (!s.attrs.InstName || taken.has(s.attrs.InstName.toUpperCase())) s = { ...s, attrs: { ...s.attrs, InstName: nextInst([...items, ...out], prefixOf(s, defOf(lib, s)) || "X") } };
+        // (its symbol not loaded yet: the prefix its own name has, R1 -> R2, not U1)
+        const prefix = prefixOf(s, defOf(lib, s)) || /^[a-z]+/i.exec(s.attrs.InstName ?? "")?.[0].toUpperCase() || "X";
+        if (!s.attrs.InstName || taken.has(s.attrs.InstName.toUpperCase())) s = { ...s, attrs: { ...s.attrs, InstName: nextInst([...items, ...out], prefix) } };
         taken.add(s.attrs.InstName.toUpperCase());
       }
       out.push(s);
@@ -359,7 +361,7 @@ export const Schematic = memo(function Schematic() {
     return out;
   };
   // named once per paste (not per mouse move): the preview follows the cursor by shifting these
-  const pasteNamed = useMemo(() => (tool.k === "paste" ? pasted(tool.items, [0, 0]) : []), [tool, items, lib]); // eslint-disable-line react-hooks/exhaustive-deps
+  const pasteNamed = useMemo(() => (tool.k === "paste" ? pasted(tool.items) : []), [tool, items, lib]); // eslint-disable-line react-hooks/exhaustive-deps
   const wirePath = (a: Pt, b: Pt): Item[] => {
     const corner: Pt = hFirst ?? true ? [b[0], a[1]] : [a[0], b[1]];
     return dropZeroWires([
@@ -392,7 +394,7 @@ export const Schematic = memo(function Schematic() {
       const out = pasteNamed.map((it) => shifted(it, g[0], g[1])); // (here, selected)
       commit([...items, ...out], out.map((_, k) => items.length + k));
       useS.setState({ tool: { k: "select" } });
-      pastedAt.current = Date.now();
+      pastedAt.current = { t: Date.now(), x: e.clientX, y: e.clientY };
     } else if (tool.k === "delete") {
       const i = hit(items, lib, p, 6 / view.k);
       if (i >= 0) commit(items.filter((_, j) => j !== i), []), setHover(-1);
@@ -555,7 +557,9 @@ export const Schematic = memo(function Schematic() {
 
   const onDoubleClick = (e: React.MouseEvent) => {
     if (tool.k === "wire") return setWireStart(null);
-    if (Date.now() - pastedAt.current < 500) return; // (the click that placed a paste, doubled: not an edit)
+    // (the click that placed a paste, doubled — at its spot, within any double-click time: not an edit)
+    const pa = pastedAt.current;
+    if (Date.now() - pa.t < 2000 && Math.hypot(e.clientX - pa.x, e.clientY - pa.y) < 6) return;
     // while probing, clicks plot (LTspice); editing is right-click there
     if (tool.k !== "select" || probing) return;
     editAt(e);
@@ -590,8 +594,7 @@ export const Schematic = memo(function Schematic() {
     : hoverProbe ? (hoverIsSym ? PROBE_I : PROBE_V)
     : drag.current?.k === "pan" ? "grabbing" : hover >= 0 ? "pointer" : "default";
   const gap = GRID * view.k;
-  const ghost = tool.k === "place" ? placed(tool.item, cursor) : null;
-  const ghosts: Shape[] = tool.k === "paste" ? pasteNamed.map((it) => shifted(it, cursor[0], cursor[1])) : ghost && isShape(ghost) ? [ghost] : [];
+  const ghosts: Shape[] = tool.k === "paste" ? pasteNamed.map((it) => shifted(it, cursor[0], cursor[1])) : tool.k === "place" ? [placed(tool.item, cursor)].filter(isShape) : [];
 
   return (
     <div className="relative h-full w-full overflow-hidden bg-surface-schematic-canvas">
