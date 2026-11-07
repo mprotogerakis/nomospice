@@ -4,7 +4,7 @@ import { connectivity, dragPlan } from "../src/geom.ts";
 import {
   tokens, formatAnalysis, formatIc, formatInclude, formatMeas, formatModel, formatParams, formatSource, numInfo, parseAnalysis,
   parseIc, parseInclude, parseMeas, parseModel, parseParams, parseSource, sample, si, spiceNum, directiveKind, analysisRoundTrips, analysisEditable, analysisOptions, analysisLineIndex, at, integrate, stripAnalyses, portablePaths, sourceRoundTrips,
-  exprUnit, unitTimes, fftSize, fftFreqs, spectrum,
+  exprUnit, unitTimes, fftSize, fftFreqs, spectrum, getParam, setParam,
 } from "../src/spice.ts";
 
 // numbers and the classic pitfalls
@@ -245,5 +245,14 @@ assert.equal(numInfo("1Meg", "Hz")!.text, "= 1MegHz"); // not "1M", the milli tr
   // a breakpoint's femtosecond step among 15: not 2^20 points
   assert.equal(fftSize([0, 1e-3, 1e-3 + 1e-15, ...Array.from({ length: 13 }, (_, k) => 2e-3 + k * 1e-3)], 0, 14e-3), 4096);
 }
+
+// a MOSFET's L and W in Value2, as LTspice keeps them
+assert.equal(getParam("l=0.18u w=1u", "W"), "1u");
+assert.equal(getParam("L = 2u off", "l"), "2u");
+assert.equal(getParam("nl=3", "l"), "", "a word of its own");
+assert.equal(setParam("l=0.18u w=1u", "w", "2u"), "l=0.18u w=2u");
+assert.equal(setParam("off", "m", "4"), "off m=4");
+assert.equal(setParam("l=1u m=2 off", "m", ""), "l=1u off");
+assert.equal(setParam("", "area", " 2 "), "area=2");
 
 console.log("spice-check: ok");

@@ -769,3 +769,13 @@ export function spectrum(xs: number[], ys: (number | null)[], lo: number, hi: nu
   }
   return db;
 }
+
+/** `key=value` in an instance line (blanks around = too), by key in any case. */
+const paramRe = (k: string) => new RegExp(`(^|\\s)${k}\\s*=\\s*(\\S+)`, "i");
+export const getParam = (line: string, k: string) => paramRe(k).exec(line)?.[2] ?? "";
+/** `line` with `k=v` set (replaced where it is, else appended); v empty: taken out. */
+export function setParam(line: string, k: string, v: string) {
+  const val = v.replace(/\s+/g, ""), re = paramRe(k);
+  if (!val) return line.replace(re, "").replace(/\s+/g, " ").trim();
+  return re.test(line) ? line.replace(re, (_m, pre: string) => `${pre}${k}=${val}`) : `${line.trim()} ${k}=${val}`.trim();
+}

@@ -10,7 +10,7 @@ import { closeDialog as close, Field, FIELD, Modal, numHelp, NumField, Rows, Tex
 import { SourceEditor } from "./SourceEditor";
 import { SimDialog } from "./SimDialog";
 import { DirectiveDialog } from "./DirectiveDialog";
-import { analysisEditable, analysisEditableAt, analysisLine, analysisLineIndex, analysisOptions, exprUnit, spiceNum, tokens, xUnitOf } from "./spice";
+import { analysisEditable, analysisEditableAt, analysisLine, analysisLineIndex, analysisOptions, exprUnit, getParam, setParam, spiceNum, tokens, xUnitOf } from "./spice";
 import { cn } from "@/lib/utils";
 import thirdParty from "./third-party.json";
 import { checkForUpdate } from "./updater";
@@ -20,6 +20,14 @@ import { checkForUpdate } from "./updater";
  *  LTspice attributes in their spelling (rows typed in another case are saved so). */
 const SHOWN = ["InstName", "Value", "Value2", "SpiceLine"];
 const MORE = ["Prefix", "SpiceLine2", "SpiceModel", "Description"];
+
+/** A semiconductor's common instance parameters, kept where LTspice keeps them, in Value2
+ *  (`l=0.18u w=1u`): [key, label, unit, hint]. The rest stays as typed in Value2. */
+const INSTANCE: Record<string, [string, string, string, string][]> = {
+  M: [["l", "Length L", "m", "channel length, e.g. 180n"], ["w", "Width W", "m", "channel width, e.g. 1u"], ["m", "Multiplier", "", "devices in parallel"]],
+  Q: [["area", "Area factor", "", "relative to the model's"], ["m", "Multiplier", "", "devices in parallel"]],
+  D: [["area", "Area factor", "", "relative to the model's"], ["m", "Multiplier", "", "devices in parallel"]],
+};
 
 /** Edits a part or a net label; `onDone` receives the result (commit in place, or start placing it).
  *  Comments and directives use DirectiveDialog. */
@@ -66,7 +74,13 @@ function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: 
             <>
               <TextField label="Value" value={attr("Value")} set={(v) => setAttr("Value", v)} autofocus unit={unit}
                 {...(valueHelp ?? {})} hint={unit ? "e.g. 4.7k, 100n, 1Meg; LTspice extras like Rser=0.1 may follow" : undefined} />
-              <TextField label="Value2" value={attr("Value2")} set={(v) => setAttr("Value2", v)} />
+              {/* (D, Q, M: their common instance parameters as fields; Value2 holds them, as SPICE reads them) */}
+              {INSTANCE[prefix]?.map(([k, label, u, hint]) => {
+                const v = getParam(attr("Value2"), k), set = (x: string) => setAttr("Value2", setParam(attr("Value2"), k, x));
+                const dflt = getParam(it.attrs.SpiceLine ?? def?.spice_line ?? "", k); // (a symbol's default, in SpiceLine)
+                return <TextField key={k} label={label} value={v} set={set} unit={u} placeholder={dflt ? `${dflt} (SpiceLine)` : k === "m" || k === "area" ? "1" : "model default"} {...((h) => ({ info: h.info, warn: h.warn || undefined }))(numHelp(v, u, set))} hint={hint} />;
+              })}
+              <TextField label="Value2" value={attr("Value2")} set={(v) => setAttr("Value2", v)} hint={INSTANCE[prefix] ? "the instance parameters as SPICE reads them (others too: off, temp=…)" : undefined} />
               {/* the symbol's default shows as the value: emptying it visibly removes it (an empty attribute) */}
               <TextField label="SpiceLine" value={it.attrs.SpiceLine ?? def?.spice_line ?? ""} set={(v) => setAttr("SpiceLine", v)} hint={def?.spice_line ? `symbol default: ${def.spice_line}` : undefined} />
             </>
