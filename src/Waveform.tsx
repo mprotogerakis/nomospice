@@ -28,12 +28,13 @@ const color = (slot: number) => css(`--series-${slot + 1}`);
 /** dB; an exactly-zero magnitude (AC-quiet node) is a gap, not -6000 dB squashing the pane. */
 const mag = (t: Trace) => t.data!.re.map((re, i) => { const m = Math.hypot(re, t.data!.im?.[i] ?? 0); return m ? 20 * Math.log10(m) : null; });
 function phase(t: Trace, seg = Infinity) {
-  let off = 0, prev = 0;
+  let off = 0, prev = 0, fresh = true;
   return t.data!.re.map((re, i) => {
-    if (i % seg === 0) off = 0; // (a family's next curve: unwrapped on its own)
+    if (i % seg === 0) (off = 0), (fresh = true); // (a family's next curve: unwrapped on its own)
     if (re == null) return null; // (a gap: a step halted before this x)
     const p = (Math.atan2(t.data!.im?.[i] ?? 0, re) * 180) / Math.PI;
-    if (i % seg !== 0) off += p + off - prev > 180 ? -360 : p + off - prev < -180 ? 360 : 0; // unwrap
+    if (!fresh) off += p + off - prev > 180 ? -360 : p + off - prev < -180 ? 360 : 0; // unwrap
+    fresh = false;
     prev = p + off;
     return prev;
   });
@@ -401,8 +402,10 @@ const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot, steps }:
     const fmt = (unit: string, v: number) => (Number.isNaN(v) ? "–" : unit === "dB" ? `${v.toFixed(2)} dB` : unit === "°" ? `∠${v.toFixed(1)}°` : si(v, unit));
     const val = (x: number | null) => (x == null || !ps.length ? "–" : ps.map(({ s, unit }) => fmt(unit, at(xs, s.y, x))).join(" "));
     // (a .step family: each value with its step, in a tooltip; each pane's series of this trace once)
+    // (not for hundreds of steps: a tooltip that long helps no one, and it is built per hover move)
+    const curves = Math.max(0, ...panes.map((p) => p.series.filter((s) => s.t === t).length));
     const named = (x: number | null) => {
-      if (x == null || !steps.length || ps.length < 2) return undefined;
+      if (x == null || !steps.length || curves < 2 || curves > 50) return undefined;
       return panes.flatMap((p) => {
         const mine = p.series.filter((s) => s.t === t);
         return mine.map((s, k) => `${curveName(t, k, mine.length, steps)}: ${fmt(p.unit, at(xs, s.y, x))}`);
@@ -425,7 +428,7 @@ const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot, steps }:
       <table className="w-full table-fixed font-mono text-2xs">
         <thead className="text-text-tertiary">
           <tr className="h-[22px] border-b border-border">
-            <th className="w-[38%] pl-2 text-left font-normal">{plot}{steps.length ? ` · ${steps.length} steps` : ""} · x</th>
+            <th className="w-[38%] pl-2 text-left font-normal">{plot}{steps.length ? ` · ${steps.length} step${steps.length > 1 ? "s" : ""}` : ""} · x</th>
             <th className="text-right font-normal">{hover == null ? "cursor" : si(hover, xUnit)}</th>
             <th className="text-right font-normal text-selection">A {a == null ? "" : si(a, xUnit)}</th>
             <th className="pr-2 text-right font-normal text-selection">B {b == null ? "" : si(b, xUnit)}</th>
@@ -456,7 +459,7 @@ const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot, steps }:
       </table>
       {!!steps.length && (
         <div className="border-b border-border px-2 py-1 font-mono text-2xs text-text-secondary" title="Each trace has a curve per step; its values above are in this order">
-          <span className="text-text-tertiary">.step: </span>{steps.join(" · ")}
+          <span className="text-text-tertiary">.step: </span>{steps.length > 12 ? `${steps.slice(0, 10).join(" · ")} … ${steps[steps.length - 1]}` : steps.join(" · ")}
         </div>
       )}
       {dx != null && (

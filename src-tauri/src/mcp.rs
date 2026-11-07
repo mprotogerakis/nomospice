@@ -117,7 +117,9 @@ fn call(base: &Path, name: &str, args: &Value) -> Result<Value, String> {
                     Ok(t) if t.steps.as_ref().is_some_and(|ix| !ix.is_empty() && t.re.len() % ix.len() == 0) => {
                         let ix = t.steps.as_deref().unwrap_or_default();
                         let n = t.re.len() / ix.len(); // (a table, .op: one value per step, no x)
-                        let part = |v: &[f64], k: usize| if v.is_empty() { vec![] } else { downsample(&v[k * n..(k + 1) * n], points) };
+                        // (`points` for the whole answer: shared by the steps' curves)
+                        let each = (points / ix.len()).max(2);
+                        let part = |v: &[f64], k: usize| if v.is_empty() { vec![] } else { downsample(&v[k * n..(k + 1) * n], each) };
                         json!({ "steps": ix.iter().enumerate().map(|(k, &s)| json!({
                             "step": run.steps.get(s), "x": part(&t.x, k), "re": part(&t.re, k), "im": t.im.as_ref().map(|im| part(im, k)),
                         })).collect::<Vec<_>>() })

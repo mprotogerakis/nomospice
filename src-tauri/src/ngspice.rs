@@ -409,8 +409,9 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
         if k > 0 {
             api.command("remcirc"); // (its plot stays)
         }
-        // (a step whose analysis made no plot: ngspice's current plot is still the step before's)
-        match one_run(api, deck, stop).and_then(|r| if done.iter().any(|d| d.1 == r.0) { Err(r.1) } else { Ok(r) }) {
+        // (a step whose analysis made no plot: ngspice's current plot is still the step before's;
+        // halted before it made one: just halted)
+        match one_run(api, deck, stop).and_then(|r| if !done.iter().any(|d| d.1 == r.0) { Ok(r) } else if r.2 { Err(vec!["simulation halted".into()]) } else { Err(r.1) }) {
             Ok((plot, log, halted)) => {
                 done.push((label.to_string(), plot, log));
                 if halted || stop() {
@@ -635,8 +636,8 @@ fn steps_joined(each: Vec<(usize, Trace)>) -> Result<Trace, String> {
     let grid: Vec<f64> = if same {
         each[0].x.clone()
     } else {
-        // (3x the longest step at least, up to 200k where the steps' 20M values allow it)
-        let cap = (3 * each.iter().map(|t| t.x.len()).max().unwrap_or(0)).max((20_000_000 / each.len()).min(200_000));
+        // (all steps' curves together at most 20M values, a curve at most 200k)
+        let cap = (20_000_000 / each.len()).clamp(1000, 200_000);
         let mut g: Vec<f64> = each.iter().flat_map(|t| t.x.iter().copied()).collect();
         g.sort_by(|a, b| (dir * a).total_cmp(&(dir * b)));
         g.dedup_by(|a, b| (*a - *b).abs() <= 1e-12 * a.abs().max(b.abs()));
