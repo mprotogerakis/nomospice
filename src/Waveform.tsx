@@ -120,7 +120,11 @@ export const Waveform = memo(function Waveform() {
   const ok = useMemo(() => traces.filter((t) => t.data?.x.length), [traces]);
   // constants (reference lines: 0.5, 500m, -3) are drawn on the top pane's axis, whatever it is
   // now: dB in a Bode plot, else volts first
-  const [lines, signals] = useMemo(() => [ok.filter((t) => t.data!.constant), ok.filter((t) => !t.data!.constant)], [ok]);
+  // (a complex one, v(out)[25] in an .ac, is a level of magnitude and phase: drawn as a signal)
+  const [lines, signals] = useMemo(() => {
+    const line = (t: Trace) => !!t.data!.constant && !t.data!.im;
+    return [ok.filter(line), ok.filter((t) => !line(t))];
+  }, [ok]);
   // .ac without an AC source: every value is exactly 0 (no dB at all, phase flat) - say so instead
   const zero = useMemo(() => ac && signals.length > 0 && signals.every((t) => t.data!.re.every((v, i) => !v && !t.data!.im?.[i])), [ac, signals]);
   const all = ok[0]?.data!.x ?? [];
