@@ -382,12 +382,12 @@ export function App() {
         {showWave && (
           <>
             <div style={{ height: `${split * 100}%` }} className="min-h-0">{pz ? <PoleZero run={s.sim!.run!} /> : <Waveform key={`${mode}:${plotKind(s.sim)}`} />}</div>
-            <div onPointerDown={startSplit} className="h-[5px] shrink-0 cursor-row-resize border-y border-border bg-surface-panel-head hover:bg-selection/40" />
+            <div onPointerDown={startSplit} className="h-[5px] shrink-0 cursor-row-resize touch-none border-y border-border bg-surface-panel-head hover:bg-selection/40" />
           </>
         )}
-        {/* the panes give way (flex-shrink; the bottom panel first, so the plot keeps its split) before
-            the schematic gets less than a strip: heights from a larger window can not push it out */}
-        <div data-fill className="relative min-h-[48px] flex-1">
+        {/* the schematic keeps a share: when the panes need more (a smaller window, the plot opening
+            next to a tall panel) they give way (flex-shrink), the bottom panel first */}
+        <div data-fill style={{ minHeight: `${FILL_MIN * 100}%` }} className="relative flex-1">
           <Schematic />
           {!s.hasItems && tool.k === "select" && (
             <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
@@ -517,11 +517,16 @@ function drag(e: React.PointerEvent, move: (ev: PointerEvent) => void, done?: ()
   window.addEventListener("pointercancel", end);
 }
 
-/** How tall pane `el` may get by dragging: its height plus what the schematic ([data-fill]) has
- *  above its min-height strip. (Too little room later, a smaller window: the panes shrink, see App.) */
+/** The schematic's minimum share of the area below the toolbar; the bottom panel's minimum height
+ *  and default share. */
+const FILL_MIN = 0.25, PANEL_MIN = 80, PANEL_SHARE = 0.32;
+
+/** How tall pane `el` may get by dragging (so its edge stays under the pointer): its height plus the
+ *  room the schematic ([data-fill]) has above its share and, for the plot, the room the bottom panel
+ *  ([data-panel], which shrinks first) has above its minimum. */
 const roomFor = (el: HTMLElement) => {
-  const fill = el.parentElement!.querySelector<HTMLElement>(":scope > [data-fill]");
-  return el.offsetHeight + (fill ? Math.max(0, fill.offsetHeight - parseFloat(getComputedStyle(fill).minHeight)) : 0);
+  const box = el.parentElement!, fill = box.querySelector<HTMLElement>(":scope > [data-fill]")!, panel = box.querySelector<HTMLElement>(":scope > [data-panel]");
+  return el.offsetHeight + Math.max(0, fill.offsetHeight - FILL_MIN * box.clientHeight) + (panel && panel !== el ? Math.max(0, panel.offsetHeight - PANEL_MIN) : 0);
 };
 
 function BottomPanel() {
@@ -530,19 +535,20 @@ function BottomPanel() {
   const isOpPlot = !!sim?.run?.plot.startsWith("op");
   const phasors = !!sim?.run?.plot.startsWith("ac"); // a table from .ac means one frequency: phasors
   const tabs: [typeof panel, string][] = [["log", "Log"], ["netlist", "Netlist"], ...(sim?.run?.op.length ? [["op", isOpPlot ? "Operating point" : phasors ? "Phasors" : "Results"] as [typeof panel, string]] : []), ["history", "History"]];
-  // its height: dragged at the top edge, kept across sessions (0: the default share)
-  const [height, setHeight] = useState(() => Number(localStorage.getItem("nomospice.panelHeight")) || 0);
+  // its share of the area (it scales with the window, like the plot's split): dragged at the top
+  // edge, kept across sessions
+  const [share, setShare] = useState(() => Number(localStorage.getItem("nomospice.panelShare")) || PANEL_SHARE);
   const ref = useRef<HTMLDivElement>(null);
   const resize = (e: React.PointerEvent) => {
-    const el = ref.current!, bottom = el.getBoundingClientRect().bottom, max = roomFor(el);
-    let h = 0;
-    drag(e, (ev) => setHeight((h = Math.round(Math.max(80, Math.min(max, bottom - ev.clientY))))),
-      () => h && localStorage.setItem("nomospice.panelHeight", String(h)));
+    const el = ref.current!, room = el.parentElement!.clientHeight, bottom = el.getBoundingClientRect().bottom, max = roomFor(el);
+    let f = 0;
+    drag(e, (ev) => setShare((f = Math.max(PANEL_MIN, Math.min(max, bottom - ev.clientY)) / room)),
+      () => f && localStorage.setItem("nomospice.panelShare", String(f)));
   };
   return (
-    <div ref={ref} style={height ? { height } : undefined} className={cn("flex min-h-[80px] shrink-[1000] flex-col border-t border-border bg-surface-panel", !height && "h-[32%]")}>
-      <div onPointerDown={resize} onDoubleClick={() => (setHeight(0), localStorage.removeItem("nomospice.panelHeight"))} title="Drag to resize · double-click: default height"
-        className="relative z-10 -mt-[3px] h-[5px] shrink-0 cursor-row-resize hover:bg-selection/40" />
+    <div ref={ref} data-panel style={{ height: `${share * 100}%`, minHeight: PANEL_MIN }} className="flex shrink-[1000] flex-col border-t border-border bg-surface-panel">
+      <div onPointerDown={resize} onDoubleClick={() => (setShare(PANEL_SHARE), localStorage.removeItem("nomospice.panelShare"))} title="Drag to resize · double-click: default height"
+        className="relative z-10 -mt-[3px] h-[5px] shrink-0 cursor-row-resize touch-none hover:bg-selection/40" />
       <div className="flex h-[26px] shrink-0 items-center border-b border-border bg-surface-panel-head px-1">
         {tabs.map(([k, label]) => (
           <button key={k} onClick={() => useS.setState({ panel: k })}

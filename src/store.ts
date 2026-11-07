@@ -228,7 +228,7 @@ async function fetchTrace(t: Trace): Promise<Trace> {
  *  Noise plots hold spectra only (traces are added by name). */
 export const probeMode = (sim: Sim | null) => !!sim?.run && !isOp(sim) && !/^(noise|sens)/.test(sim.run.plot);
 /** Power V·I is real power only in time and DC sweeps (in .ac it would be a complex product). */
-export const powerMode = (sim: Sim | null) => probeMode(sim) && /^(tran|dc)/.test(sim!.run!.plot);
+export const powerMode = (sim: Sim | null) => /^(tran|dc)/.test(sim?.run?.plot ?? "");
 
 /** Results without a scale (.op, .tf, .noise totals, .sens): a value table, nothing to plot or probe. */
 export const isOp = (sim: Sim | null) => !!sim?.run && !sim.run.scale;

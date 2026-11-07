@@ -297,7 +297,9 @@ function TraceDialog() {
     // get none rather than a wrong one. ngspice ph()/cph()/vp() are in radians.
     const plain = (x: string) => (raw && !noise ? "" : /^v\([^()]*\)$/i.test(x) ? "V" : /^i\([^()]*\)$/i.test(x) ? "A" : noise && /^\w+$/.test(x) ? noiseUnit(x) : "");
     const f = e.match(/^(\w+)\((.*)\)$/);
-    const unit = f && /^v?db$/i.test(f[1]) ? "dB" : f && /^(c?ph|vp)$/i.test(f[1]) ? "rad"
+    // a constant (a reference line) joins the first real trace's pane, so it is drawn on its axis
+    const unit = /^[-+]?(\d+\.?\d*|\.\d+)(e[-+]?\d+)?$/i.test(e) ? (useS.getState().traces.find((t) => t.unit && !t.data?.im)?.unit ?? "")
+      : f && /^v?db$/i.test(f[1]) ? "dB" : f && /^(c?ph|vp)$/i.test(f[1]) ? "rad"
       : f && /^(mag|vm|real|imag|re|im|abs)$/i.test(f[1]) ? plain(f[2]) : plain(e);
     if (e) addTrace(e, e, unit);
   };

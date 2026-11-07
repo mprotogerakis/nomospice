@@ -2148,7 +2148,16 @@ mod tests {
                     assert!(meas("irms") > 3.0 * meas("iavg") && meas("pd") > 0.0, "{name}: {:?}", run.meas);
                     near(meas("pr"), vrms * vrms / 1e3, 0.02);
                 }
-                "analysis_tabs" => near(meas("peak"), 3.16, 0.05), // Q at f0 (the active .ac)
+                "analysis_tabs" => {
+                    near(meas("peak"), 3.16, 0.05); // Q at f0 (the active .ac)
+                    // the alternatives' tabs: each run as the active analysis (the .meas ac stays in)
+                    for alt in [".tran", ".noise"] {
+                        let src = src.replace("!.ac dec", ";.ac dec").replace(&format!("Left 2 ;{alt}"), &format!("Left 2 !{alt}"));
+                        let nl = netlist_for_sim(&parse_asc(&src), &mut Library::builtin());
+                        let r = crate::ngspice::run(&nl.prepared(None, &mut vec![])).unwrap_or_else(|log| panic!("{name} {alt}: {}", log.join("\n")));
+                        assert!(r.plot.starts_with(&alt[1..]) && !r.aborted && !r.scale.is_empty(), "{name} {alt}: {} {}", r.plot, r.scale);
+                    }
+                }
                 "zener_prefix" => {
                     let out = crate::ngspice::trace("v(out)", &run.scale, run.id).unwrap();
                     let at = |v: f64| out.re[out.x.iter().position(|&x| x >= v - 1e-6).unwrap()]; // (the sweep's V1)
