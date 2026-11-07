@@ -385,8 +385,8 @@ export function App() {
             <div onPointerDown={startSplit} className="h-[5px] shrink-0 cursor-row-resize border-y border-border bg-surface-panel-head hover:bg-selection/40" />
           </>
         )}
-        {/* the panes give way (flex-shrink) before the schematic gets less than a strip: a split and a
-            panel height from a larger window can not push it out */}
+        {/* the panes give way (flex-shrink; the bottom panel first, so the plot keeps its split) before
+            the schematic gets less than a strip: heights from a larger window can not push it out */}
         <div data-fill className="relative min-h-[48px] flex-1">
           <Schematic />
           {!s.hasItems && tool.k === "select" && (
@@ -536,9 +536,9 @@ function BottomPanel() {
       () => h && localStorage.setItem("nomospice.panelHeight", String(h)));
   };
   return (
-    <div ref={ref} style={height ? { height } : undefined} className={cn("flex min-h-[80px] flex-col border-t border-border bg-surface-panel", !height && "h-[32%]")}>
+    <div ref={ref} style={height ? { height } : undefined} className={cn("flex min-h-[80px] shrink-[1000] flex-col border-t border-border bg-surface-panel", !height && "h-[32%]")}>
       <div onPointerDown={resize} onDoubleClick={() => (setHeight(0), localStorage.removeItem("nomospice.panelHeight"))} title="Drag to resize · double-click: default height"
-        className="-mt-[3px] h-[5px] shrink-0 cursor-row-resize hover:bg-selection/40" />
+        className="relative z-10 -mt-[3px] h-[5px] shrink-0 cursor-row-resize hover:bg-selection/40" />
       <div className="flex h-[26px] shrink-0 items-center border-b border-border bg-surface-panel-head px-1">
         {tabs.map(([k, label]) => (
           // (the open tab clicked again: the panel closes)
