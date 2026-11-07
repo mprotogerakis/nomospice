@@ -503,9 +503,11 @@ function CursorStatus() {
  *  none once it is unmounted) until the button is up or the gesture cancelled; then `done`. */
 function drag(e: React.PointerEvent, move: (ev: PointerEvent) => void, done?: () => void) {
   if (e.button !== 0) return;
+  e.preventDefault(); // (no text selection on the way)
   const el = e.currentTarget as HTMLElement, id = e.pointerId;
   el.setPointerCapture(id);
-  const mine = (ev: PointerEvent) => ev.pointerId === id && move(ev); // (not a second finger's)
+  // (not a second finger's; no button held: the release went elsewhere, e.g. another window)
+  const mine = (ev: PointerEvent) => ev.pointerId === id && (ev.buttons ? move(ev) : end(ev));
   const end = (ev: PointerEvent) => {
     if (ev.pointerId !== id) return;
     el.removeEventListener("pointermove", mine);
