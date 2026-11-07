@@ -393,9 +393,9 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
     let id = RUNS.fetch_add(1, Ordering::SeqCst) + 1; // the previous run's results are gone now
     take_log();
     let total = steps.as_ref().map_or(1, |s| s.total);
-    // (label, plot, log) per step done; a later step that failed: its log, and the rest stop
+    // (label, plot, log) per step done; the steps' logs in their order, failed ones too
     let mut done: Vec<(String, String, Vec<String>)> = vec![];
-    let mut failed = vec![];
+    let mut steplog: Vec<String> = vec![];
     for k in 0..total {
         if k > 0 && stop() {
             break; // (halted between steps: not a failure)
@@ -407,7 +407,7 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
             Ok(None) => ("", text),
             Err(e) if done.is_empty() => return Err(unstepped.into_iter().chain(e.iter().cloned()).collect()),
             Err(e) => {
-                failed = e.clone();
+                steplog.extend(e.iter().cloned());
                 break;
             }
         };
@@ -418,6 +418,8 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
         // halted before it made one: just halted)
         match one_run(api, deck, stop).and_then(|r| if !done.iter().any(|d| d.1 == r.0) { Ok(r) } else if r.2 { Err(vec!["simulation halted".into()]) } else { Err(r.1) }) {
             Ok((plot, log, halted)) => {
+                steplog.push(format!("--- .step {label}"));
+                steplog.extend(log.iter().cloned());
                 done.push((label.to_string(), plot, log));
                 if halted || stop() {
                     break;
@@ -426,11 +428,11 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
             Err(log) if steps.is_none() => return Err(unstepped.into_iter().chain(log).collect()),
             Err(log) if log == ["simulation halted"] => break, // (halted while it began: not a failure)
             // a step that fails (R=0: singular): said, and the next ones still run, as in LTspice
-            Err(log) => failed.extend(std::iter::once(format!("--- .step {label} failed")).chain(log)),
+            Err(log) => steplog.extend(std::iter::once(format!("--- .step {label} failed")).chain(log)),
         }
     }
     if done.is_empty() {
-        return Err(unstepped.into_iter().chain(failed).collect());
+        return Err(unstepped.into_iter().chain(if steplog.is_empty() { vec!["simulation halted".into()] } else { steplog }).collect());
     }
     // .noise ends in its totals plot (noise2, noise4 …); the spectrum users plot is the one before it
     // (a step halted in its spectrum: that plot, it has a frequency scale)
@@ -491,9 +493,7 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
     if !scale.is_empty() || plot != *plot0 {
         scale = scale2;
     }
-    let log: Vec<String> = if steps.is_none() { unstepped.into_iter().chain(done[0].2.iter().cloned()).collect() } else {
-        done.iter().flat_map(|(l, _, log)| std::iter::once(format!("--- .step {l}")).chain(log.iter().cloned())).chain(failed).collect()
-    };
+    let log: Vec<String> = if steps.is_none() { unstepped.into_iter().chain(done[0].2.iter().cloned()).collect() } else { steplog };
     let aborted = log.iter().any(|l| {
         let l = l.to_lowercase();
         l.contains("aborted") || l.contains("timestep too small") || l.contains("simulation interrupted")
@@ -618,8 +618,8 @@ pub fn trace(expr: &str, scale: &str, run: u64) -> Result<Trace, String> {
             None => {
                 let log = take_log().join("\n");
                 let why = if log.is_empty() { format!("cannot evaluate {shown}") } else { unname(log) };
-                if steps.is_empty() {
-                    return Err(why);
+                if steps.is_empty() || each.is_empty() {
+                    return Err(why); // (the first step already: the expression, not a step's data)
                 }
                 // one step of several (halted, aborted: no data there): a gap; all of them: the error
                 failure = Some(why);
@@ -697,7 +697,7 @@ fn steps_joined(each: Vec<(usize, Trace)>) -> Result<Trace, String> {
     if same {
         // the same x for all (.ac, .dc): every curve at the same thinned indices, exact; a table
         // (.op: no x, a value per step) or a nested .dc (thinning would cut across its segments) whole
-        let len = each[0].x.len().max(each[0].re.len());
+        let len = each.iter().map(|t| t.x.len().max(t.re.len())).max().unwrap_or(0);
         // (a nested .dc, not thinned: as many whole steps as the budget holds)
         let (index, each) = if !each[0].x.is_empty() && !rising(&each[0].x) && len * each.len() > STEP_VALUES {
             let n = (STEP_VALUES / len.max(1)).max(1);
@@ -707,10 +707,11 @@ fn steps_joined(each: Vec<(usize, Trace)>) -> Result<Trace, String> {
         };
         let keep: Vec<usize> = if each[0].x.is_empty() || !rising(&each[0].x) { (0..len).collect() } else { thin(&each[0].x, cap) };
         // (missing values, a curve shorter than its x, `v(out)[0,9]`: gaps, not a panic)
-        let pick = |v: &[f64]| if v.is_empty() { vec![] } else { keep.iter().map(|&k| v.get(k).copied().unwrap_or(f64::NAN)).collect::<Vec<f64>>() };
-        let complex = each.iter().all(|t| t.im.is_some());
+        // (a gap step, no data: NaN of the full length, so the curves after it keep their places)
+        let pick = |v: &[f64]| keep.iter().map(|&k| v.get(k).copied().unwrap_or(f64::NAN)).collect::<Vec<f64>>();
+        let complex = each.iter().filter(|t| !t.re.is_empty()).all(|t| t.im.is_some());
         return Ok(Trace {
-            x: each.iter().flat_map(|t| pick(&t.x)).collect(),
+            x: if each[0].x.is_empty() { vec![] } else { each.iter().flat_map(|_| pick(&each[0].x)).collect() },
             re: each.iter().flat_map(|t| pick(&t.re)).collect(),
             im: complex.then(|| each.iter().flat_map(|t| pick(t.im.as_deref().unwrap_or_default())).collect()),
             constant: each.iter().all(|t| t.constant),
@@ -749,7 +750,7 @@ fn steps_joined(each: Vec<(usize, Trace)>) -> Result<Trace, String> {
             y[k] + f * (y[k + 1] - y[k])
         }).collect()
     };
-    let complex = each.iter().all(|t| t.im.is_some());
+    let complex = each.iter().filter(|t| !t.re.is_empty()).all(|t| t.im.is_some()); // (a gap step has none)
     Ok(Trace {
         x: each.iter().flat_map(|_| grid.iter().copied()).collect(),
         re: each.iter().flat_map(|t| onto(&t.x, &t.re)).collect(),
