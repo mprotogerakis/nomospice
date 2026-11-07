@@ -43,8 +43,10 @@ const tickStep = (span: number) => { const e = 10 ** Math.floor(Math.log10(span 
 
 export const PoleZero = memo(function PoleZero({ run }: { run: Run }) {
   // ngspice's NaN/inf arrive as null (JSON): left out, not drawn at the origin
-  const poles = useMemo(() => run.op.filter((o) => o[0].startsWith("pole") && finite(o)).map(([, re, im]) => ({ re, im })), [run]);
-  const zeros = useMemo(() => run.op.filter((o) => o[0].startsWith("zero") && finite(o)).map(([, re, im]) => ({ re, im })), [run]);
+  // (a .step run: the first step's, `pole(1) [C=1n]`; the root locus runs that step's circuit too)
+  const mine = (n: string) => !run.steps?.length || n.endsWith(` [${run.steps[0]}]`);
+  const poles = useMemo(() => run.op.filter((o) => o[0].startsWith("pole") && mine(o[0]) && finite(o)).map(([, re, im]) => ({ re, im })), [run]); // eslint-disable-line react-hooks/exhaustive-deps
+  const zeros = useMemo(() => run.op.filter((o) => o[0].startsWith("zero") && mine(o[0]) && finite(o)).map(([, re, im]) => ({ re, im })), [run]); // eslint-disable-line react-hooks/exhaustive-deps
   const [locus, setLocus] = useState<{ values: number[]; steps: P[][]; target: string } | null>(null);
   const paths = useMemo(() => (locus ? branches(locus.steps) : []), [locus]);
   // a new run (edited circuit, live mode): an old locus and zoom would describe another circuit
@@ -144,12 +146,13 @@ export const PoleZero = memo(function PoleZero({ run }: { run: Run }) {
         )}
         {!poles.length && !zeros.length && <div className="absolute inset-0 flex items-center justify-center text-xs text-text-tertiary">No poles or zeros found: check the .pz input and output nodes (see Log).</div>}
       </div>
-      <Sidebar poles={poles} zeros={zeros} hasLocus={!!locus} setLocus={setLocus} error={error} setError={setError} />
+      <Sidebar poles={poles} zeros={zeros} hasLocus={!!locus} setLocus={setLocus} error={error} setError={setError} step={run.steps?.[0]} />
     </div>
   );
 });
 
-function Sidebar({ poles, zeros, hasLocus, setLocus, error, setError }: {
+function Sidebar({ poles, zeros, hasLocus, setLocus, error, setError, step }: {
+  step?: string;
   poles: P[]; zeros: P[]; hasLocus: boolean; setLocus: (l: { values: number[]; steps: P[][]; target: string } | null) => void; error: string; setError: (e: string) => void;
 }) {
   // its own busy state: the global `running` would make simulate() drop a Run meanwhile
@@ -212,6 +215,7 @@ function Sidebar({ poles, zeros, hasLocus, setLocus, error, setError }: {
   return (
     <div className="flex w-[340px] shrink-0 flex-col gap-2 overflow-y-auto border-l border-border bg-surface-panel p-2 text-xs">
       <div className="font-medium text-text-strong">Poles and zeros</div>
+      {step && <p className="text-2xs text-text-tertiary">.step: the first step's ({step}); the Results panel lists every step's.</p>}
       <table className="w-full table-fixed font-mono text-2xs">
         <thead className="text-left text-text-tertiary"><tr><th className="w-10 font-normal" /><th className="font-normal">s (rad/s)</th><th className="w-16 font-normal">f₀</th><th className="w-12 font-normal">ζ</th></tr></thead>
         <tbody>

@@ -418,8 +418,10 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
         }
     }
     // .noise ends in its totals plot (noise2, noise4 …); the spectrum users plot is the one before it
+    // (a step halted in its spectrum: that plot, it has a frequency scale)
+    let has = |p: &str, v: &str| plot_vectors(api, p, &[], 0).0.iter().any(|x| x == v);
     let plots: Vec<String> = done.iter().map(|d| match d.1.strip_prefix("noise").and_then(|n| n.parse::<u32>().ok()) {
-        Some(n) if n >= 2 => format!("noise{}", n - 1),
+        Some(n) if n >= 2 && !has(&d.1, "frequency") => format!("noise{}", n - 1),
         _ => d.1.clone(),
     }).collect();
     *SENSORS.lock().unwrap_or_else(|e| e.into_inner()) = (id, Some(sensors.clone()), steps.is_some().then(|| plots.clone().into()));
@@ -444,7 +446,11 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
     if scale.is_empty() {
         for (label, plot, _) in &done {
             api.command(&format!("setplot {plot}"));
-            for v in plot_vectors(api, plot, sensors, pars).0 {
+            let (vs, sc) = plot_vectors(api, plot, sensors, pars);
+            if !sc.is_empty() && !phasors {
+                continue; // (a .noise step halted in its spectrum: no totals)
+            }
+            for v in vs {
                 let Some(t) = read(api, &v) else { continue };
                 // a sensor's current is reported by its name (`I(R1)`, `Ib(Q1)`)
                 let name = named.get(&v).map_or(v.clone(), |l| l.to_string());
@@ -609,7 +615,10 @@ fn steps_joined(each: Vec<Trace>) -> Result<Trace, String> {
     let dir = if each[0].x.len() > 1 && each[0].x[1] < each[0].x[0] { -1.0 } else { 1.0 };
     let rising = |x: &[f64]| x.windows(2).all(|w| dir * w[1] >= dir * w[0]);
     if !same && !each.iter().all(|t| rising(&t.x)) {
-        return Err("the steps' x values differ and are no sweep in one direction (a nested .dc): no shared axis".into());
+        // a nested .dc with a step halted early: the steps on the first one's axis, without the others
+        let first = each[0].x.clone();
+        let whole: Vec<Trace> = each.into_iter().filter(|t| t.x == first).collect();
+        return if whole.len() > 1 { steps_joined(whole) } else { whole.into_iter().next().ok_or_else(|| "no step to show".to_string()) };
     }
     let grid: Vec<f64> = if same {
         each[0].x.clone()

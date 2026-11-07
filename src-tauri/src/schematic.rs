@@ -464,6 +464,7 @@ pub struct Netlist {
     #[serde(skip)]
     pub sensors: Vec<Sensor>,
     /// The `.step` statements (`+` lines joined): ngspice has none, the run steps (see `Prepared::steps`).
+    #[serde(skip)]
     pub steps: Vec<String>,
     pub warnings: Vec<String>,
 }
@@ -1702,7 +1703,11 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool) -> Netlist {
             let mut stepping = false; // ... of a .step: they belong to it
             for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
                 let l = line.to_lowercase();
-                // (each line without its inline comment: a `;` must not swallow the next line's values)
+                // (each line without its inline comment: a `;` must not swallow the next line's values;
+                // comment lines between a .step and its + lines skipped, as SPICE does)
+                if stepping && l.starts_with('*') {
+                    continue;
+                }
                 if stepping && l.starts_with('+') {
                     if let Some(s) = nl.steps.last_mut() {
                         s.push(' ');
@@ -2418,6 +2423,16 @@ mod tests {
         assert!(n > 10 && out.x[..n] == out.x[n..] && out.re.len() == 2 * n, "a family of two on one time grid");
         let m = |k: &str| run.meas.iter().find(|x| x.0 == format!("vmax [{k}]")).and_then(|x| x.1).unwrap_or_else(|| panic!("{:?}", run.meas));
         assert!(m("Cx=1u") < 0.5 * m("Cx=100n"), "the larger C filters more: {:?}", run.meas);
+        // .noise: each step's spectrum to plot, each step's totals in the table (sqrt(kT/C))
+        let src = EXAMPLES.iter().find(|e| e.0 == "noise_rc").unwrap().1.replace("SYMATTR Value 1n", "SYMATTR Value {C}")
+            .replace("!.noise V(out) V1 dec 20 10 10Meg", "!.noise V(out) V1 dec 20 10 10Meg\\n.step param C list 1n 4n");
+        let nl = netlist_for_sim(&parse_asc(&src), &mut Library::builtin());
+        let run = crate::ngspice::run(&nl.prepared(None, &mut vec![])).unwrap();
+        assert!(run.plot.starts_with("noise") && run.steps.len() == 2, "{} {:?}", run.plot, run.steps);
+        let sp = crate::ngspice::trace("onoise_spectrum", &run.scale, run.id).unwrap();
+        assert!(sp.x.len() > 10 && sp.x.len() % 2 == 0, "a family of two spectra");
+        let tot = |k: &str| run.op.iter().find(|o| o.0 == format!("onoise_total [{k}]")).map(|o| o.1).unwrap_or_else(|| panic!("{:?}", run.op));
+        assert!((tot("C=1n") / tot("C=4n") - 2.0).abs() < 0.1, "sqrt(kT/C): 4x C, half the noise");
     }
 
     #[test]

@@ -30,9 +30,10 @@ const mag = (t: Trace) => t.data!.re.map((re, i) => { const m = Math.hypot(re, t
 function phase(t: Trace, seg = Infinity) {
   let off = 0, prev = 0;
   return t.data!.re.map((re, i) => {
-    const p = (Math.atan2(t.data!.im?.[i] ?? 0, re) * 180) / Math.PI;
     if (i % seg === 0) off = 0; // (a family's next curve: unwrapped on its own)
-    else off += p + off - prev > 180 ? -360 : p + off - prev < -180 ? 360 : 0; // unwrap
+    if (re == null) return null; // (a gap: a step halted before this x)
+    const p = (Math.atan2(t.data!.im?.[i] ?? 0, re) * 180) / Math.PI;
+    if (i % seg !== 0) off += p + off - prev > 180 ? -360 : p + off - prev < -180 ? 360 : 0; // unwrap
     prev = p + off;
     return prev;
   });

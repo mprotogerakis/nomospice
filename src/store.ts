@@ -412,7 +412,12 @@ export async function simulate() {
       else {
         for (const n of [...nets].filter((n) => n && n !== "0").slice(0, 6)) await addTraceNow(`V(${n})`, vexpr(n), "V");
         // DC rails (vcc ...) would squash the signals on a shared axis: drop flat ones if any trace varies
-        const flat = (t: Trace) => { const v = t.data?.re ?? []; const lo = Math.min(...v), hi = Math.max(...v); return hi - lo <= 1e-6 * Math.max(Math.abs(hi), Math.abs(lo), 1e-9); };
+        // (a loop: spreading 70k samples of a stepped trace into Math.min overflows the stack; gaps skipped)
+        const flat = (t: Trace) => {
+          let lo = Infinity, hi = -Infinity;
+          for (const y of t.data?.re ?? []) if (y != null) (lo = Math.min(lo, y)), (hi = Math.max(hi, y));
+          return hi - lo <= 1e-6 * Math.max(Math.abs(hi), Math.abs(lo), 1e-9);
+        };
         const ts = get().traces;
         if (ts.some((t) => !flat(t))) set({ traces: ts.filter((t) => !flat(t)).slice(0, 4) });
       }
