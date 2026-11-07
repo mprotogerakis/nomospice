@@ -38,7 +38,9 @@ function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: 
       const own = Object.entries(it.attrs).filter(([k, v]) => SHOWN.includes(k) && (v.trim() || (k === "SpiceLine" && def?.spice_line)));
       // a row naming one of the fields above (Value …) sets it: rows come last and win; LTspice's
       // attribute names in their own spelling (`prefix` is Prefix), as the netlister reads them
-      const canon = (k: string) => [...SHOWN, ...MORE].find((n) => n.toLowerCase() === k.toLowerCase()) ?? k;
+      // (only the other names: a row spelled `value` from a file is not the Value field, which the
+      // user may have edited above; a row named exactly Value is, and wins)
+      const canon = (k: string) => MORE.find((n) => n.toLowerCase() === k.toLowerCase()) ?? k;
       const more = extra.map(([k, v]) => [canon(k.trim()), v] as [string, string]).filter(([k, v]) => k && v.trim());
       onDone({ ...it, attrs: Object.fromEntries([...new Map([...own, ...more])].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) });
     }

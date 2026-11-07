@@ -250,9 +250,15 @@ export const analysesOf = (items: Item[]) => {
 
 /** The tab shown: the chosen one while the schematic still has it, else its active analysis. */
 export function currentTab(s: { tab: Analysis | null; items: Item[] }, o = analysesOf(s.items)): Analysis | null {
-  // (only commented alternatives, LTspice's `;.tran …`: the first of them, so Run has one to run)
-  return (s.tab && o.some((x) => x.kind === s.tab) ? s.tab : (o.find((x) => x.active) ?? o[0])?.kind) ?? null;
+  if (s.tab && o.some((x) => x.kind === s.tab)) return s.tab;
+  // only commented alternatives (LTspice's `;.tran …`): the first of them, so Run has one to run —
+  // unless ngspice has an analysis of its own (.pss alone): that runs, under no tab's name
+  return (o.find((x) => x.active) ?? (activeLines(s.items, ANY_ANALYSIS) ? undefined : o[0]))?.kind ?? null;
 }
+
+/** How many active analysis lines (of `re`) the schematic's directives hold. */
+const activeLines = (items: Item[], re: RegExp) =>
+  items.reduce((n, it) => n + (it.t === "text" && it.directive ? it.text.split("\n").filter((l) => re.test(l.trim())).length : 0), 0);
 
 /** Index of the text item holding the analysis of `kind` (the active one first). */
 export function analysisItem(items: Item[], kind: Analysis | null) {
@@ -268,10 +274,9 @@ export function simDeck(items: Item[], tab: Analysis | null, opts = analysesOf(i
   // several active analyses (ngspice would run them all and show the last): the shown tab's alone;
   // the schematic's only active analysis runs as it is (the live netlist stays the schematic's)
   // (the form's kinds: an extra .pss beside one .op runs along as written, as before)
-  const count = (re: RegExp) => items.reduce((n, it) => n + (it.t === "text" && it.directive ? it.text.split("\n").filter((l) => re.test(l.trim())).length : 0), 0);
   // (none of ngspice's at all: only commented alternatives run the shown one; an active .pss alone
   // runs as written, and is not replaced by an alternative)
-  const actives = count(ANALYSIS), any = count(ANY_ANALYSIS);
+  const actives = activeLines(items, ANALYSIS), any = activeLines(items, ANY_ANALYSIS);
   // (a chosen tab whose analysis is gone: the shown one, as currentTab says)
   const kind = tab && opts.some((o) => o.kind === tab) ? tab : actives > 1 || !any ? currentTab({ tab, items }, opts) : null;
   const pick = kind ? opts.find((o) => o.kind === kind) : undefined;
