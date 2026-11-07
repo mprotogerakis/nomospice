@@ -638,10 +638,7 @@ pub fn sweepable(text: &str, placed: &[String]) -> Vec<String> {
 /// The first `.pz` statement in `text`, lowercase, its `+` continuation lines joined (comment
 /// lines between them skipped).
 pub fn pz_statement(text: &str) -> Option<String> {
-    let lines = deck_lines(text);
-    let i = lines.iter().position(|l| l.head == ".pz")?;
-    let more = lines[i + 1..].iter().take_while(|l| l.skip || l.low.trim_start().starts_with('+'));
-    Some(std::iter::once(&lines[i]).chain(more).filter(|l| !l.skip).map(|l| l.low.trim_start().trim_start_matches('+')).collect::<Vec<_>>().join(" "))
+    statements(text, &[".pz"]).into_iter().next().map(|s| s.to_ascii_lowercase()) // (inline comments cut)
 }
 
 /// `text` with every span replaced by `value` (the rest byte for byte as it was).
@@ -1027,7 +1024,7 @@ fn meas_statement(s: &str, sensors: &[Sensor], an: &str) -> Result<String, Strin
                         return Err(format!("{}: in AC/SP, ngspice takes only a number as the level ({v}), and would measure at its first number: left out", out.get(2).map_or(".meas", |n| n.as_str())));
                     }
                     Some(v) if !x.is_empty() && !number(&v) => {
-                        out.push(par(&format!("{}-({v})", unpar(&x))));
+                        out.push(par(&format!("{}-({})", unpar(&x), v.trim_matches('\''))));
                         match val_at {
                             Some(j) => toks[j] = "VAL=0".into(),
                             None => out.push("VAL=0".into()),
@@ -1066,7 +1063,7 @@ fn meas_statement(s: &str, sensors: &[Sensor], an: &str) -> Result<String, Strin
                         if simple(&a) && (number(b) || call(b)) || linear {
                             out.push(format!("WHEN {a}={b}"));
                         } else {
-                            out.push(format!("WHEN {}=0", par(&format!("{}-({b})", unpar(&a)))));
+                            out.push(format!("WHEN {}=0", par(&format!("{}-({})", unpar(&a), b.trim_matches('\'')))));
                         }
                     }
                     None => out.push(format!("WHEN {w}")),
@@ -1881,7 +1878,7 @@ mod tests {
         assert!(vary("R1 a b 'x*2'\n", "R1", 1.0).unwrap().contains("R1 a b 1e0"));
         assert_eq!(sweepable("C1 a c 1u\nRC1_rser a b 0.1\n", &placed(&["c1"])), ["C1"], "netlister parasitics");
         assert!(vary("R1 a b -1k\n", "R1", 2.0).unwrap().contains("R1 a b 2e0"), "signed value");
-        assert_eq!(pz_statement("R1 a b 1k\n.PZ in 0 out 0 vol\n* c\n+ zer\nR2 b 0 1k\n+ x\n").as_deref(), Some(".pz in 0 out 0 vol  zer"));
+        assert_eq!(pz_statement("R1 a b 1k\n.PZ in 0 out 0 vol\n* c\n+ zer\nR2 b 0 1k\n+ x\n").as_deref(), Some(".pz in 0 out 0 vol zer"));
         assert_eq!(pz_statement(".tran 1m\n.pzx 1\n"), None);
         assert_eq!(vary(".param a= a=1\n", "a", 2.0).unwrap(), ".param a= 2e0\n", "nested spans: no panic");
         // a sweep step runs only .pz: other analyses go, with their continuation lines
@@ -1934,6 +1931,7 @@ mod tests {
         assert_eq!(m(".meas tran w WHEN par('v(a)*v(b)')=0.5*V(vdd)"), ".meas tran w WHEN par('v(a)*v(b)-(0.5*V(vdd))')=0", "WHEN too");
         assert_eq!(m(".meas tran t WHEN V(out)=vth"), ".meas tran t WHEN par('V(out)-(vth)')=0", "a .param level resolves in par()");
         assert_eq!(m(".meas tran ratio PARAM tplh / tphl"), ".meas tran ratio param='tplh/tphl'", "LTspice's PARAM");
+        assert_eq!(m(".meas tran t TRIG V(in) VAL='0.5*V(vdd)' RISE=1"), ".meas tran t TRIG par('V(in)-(0.5*V(vdd))') VAL=0 RISE=1", "a quoted level: no nested quotes");
         assert_eq!(m(".meas sp g MAX V(out)/V(in)"), ".meas sp g MAX V(out)/V(in)", "SP: no par() either (linearized)");
         assert_eq!(m(".meas ac p FIND ph(V(out)) AT=1k"), ".meas ac p FIND ph(V(out)) AT=1k", "degrees vs radians: not mapped");
         let mut w = vec![];

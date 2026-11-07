@@ -311,7 +311,9 @@ export async function simulate() {
   try {
     const sim = await invoke<Sim>("simulate", { items: deck, dir: dirOf(path) });
     if (gen !== docGen) return; // another document was opened meanwhile
-    if (sim.symbols) void loadSymbols(get().items, dirOf(path), { force: true }); // edited next to the schematic
+    // edited next to the schematic: reloaded for the folder current when the request runs (a
+    // document loaded meanwhile must not get the old folder back)
+    if (sim.symbols) void loadSymbols(get().items, undefined, { force: true });
     const changed = get().items !== items; // edited while ngspice ran: results are already stale
     const op = isOp(sim);
     const newKind = !!sim.run && plotKind(sim) !== get().plot.kind;
