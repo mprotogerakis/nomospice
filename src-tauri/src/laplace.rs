@@ -339,7 +339,8 @@ fn coefficients(expr: &str) -> Result<R, String> {
 /// their sum, `<name>#lapy` (`i(E1)` still a current; results do not list these nodes). Time is scaled by w (s = w·p, capacitors of 1/w) and
 /// the states by the lowest power below, so they stay near the input's size (ngspice's voltage
 /// tolerance is 1 µV: unscaled, a 1 MHz pole's state would be ~1e-13 V). Integrators (no s⁰
-/// below) leak through 1 nS, so the operating point exists without a loop around them too.
+/// below) leak through 1 nS, so the operating point exists without a loop around them too (a DC
+/// input on one has none: there it is ~1e9 times the input; `.tran … uic` starts it at 0).
 fn realise(name: &str, n: &[&str], h: &R) -> String {
     let R(num, den) = h;
     let ord = den.len() - 1;
@@ -356,11 +357,13 @@ fn realise(name: &str, n: &[&str], h: &R) -> String {
         q if k == 1 => C::E(format!("abs({})", q.text())),
         q => C::E(format!("pow(abs({}),{:e})", q.text(), 1.0 / k as f64)),
     };
-    let nz: Vec<usize> = (0..num.len()).filter(|&k| !num[k].zero()).collect();
+    // (all poles at 0, `wc/s`, `K*(1+s*T)/(s*T)`: where |H| = 1 if the lowest power above
+    // ruled, its crossover)
+    let lo = num.iter().position(|c| !c.zero()).unwrap_or(ord);
     let w = if ord > r {
         scale(&den[r], &den[ord], ord - r)
-    } else if let (Some(&lo), Some(&hi)) = (nz.first(), nz.last()) {
-        if hi > lo { scale(&num[lo], &num[hi], hi - lo) } else { C::N(1.0) }
+    } else if ord > lo {
+        scale(&num[lo], &den[ord], ord - lo)
     } else {
         C::N(1.0)
     };
@@ -474,7 +477,8 @@ fn device(l: &str) -> Option<Result<String, String>> {
         Ok(h) => h,
         Err(e) => return Some(Err(e)),
     };
-    Some(Some(realise(toks[0], &toks[1..], &h)).filter(|t| t.len() < 200_000).ok_or_else(|| "with its parameters it would write more than 200 kB of netlist: write it with numbers".into()))
+    let t = realise(toks[0], &toks[1..], &h);
+    Some(if t.len() < 200_000 { Ok(t) } else { Err("with its parameters it would write more than 200 kB of netlist: write it with numbers".into()) })
 }
 
 #[cfg(test)]
@@ -527,6 +531,7 @@ mod tests {
         assert!(t.contains("E3 laplace_out 0 in 0 2e0\nE4 o 0 i 0 3e0\n") && !t.contains("between"), "continuations: {t}");
         assert!(t.contains("E5 o 0 e5#lapy 0 1"), "a no-break space: {t}");
         assert!(t.starts_with("G title Laplace=1/(1+s)\n"), "the title as it was: {t}");
+        assert!(rewrite("* t\nE1 o 0 i 0 Laplace=1/(s*1n)\n", &mut w).contains("CE1_z1 e1#lapz1 0 1e-9"), "an integrator scaled at its crossover");
         let t = rewrite("* t\nE1 out 0 Laplace=1/s\n", &mut w);
         assert!(w[0].contains("two output and two input") && t.contains("Laplace"), "left as it was, said");
     }
