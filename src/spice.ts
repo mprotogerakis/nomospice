@@ -577,7 +577,8 @@ export const xUnitOf = (scale: string) =>
 
 /** The unit of a product of two units (an integral over x: W·s = J, A·s = C), "" for none. */
 export function unitTimes(a: string, b: string) {
-  if (a === "Hz" || b === "Hz") return [a, b].filter(Boolean).join("·"); // (over frequency: V·Hz, not V/s)
+  // (only over time a named product: W·s = J; over frequency or a sweep of a source V·Hz, A·V, not W)
+  if (b !== "s") return [a, b].filter(Boolean).join("·");
   const [x, y] = [dimOf(a), dimOf(b)];
   return x && y ? unitName(x.map((k, j) => k + y[j])) : [a, b].filter(Boolean).join("·");
 }

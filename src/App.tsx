@@ -577,7 +577,7 @@ function BottomPanel() {
   const phasors = !!sim?.run?.plot.startsWith("ac"); // a table from .ac means one frequency: phasors
   // .tf: its statement (output, input source) names the results (only that line: no re-render per edit)
   // (the line that ran, from the deck: an edit since does not relabel these numbers)
-  const tf = useS((s) => (s.sim?.run?.plot.startsWith("tf") ? s.sim.simulated.split("\n").find((l) => /^\.tf\s/i.test(l.trim()))?.trim() ?? ".tf" : null));
+  const tf = useS((s) => (s.sim?.run?.plot.startsWith("tf") ? /^[ \t]*(\.tf\s.*)$/im.exec(s.sim.simulated)?.[1].trim() ?? ".tf" : null));
   const tabs: [typeof panel, string][] = [["log", "Log"], ["netlist", "Netlist"], ...(sim?.run?.op.length ? [["op", isOpPlot ? "Operating point" : phasors ? "Phasors" : "Results"] as [typeof panel, string]] : []), ["history", "History"]];
   // its share of the area (it scales with the window, like the plot's split): dragged at the top
   // edge, kept across sessions

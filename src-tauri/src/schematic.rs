@@ -1113,9 +1113,11 @@ pub fn sensor_currents(s: &str, sensors: &[Sensor]) -> String {
             let (key, arg) = (format!("{name}({})", rest[open + 1..e].trim()), rest[open + 1..e].trim());
             // (`I(Q1)`: pin 1 of a two-pin part or transistor, by its drawn or netlist name; a
             // subcircuit's currents are per pin)
+            // (an exact name first: a part's own I(T1) before another's alias)
             let drawn = |l: &str| l.split_once('(').map_or("", |(_, r)| r.trim_end_matches(')')).to_string();
-            sensors.iter().find(|x| x.label.eq_ignore_ascii_case(&key)
-                || (x.pin == 0 && !x.label.starts_with("Ix(") && name.eq_ignore_ascii_case("i") && (x.inst.eq_ignore_ascii_case(arg) || drawn(&x.label).eq_ignore_ascii_case(arg))))
+            sensors.iter().find(|x| x.label.eq_ignore_ascii_case(&key)).or_else(|| sensors.iter().find(|x| {
+                x.pin == 0 && !x.label.starts_with("Ix(") && name.eq_ignore_ascii_case("i") && (x.inst.eq_ignore_ascii_case(arg) || drawn(&x.label).eq_ignore_ascii_case(arg))
+            }))
         });
         match (hit, close) {
             (Some(x), Some(e)) => {
@@ -1556,6 +1558,15 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool) -> Netlist {
     }).collect();
     let mut seen = HashSet::new();
     let mut named: HashSet<String> = HashSet::new(); // current names given so far (lowercase)
+    // drawn names more than one part has (T1 a diode and T1 a resistor): those parts go by their netlist names
+    let mut drawn: HashMap<String, usize> = HashMap::new();
+    for it in items {
+        if let Item::Sym { attrs, .. } = it {
+            if let Some(n) = attrs.get("InstName").filter(|n| !n.trim().is_empty()) {
+                *drawn.entry(net_name(n).to_uppercase()).or_default() += 1;
+            }
+        }
+    }
     let mut jumped: HashMap<String, String> = HashMap::new(); // nets already tied by jumpers
     let mut any_ac = false; // some V/I source has an AC amplitude (else .ac results are all 0)
     for (i, it) in items.iter().enumerate() {
@@ -1620,7 +1631,7 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool) -> Netlist {
         let shown = attrs.get("InstName").map(|n| net_name(n)).filter(|n| !n.is_empty()).unwrap_or_else(|| inst.clone());
         let pins_of = &def.pins[..npins.min(def.pins.len())];
         let mut labels = pin_labels(prefix, &shown, pins_of);
-        let other = !shown.eq_ignore_ascii_case(&inst) && taken.contains(&shown.to_uppercase()); // (another part's netlist name)
+        let other = !shown.eq_ignore_ascii_case(&inst) && (taken.contains(&shown.to_uppercase()) || drawn.get(&shown.to_uppercase()).is_some_and(|&n| n > 1)); // (another part's name)
         if other || labels.iter().any(|l| named.contains(&l.to_lowercase())) {
             labels = pin_labels(prefix, &inst, pins_of);
         }

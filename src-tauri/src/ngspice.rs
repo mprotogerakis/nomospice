@@ -482,10 +482,9 @@ fn plot_vectors(api: &Api, plot: &str, sensors: &[crate::schematic::Sensor], par
 pub fn trace(expr: &str, scale: &str, run: u64) -> Result<Trace, String> {
     // part currents by name (`I(R1)-I(R2)`, `Ib(Q1)`): the latest run's sensors; messages show the
     // expression as written, ngspice's with the names (not the hidden sensor sources)
-    let sensors = SENSORS.lock().unwrap_or_else(|e| e.into_inner()).clone();
-    let named = crate::schematic::sensor_currents(expr, &sensors);
+    let named = crate::schematic::sensor_currents(expr, &SENSORS.lock().unwrap_or_else(|e| e.into_inner()));
     let (shown, expr) = (expr, named.as_str());
-    let unname = |log: String| sensors.iter().fold(log, |l, s| l.replace(&format!("i({})", s.source), &s.label).replace(&format!("{}#branch", s.source), &s.label));
+    let unname = |log: String| SENSORS.lock().unwrap_or_else(|e| e.into_inner()).iter().fold(log, |l, s| l.replace(&format!("i({})", s.source), &s.label).replace(&format!("{}#branch", s.source), &s.label));
     // ngspice's command line is csh-like (`;` chains, backquotes run sh, `!` history, `$` vars):
     // only characters an expression needs may pass.
     let ok = |c: char| c.is_ascii_alphanumeric() || " _()[]@#+-*/^.,:\"'<>=&|%".contains(c);
