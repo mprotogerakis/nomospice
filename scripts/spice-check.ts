@@ -214,6 +214,7 @@ assert.equal(numInfo("1Meg", "Hz")!.text, "= 1MegHz"); // not "1M", the milli tr
   assert.equal(unitTimes("V/s", "s"), "V", "a composed unit is read back");
   assert.equal(exprUnit("deriv(i(v1))", undefined, "V"), "S", "over a .dc sweep of volts");
   assert.equal(exprUnit("integ(v(a))", undefined, "°C"), "", "an x unit it does not know");
+  assert.equal(exprUnit("integ(v(a))", undefined, ""), "", "a temperature or resistance sweep");
 }
 
 console.log("spice-check: ok");

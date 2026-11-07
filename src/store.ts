@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import type { GitStatus, Item, Netlist, Sim, SymbolDef, Trace, TraceData } from "./types";
-import { currentLabel, defOf, symKey, vexpr, type Lib } from "./geom";
+import { defOf, symKey, vexpr, type Lib } from "./geom";
 import { ANALYSIS, ANY_ANALYSIS, analysisLineIndex, analysisOptions, continuation, stripAnalyses, type Analysis } from "./spice";
 
 export type Tool =
@@ -336,7 +336,7 @@ export function closeTab(kind: Analysis) {
     const moved = withoutAnalysis(next, alt[0].kind, false);
     if (moved) next = [...moved[0], { t: "text", x: at.x, y: at.y + 32 * kept, text: alt[0].line, directive: true }];
   }
-  commit(next);
+  commit(next, []); // (a text may have gone: indices shift)
 }
 
 /** The shown results put away under their tab (if the schematic still has it), `kind`'s back. */
@@ -391,7 +391,8 @@ export async function simulate() {
     if (sim.run && !op) {
       // merge by expr: traces added/removed while refetching must survive
       const fresh = await Promise.all(get().traces.map(fetchTrace));
-      if (gen === docGen) set({ traces: get().traces.map((t) => fresh.find((f) => f.expr === t.expr) ?? t) });
+      // (only the data: a trace's other settings, e.g. its axis, may have changed meanwhile)
+      if (gen === docGen) set({ traces: get().traces.map((t) => { const f = fresh.find((x) => x.expr === t.expr); return f ? { ...t, data: f.data, error: f.error } : t; }) });
     }
     // first plottable run of a document: plot the labelled nets so there is something to look at
     // (.sens plots hold no nodes: they do not use up this one-time auto-plot)
@@ -468,8 +469,7 @@ export function canProbe(target: Item | undefined, pin?: number) {
  *  "": none (a subcircuit's current is per pin). */
 export function partCurrent(nl: Netlist, i: number, pin?: number) {
   const named = nl.pin_currents?.[i] ?? [];
-  if (pin != null && named[pin]) return named[pin];
-  return nl.probes[i] ? named[0] || currentLabel(nl.insts[i]) : "";
+  return (pin != null && named[pin]) || (nl.probes[i] ? named[0] ?? "" : "");
 }
 
 /** LTspice probe: wire/label -> V(net), part -> current. Re-runs first if the results are stale,

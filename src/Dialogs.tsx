@@ -298,16 +298,17 @@ function TraceDialog() {
     // are in radians.
     const vectorUnit = (n: string) => {
       const v = vectors.find((x) => x.toLowerCase() === n.toLowerCase());
-      return !v ? "" : v === run?.scale ? { time: "s", frequency: "Hz" }[v] ?? "" : /#branch$|^@.*\[i/i.test(v) ? "A" : "V";
+      // (a device parameter @m1[gm] … has a unit of its own: none rather than a wrong one)
+      return !v ? "" : v === run?.scale ? { time: "s", frequency: "Hz" }[v] ?? "" : /#branch$|^@.*\[i/i.test(v) ? "A" : v.startsWith("@") ? "" : "V";
     };
     const f = e.match(/^(\w+)\((.*)\)$/);
     const unit = f && /^v?db$/i.test(f[1]) ? "dB" : f && /^(c?ph|vp)$/i.test(f[1]) ? "rad"
-      : raw && !noise ? "" : noise && /^\w+$/.test(e) ? noiseUnit(e) : exprUnit(e, vectorUnit, xUnitOf(run?.scale ?? ""));
+      : noise ? (/^\w+$/.test(e) ? noiseUnit(e) : "") : raw ? "" : exprUnit(e, vectorUnit, xUnitOf(run?.scale ?? ""));
     if (e) addTrace(e, e, unit);
   };
   return (
     <Modal title="Add Trace" onSubmit={submit}>
-      <Field label="Expression" hint="ngspice syntax, e.g. v(out)-v(in) · i(vsense_r1) · db(v(out)) · i(v1)*v(in)">
+      <Field label="Expression" hint="ngspice syntax and part currents, e.g. V(out)-V(in) · I(R1)-I(R2) · Ib(Q1) · V(in)*I(R1) · db(V(out))">
         <input data-autofocus list="vectors" className={FIELD} value={expr} onChange={(e) => setExpr(e.target.value)} />
       </Field>
       <datalist id="vectors">

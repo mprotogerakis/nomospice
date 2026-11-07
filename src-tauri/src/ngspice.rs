@@ -290,7 +290,7 @@ fn meas_names(deck: &str) -> std::collections::HashMap<String, bool> {
 /// deck's measurement `names` only: other `x = y` lines are not results. (Wherever they stand: the
 /// report's "Measurements for … Analysis" heading is missing for AC in older ngspice, e.g. 36.)
 fn measurements(log: &[String], names: &std::collections::HashMap<String, bool>) -> Vec<(String, Option<f64>, String, bool)> {
-    let mut out = vec![];
+    let mut out: Vec<(String, Option<f64>, String, bool)> = vec![];
     for t in log.iter().map(|l| l.trim()) {
         if t.is_empty() || t.starts_with("Measurements for") {
             continue;
@@ -301,7 +301,9 @@ fn measurements(log: &[String], names: &std::collections::HashMap<String, bool>)
             let w: Vec<&str> = stmt.split_whitespace().collect();
             let name = if w.first().is_some_and(|f| f.starts_with('.')) { w.get(crate::schematic::meas_name_at(&w)) } else { w.last() };
             if let Some((name, x)) = name.and_then(|n| Some((n, at_x(n)?))) {
-                out.push((name.to_string(), None, "failed".into(), x));
+                if !out.iter().any(|o| o.0.eq_ignore_ascii_case(name)) {
+                    out.push((name.to_string(), None, "failed".into(), x));
+                }
             }
             continue;
         }
@@ -316,8 +318,15 @@ fn measurements(log: &[String], names: &std::collections::HashMap<String, bool>)
             // a span (trig/targ) or a WHEN point lies on the x axis
             Some((n.trim().to_string(), Some(v.trim_end_matches(',').parse::<f64>().ok()?), info.trim().to_string(), x || info.contains("targ=")))
         });
-        // (first one wins: a later line of the same name in the log is not a second result)
-        out.extend(result.filter(|r| !out.iter().any(|o| o.0.eq_ignore_ascii_case(&r.0))));
+        // the first result wins (a later line of the same name is not a second one); it replaces a
+        // failure reported before it (a check pass)
+        if let Some(r) = result {
+            match out.iter().position(|o| o.0.eq_ignore_ascii_case(&r.0)) {
+                Some(k) if out[k].1.is_none() && r.1.is_some() => out[k] = r,
+                Some(_) => {}
+                None => out.push(r),
+            }
+        }
     }
     out
 }
@@ -559,6 +568,10 @@ mod tests {
         let log: Vec<String> = ["Warning: v1: no DC value, transient time 0 value used", ".meas ac p2 max mag(v(out)) failed!", "peak                =  3.174444e+00 at=  5.011872e+02"].map(String::from).into();
         let m = measurements(&log, &meas_names(".meas ac peak MAX vm(out)\n.meas ac p2 MAX mag(v(out))"));
         assert_eq!((m.len(), m[0].0.as_str(), m[1].1), (2, "p2", Some(3.174444)), "{m:?}");
+        // a failure printed before the result (a check pass): the result counts, once
+        let log: Vec<String> = [".meas tran t1 TRIG v(a) VAL=1 RISE=1 TARG v(b) VAL=1 RISE=1 failed!", "t1 failed!", "t1                  =  3e-08 targ=  4e-08 trig=  1e-08"].map(String::from).into();
+        let m = measurements(&log, &meas_names(".meas tran t1 TRIG v(a) VAL=1 RISE=1 TARG v(b) VAL=1 RISE=1"));
+        assert_eq!((m.len(), m[0].1), (1, Some(3e-8)), "{m:?}");
     }
 
     #[test]
