@@ -10,6 +10,7 @@ import {
 } from "./geom";
 import { canProbe, commit, currentNets, nextInst, partCurrent, powerMode, powerName, probe, probeMode, simulate, useS, useStatus } from "./store";
 import { copySelection, deleteSelection, duplicate, newItem, pasteClipboard, transform } from "./actions";
+import { ANY_ANALYSIS, analysisOptions } from "./spice";
 import { openMenu, type MenuItem } from "./Menu";
 import { useSize } from "./lib/useSize";
 import { cn } from "@/lib/utils";
@@ -348,12 +349,16 @@ export const Schematic = memo(function Schematic() {
    *  (the preview shows the names the click gives). */
   const pasted = (its: Shape[]): Shape[] => {
     const out: Shape[] = [], taken = new Set(items.flatMap((it) => (it.t === "sym" && it.attrs.InstName ? [it.attrs.InstName.toUpperCase()] : [])));
+    // (an analysis pasted next to the schematic's own: an alternative, as "+" on the result tabs adds them)
+    const active = items.some((it) => it.t === "text" && it.directive && it.text.split("\n").some((l) => ANY_ANALYSIS.test(l.trim())));
     for (const it of its) {
       let s = it;
+      if (s.t === "text" && s.directive && active && analysisOptions([s]).length && s.text.split("\n").every((l) => !l.trim() || l.trim().startsWith("+") || ANY_ANALYSIS.test(l.trim()))) s = { ...s, directive: false };
       if (s.t === "sym") {
         // (its symbol not loaded yet: the prefix its own name has, R1 -> R2, not U1)
         const prefix = prefixOf(s, defOf(lib, s)) || /^[a-z]+/i.exec(s.attrs.InstName ?? "")?.[0].toUpperCase() || "X";
-        if (!s.attrs.InstName || taken.has(s.attrs.InstName.toUpperCase())) s = { ...s, attrs: { ...s.attrs, InstName: nextInst([...items, ...out], prefix) } };
+        // (numbered past the pasted parts' own names too: R1 R2 into a document with R1 -> R3 R2)
+        if (!s.attrs.InstName || taken.has(s.attrs.InstName.toUpperCase())) s = { ...s, attrs: { ...s.attrs, InstName: nextInst([...items, ...its, ...out], prefix) } };
         taken.add(s.attrs.InstName.toUpperCase());
       }
       out.push(s);

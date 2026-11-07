@@ -187,9 +187,10 @@ export async function loadDoc(items: Item[], path: string | null) {
 
 export function nextInst(items: Item[], prefix: string) {
   const p = prefix === "X" ? "U" : prefix;
+  const re = new RegExp(`^${p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(\\d+)$`, "i"); // (a Prefix attribute is any text: as text)
   let n = 0;
   for (const it of items) {
-    const m = it.t === "sym" ? it.attrs.InstName?.match(new RegExp(`^${p}(\\d+)$`, "i")) : null;
+    const m = it.t === "sym" ? it.attrs.InstName?.match(re) : null;
     if (m) n = Math.max(n, +m[1]);
   }
   return `${p}${n + 1}`;

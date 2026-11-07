@@ -61,7 +61,7 @@ function shape(v: unknown): Shape | null {
   }
   const attrs = it.attrs as Record<string, unknown>;
   // (an attribute's key without spaces, or empty: a bare SYMATTR line of a file)
-  if (it.t === "sym" && word(it.sym) && typeof it.rot === "string" && /^[RM](0|90|180|270)$/.test(it.rot) && attrs && typeof attrs === "object" && Object.keys(attrs).every((k) => str(k) && !/\s/.test(k)) && Object.values(attrs).every(str)) {
+  if (it.t === "sym" && word(it.sym) && typeof it.rot === "string" && /^[RM](0|90|180|270)$/.test(it.rot) && attrs && typeof attrs === "object" && !Array.isArray(attrs) && Object.keys(attrs).every((k) => str(k) && !/\s/.test(k)) && Object.values(attrs).every(str)) {
     return { t: "sym", sym: it.sym as string, x: it.x as number, y: it.y as number, rot: it.rot as string, attrs: { ...(attrs as Record<string, string>) }, ...extras(it.extra, "WINDOW") };
   }
   return null;
