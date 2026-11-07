@@ -118,8 +118,8 @@ export const Waveform = memo(function Waveform() {
   const freq = run?.scale === "frequency";
   const xUnit = freq ? "Hz" : run?.scale === "time" ? "s" : run?.scale.startsWith("i") ? "A" : run?.scale.endsWith("sweep") && run.scale.startsWith("v") ? "V" : "";
   const ok = useMemo(() => traces.filter((t) => t.data?.x.length), [traces]);
-  // constants (reference lines: 0.5, 500m, -3) are drawn on the top pane's axis, whatever it is
-  // now: dB in a Bode plot, else volts first
+  // constants (reference lines: 0.5, 500m) are drawn on the top pane's axis, whatever it is now:
+  // volts first, the magnitude in a Bode plot
   const [lines, signals] = useMemo(() => [ok.filter((t) => t.data!.constant), ok.filter((t) => !t.data!.constant)], [ok]);
   // .ac without an AC source: every value is exactly 0 (no dB at all, phase flat) - say so instead
   const zero = useMemo(() => ac && signals.length > 0 && signals.every((t) => t.data!.re.every((v, i) => !v && !t.data!.im?.[i])), [ac, signals]);
@@ -147,7 +147,9 @@ export const Waveform = memo(function Waveform() {
       else panes.push({ unit, series });
     }
     if (lines.length && !panes.length) panes.push({ unit: "", series: [] });
-    panes[0]?.series.push(...lines.flatMap((t) => split(t, t.data!.re)));
+    // one series per level (not one per outer .dc step); in a Bode plot a magnitude, as in LTspice:
+    // 1 at 0 dB, 0.707 at -3 dB
+    panes[0]?.series.push(...lines.map((t) => ({ t, y: (cplx.length ? mag(t) : t.data!.re).slice(0, seg) })));
     return panes;
   }, [ok, lines, signals, zero, seg]);
 
