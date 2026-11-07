@@ -275,7 +275,7 @@ export function rotateInPlace(it: Sym, lib: Lib, f: (r: string) => string): Sym 
 export const prefixOf = (it: Sym, def?: SymbolDef) => ((it.attrs.Prefix?.trim() || def?.prefix || "")[0] ?? "").toUpperCase();
 
 /** ngspice voltage expression. Always quoted: ngspice misparses 3V3/5V and reads gt/and/not as operators. */
-export const vexpr = (net: string) => `v("${net}")`;
+export const vexpr = (net: string) => (net === "0" ? "0" : `v("${net}")`); // (ground: no vector)
 
 /** LTspice-style label for a current probe (the expression comes from the backend: Netlist.probes). */
 export const currentLabel = (inst: string) => `${{ q: "Ic", m: "Id", j: "Id" }[inst[0]?.toLowerCase()] ?? "I"}(${inst})`;

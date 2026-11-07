@@ -1974,6 +1974,8 @@ mod tests {
         let half = crate::ngspice::trace("2*0.5/2", &run.scale, run.id).unwrap(); // a constant expression too
         assert!(one.constant && half.constant && half.re[0] == 0.5, "constants are flagged");
         assert!(!crate::ngspice::trace("v(in)", &run.scale, run.id).unwrap().constant);
+        assert!(!crate::ngspice::trace("mean(v(in))", &run.scale, run.id).unwrap().constant, "a measured scalar keeps its own pane");
+        assert!(crate::ngspice::trace("(1+2)*0.5", &run.scale, run.id).unwrap().constant);
     }
 
     #[test]

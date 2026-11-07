@@ -330,8 +330,9 @@ pub struct Trace {
     pub x: Vec<f64>,
     pub re: Vec<f64>,
     pub im: Option<Vec<f64>>,
-    /// one value spread over the x range (`0.5`, `3.3/2`; not `vdd/2`, that is the node v(vdd)): a
-    /// reference line, drawn on the top pane
+    /// a level: plain arithmetic of numbers (`0.5`, `3.3/2`), one real value spread over the x range,
+    /// drawn as a reference line on the top pane. Not `vdd/2` (the node v(vdd)), nor a measured
+    /// scalar with its own unit (`mean(i(vsense_r1))`, `v(out)[25]`)
     pub constant: bool,
     /// ngspice vector type (sim.h): 3 = voltage, 4 = current
     #[serde(skip)]
@@ -489,7 +490,8 @@ pub fn trace(expr: &str, scale: &str, run: u64) -> Result<Trace, String> {
     // a constant (`1`, a reference level) is one value: a line across the x range
     if t.re.len() == 1 && t.x.len() > 1 {
         let n = t.x.len();
-        t.constant = true;
+        let call = expr.contains('[') || expr.char_indices().any(|(i, c)| c == '(' && expr[..i].trim_end().ends_with(|p: char| p.is_alphanumeric() || p == '_'));
+        t.constant = t.im.is_none() && !call;
         t.re = vec![t.re[0]; n];
         if let Some(im) = &mut t.im {
             *im = vec![im[0]; n];

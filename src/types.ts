@@ -96,7 +96,7 @@ export interface TraceData {
   x: number[];
   re: number[];
   im: number[] | null;
-  /** one value over the whole x range (0.5, 3.3/2): a reference line on the top pane */
+  /** a level (0.5, 3.3/2: numbers only) over the whole x range: a reference line on the top pane */
   constant?: boolean;
 }
 
