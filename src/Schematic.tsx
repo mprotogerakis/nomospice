@@ -10,7 +10,7 @@ import {
 } from "./geom";
 import { canProbe, commit, currentNets, nextInst, partCurrent, powerMode, powerName, probe, probeMode, simulate, useS, useStatus } from "./store";
 import { copySelection, deleteSelection, duplicate, newItem, pasteClipboard, transform } from "./actions";
-import { ANY_ANALYSIS, analysisOptions } from "./spice";
+import { ANALYSIS, ANY_ANALYSIS, analysisOptions, continuation } from "./spice";
 import { openMenu, type MenuItem } from "./Menu";
 import { useSize } from "./lib/useSize";
 import { cn } from "@/lib/utils";
@@ -353,7 +353,18 @@ export const Schematic = memo(function Schematic() {
     const active = items.some((it) => it.t === "text" && it.directive && it.text.split("\n").some((l) => ANY_ANALYSIS.test(l.trim())));
     for (const it of its) {
       let s = it;
-      if (s.t === "text" && s.directive && active && analysisOptions([s]).length && s.text.split("\n").every((l) => !l.trim() || l.trim().startsWith("+") || ANY_ANALYSIS.test(l.trim()))) s = { ...s, directive: false };
+      if (s.t === "text" && s.directive && active) {
+        // its analysis lines that read as an alternative (the rule result tabs use): a comment of their
+        // own below what stays active (a .param beside them); others stay as they are
+        const lines = s.text.split("\n"), alt = new Set<number>();
+        lines.forEach((l, i) => ANALYSIS.test(l.trim()) && analysisOptions([{ text: [i, ...continuation(lines, i)].map((j) => lines[j]).join("\n"), directive: false }]).length && [i, ...continuation(lines, i)].forEach((j) => alt.add(j)));
+        if (alt.size) {
+          const rest = lines.filter((_, j) => !alt.has(j));
+          if (rest.some((l) => l.trim())) out.push({ ...s, text: rest.join("\n") });
+          out.push({ ...s, y: s.y + (rest.some((l) => l.trim()) ? 32 * rest.length : 0), text: lines.filter((_, j) => alt.has(j)).join("\n"), directive: false });
+          continue;
+        }
+      }
       if (s.t === "sym") {
         // (its symbol not loaded yet: the prefix its own name has, R1 -> R2, not U1)
         const prefix = prefixOf(s, defOf(lib, s)) || /^[a-z]+/i.exec(s.attrs.InstName ?? "")?.[0].toUpperCase() || "X";

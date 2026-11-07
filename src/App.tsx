@@ -297,7 +297,7 @@ export function App() {
         // selected text anywhere (the log, the netlist): its own copy
         const text = !!sel?.toString();
         if ((k === "c" || k === "x") && !text) return void (copySelection(k === "x") && e.preventDefault());
-        if (k === "v" && !text) return e.preventDefault(), pasteClipboard();
+        if (k === "v") return e.preventDefault(), pasteClipboard(); // (a selection does not matter: typing does, see above)
         if (k === "s") return run(() => saveFile(e.shiftKey));
         if (k === "o") return run(openFile);
         if (k === "n") return run(newFile);
