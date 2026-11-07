@@ -46,11 +46,13 @@ function segment(xs: number[]) {
   return n > 1 ? n : xs.length;
 }
 
-/** A family member's name: its .step (R=1k) where the trace has a curve per step, else its number
- *  (a nested .dc), nothing for a single curve. */
+/** Curve `k` of `n` of trace `t`: its .step (R=1k, as the trace says which steps it holds), else its
+ *  number (a nested .dc), nothing for a single curve. */
+const curveName = (t: Trace, k: number, n: number, steps: string[]) =>
+  n < 2 ? "" : t.data?.steps?.length === n ? steps[t.data.steps[k]] ?? `#${k + 1}` : `#${k + 1}`;
 function member(p: Pane, s: Series, steps: string[]) {
-  const mine = p.series.filter((o) => o.t === s.t), k = mine.indexOf(s);
-  return mine.length < 2 ? "" : mine.length === steps.length ? steps[k] : `#${k + 1}`;
+  const mine = p.series.filter((o) => o.t === s.t);
+  return curveName(s.t, mine.indexOf(s), mine.length, steps);
 }
 
 /** The plotted data as CSV: x, then one column per series (family curves named by step or numbered). */
@@ -403,7 +405,7 @@ const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot, steps }:
       if (x == null || !steps.length || ps.length < 2) return undefined;
       return panes.flatMap((p) => {
         const mine = p.series.filter((s) => s.t === t);
-        return mine.map((s, k) => `${mine.length === steps.length ? steps[k] : `#${k + 1}`}: ${fmt(p.unit, at(xs, s.y, x))}`);
+        return mine.map((s, k) => `${curveName(t, k, mine.length, steps)}: ${fmt(p.unit, at(xs, s.y, x))}`);
       }).join("\n");
     };
     const delta = a != null && b != null && ps.length ? ps.map(({ s, unit }) => fmt(unit, at(xs, s.y, b) - at(xs, s.y, a))).join(" ") : "–";

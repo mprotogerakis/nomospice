@@ -348,6 +348,8 @@ pub struct Trace {
     /// ngspice vector type (sim.h): 3 = voltage, 4 = current
     #[serde(skip)]
     pub typ: i32,
+    /// a `.step` run: which steps (indices into `Run::steps`) its curves are, end to end
+    pub steps: Option<Vec<usize>>,
 }
 
 fn read(api: &Api, name: &str) -> Option<Trace> {
@@ -356,11 +358,11 @@ fn read(api: &Api, name: &str) -> Option<Trace> {
     let n = v.len.max(0) as usize;
     if !v.real.is_null() {
         let re = unsafe { std::slice::from_raw_parts(v.real, n) }.to_vec();
-        return Some(Trace { x: vec![], re, im: None, constant: false, typ: v.typ });
+        return Some(Trace { x: vec![], re, im: None, constant: false, typ: v.typ, steps: None });
     }
     if !v.comp.is_null() {
         let c = unsafe { std::slice::from_raw_parts(v.comp, n) };
-        return Some(Trace { x: vec![], re: c.iter().map(|z| z.re).collect(), im: Some(c.iter().map(|z| z.im).collect()), constant: false, typ: v.typ });
+        return Some(Trace { x: vec![], re: c.iter().map(|z| z.re).collect(), im: Some(c.iter().map(|z| z.im).collect()), constant: false, typ: v.typ, steps: None });
     }
     None
 }
@@ -375,7 +377,8 @@ pub fn run(netlist: &Prepared) -> Result<Run, Vec<String>> {
 /// A deck with `.step` runs once per step; the steps' plots stay (traces read them all).
 pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec<String>> {
     // (a .step it cannot run, a model parameter: the analysis once, as before, said in the log)
-    let (steps, unstepped) = match netlist.steps() {
+    // (also one whose first step cannot be made: `.step V9` of no such source)
+    let (steps, unstepped) = match netlist.steps().and_then(|s| s.map(|s| s.at(0).map(|_| s)).transpose()) {
         Ok(s) => (s, None),
         Err(e) => (None, Some(format!("Warning: .step not run (the analysis runs once): {e}"))),
     };
@@ -397,7 +400,7 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
         let (label, deck) = match &step {
             Ok(Some((l, p))) => (l.as_str(), p.text()),
             Ok(None) => ("", text),
-            Err(e) if done.is_empty() => return Err(e.clone()),
+            Err(e) if done.is_empty() => return Err(unstepped.into_iter().chain(e.iter().cloned()).collect()),
             Err(e) => {
                 failed = e.clone();
                 break;
@@ -414,7 +417,7 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
                     break;
                 }
             }
-            Err(log) if done.is_empty() => return Err(log),
+            Err(log) if done.is_empty() => return Err(unstepped.into_iter().chain(log).collect()),
             Err(log) => {
                 failed = std::iter::once(format!("--- .step {label} failed")).chain(log).collect();
                 break;
@@ -604,16 +607,17 @@ pub fn trace(expr: &str, scale: &str, run: u64) -> Result<Trace, String> {
                 *im = vec![im[0]; n];
             }
         }
-        each.push(t);
+        each.push((each.len(), t));
     }
-    if each.len() == 1 { Ok(each.pop().unwrap()) } else { steps_joined(each) }
+    if each.len() == 1 { Ok(each.pop().unwrap().1) } else { steps_joined(each) }
 }
 
 /// The steps' curves of one trace as one, end to end over a shared x (each step's own where they
 /// agree, a .ac or .dc; else, .tran picking its own time points, the union of their x, or the
 /// densest step's where that would grow past three times it: steps × points stays bounded), each
 /// step interpolated onto it, so the plot shows them as a family like a nested .dc.
-fn steps_joined(each: Vec<Trace>) -> Result<Trace, String> {
+fn steps_joined(each: Vec<(usize, Trace)>) -> Result<Trace, String> {
+    let (index, each): (Vec<usize>, Vec<Trace>) = each.into_iter().unzip();
     let same = each.windows(2).all(|w| w[0].x.len() == w[1].x.len() && w[0].x.iter().zip(&w[1].x).all(|(a, b)| (a - b).abs() <= 1e-12 * a.abs().max(b.abs())));
     // (a sweep down, `.dc V1 5 0 -0.1`: worked on as -x)
     let dir = if each[0].x.len() > 1 && each[0].x[1] < each[0].x[0] { -1.0 } else { 1.0 };
@@ -625,13 +629,14 @@ fn steps_joined(each: Vec<Trace>) -> Result<Trace, String> {
         if each.iter().any(|t| t.x != first && !first.starts_with(&t.x)) {
             return Err("the steps sweep different ranges (a nested .dc): no shared axis to plot them on".into());
         }
-        let whole: Vec<Trace> = each.into_iter().filter(|t| t.x == first).collect();
-        return if whole.len() > 1 { steps_joined(whole) } else { whole.into_iter().next().ok_or_else(|| "no step to show".to_string()) };
+        let whole: Vec<(usize, Trace)> = index.into_iter().zip(each).filter(|(_, t)| t.x == first).collect();
+        return if whole.len() > 1 { steps_joined(whole) } else { whole.into_iter().next().map(|(k, mut t)| (t.steps = Some(vec![k]), t).1).ok_or_else(|| "no step to show".to_string()) };
     }
     let grid: Vec<f64> = if same {
         each[0].x.clone()
     } else {
-        let cap = (3 * each.iter().map(|t| t.x.len()).max().unwrap_or(0)).max(200_000);
+        // (3x the longest step at least, up to 200k where the steps' 20M values allow it)
+        let cap = (3 * each.iter().map(|t| t.x.len()).max().unwrap_or(0)).max((20_000_000 / each.len()).min(200_000));
         let mut g: Vec<f64> = each.iter().flat_map(|t| t.x.iter().copied()).collect();
         g.sort_by(|a, b| (dir * a).total_cmp(&(dir * b)));
         g.dedup_by(|a, b| (*a - *b).abs() <= 1e-12 * a.abs().max(b.abs()));
@@ -670,6 +675,7 @@ fn steps_joined(each: Vec<Trace>) -> Result<Trace, String> {
         im: complex.then(|| each.iter().flat_map(|t| onto(&t.x, t.im.as_deref().unwrap_or_default())).collect()),
         constant: each.iter().all(|t| t.constant),
         typ: each[0].typ,
+        steps: Some(index),
     })
 }
 

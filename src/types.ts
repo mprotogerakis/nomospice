@@ -103,6 +103,8 @@ export interface TraceData {
   im: number[] | null;
   /** a level (0.5, 3.3/2: numbers only) over the whole x range: a reference line on the top pane */
   constant?: boolean;
+  /** a .step run: which steps (indices into Run.steps) its curves are, end to end */
+  steps?: number[] | null;
 }
 
 export interface Trace {

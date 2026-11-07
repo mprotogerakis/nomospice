@@ -814,7 +814,18 @@ impl Prepared {
         if total > MAX_STEPS {
             return Err(format!("{total} steps: at most {MAX_STEPS}"));
         }
-        Ok(Some(Steps { deck: self, steps, total }))
+        // each combination's label (`R=1k temp=27`), told apart where values repeat (`list 1k 1k`)
+        let mut labels: Vec<String> = (0..total).map(|mut k| steps.iter().map(|s| {
+            let v = s.values[k % s.values.len()];
+            k /= s.values.len();
+            format!("{}={}", s.name(), short_num(v))
+        }).collect::<Vec<_>>().join(" ")).collect();
+        for k in 0..total {
+            if labels.iter().filter(|l| **l == labels[k]).count() > 1 {
+                labels[k] = format!("{} #{}", labels[k], k + 1);
+            }
+        }
+        Ok(Some(Steps { deck: self, steps, total, labels }))
     }
 }
 
@@ -823,20 +834,19 @@ pub struct Steps<'a> {
     deck: &'a Prepared,
     steps: Vec<Step>,
     pub total: usize,
+    labels: Vec<String>,
 }
 
 impl Steps<'_> {
-    /// Combination `k`: its label (`R=1k temp=27`) and its deck (one at a time: a big deck times a
-    /// thousand steps would not fit).
-    pub fn at(&self, mut k: usize) -> Result<(String, Prepared), String> {
-        let (mut text, mut label) = (self.deck.0.clone(), vec![]);
+    /// Combination `k`: its label and its deck (one at a time: a big deck times a thousand steps
+    /// would not fit).
+    pub fn at(&self, k: usize) -> Result<(String, Prepared), String> {
+        let (mut text, mut i) = (self.deck.0.clone(), k);
         for s in &self.steps {
-            let v = s.values[k % s.values.len()];
-            k /= s.values.len();
-            text = s.apply(&text, v)?;
-            label.push(format!("{}={}", s.name(), short_num(v)));
+            text = s.apply(&text, s.values[i % s.values.len()])?;
+            i /= s.values.len();
         }
-        Ok((label.join(" "), Prepared(text, self.deck.1.clone(), vec![])))
+        Ok((self.labels[k].clone(), Prepared(text, self.deck.1.clone(), vec![])))
     }
 }
 
@@ -2438,6 +2448,9 @@ mod tests {
         let p = Prepared("* t\nV1 a 0 AC 1\n.temp 50\n.end\n".into(), vec![], vec![".step V1 list 3".into(), ".step temp list -40".into()]);
         let t = p.steps().unwrap().unwrap().at(0).unwrap().1;
         assert!(t.text().contains("V1 a 0 DC 3e0 AC 1") && t.text().contains(".temp -4e1") && !t.text().contains("options"), "{}", t.text());
+        let dup = Prepared("* t\n.end\n".into(), vec![], vec![".step param R list 1k 1k".into()]);
+        let st = dup.steps().unwrap().unwrap();
+        assert_eq!((st.at(0).unwrap().0, st.at(1).unwrap().0), ("R=1k #1".to_string(), "R=1k #2".to_string()), "labels told apart");
         let p = Prepared("* t\nV1 a 0 AC 1 DC 2\n.end\n".into(), vec![], vec![".step V1 list 3".into()]);
         assert!(p.steps().unwrap().unwrap().at(0).unwrap().1.text().contains("V1 a 0 AC 1 DC 3e0"), "the DC value where it is");
         assert!(parse_step(".step VDMOS IRF530(Rd) 1m 10m 1m").unwrap_err().contains("model parameter"));
@@ -2457,6 +2470,7 @@ mod tests {
         let out = crate::ngspice::trace("V(out)", &run.scale, run.id).unwrap();
         let n = out.x.len() / 2;
         assert!(n > 10 && out.x[..n] == out.x[n..] && out.re.len() == 2 * n, "a family of two on one time grid");
+        assert_eq!(out.steps, Some(vec![0, 1]), "which steps its curves are");
         let m = |k: &str| run.meas.iter().find(|x| x.0 == format!("vmax [{k}]")).and_then(|x| x.1).unwrap_or_else(|| panic!("{:?}", run.meas));
         assert!(m("Cx=1u") < 0.5 * m("Cx=100n"), "the larger C filters more: {:?}", run.meas);
         // .noise: each step's spectrum to plot, each step's totals in the table (sqrt(kT/C))

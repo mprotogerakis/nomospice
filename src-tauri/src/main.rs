@@ -231,10 +231,10 @@ async fn root_locus(items: Vec<Item>, dir: Option<String>, target: String, value
     tauri::async_runtime::spawn_blocking(move || {
         let deck = sim.prepared(dir.as_deref().map(std::path::Path::new), &mut vec![]);
         // (a .step deck: its first step, so a parameter only .step defines is there; one .pz per locus step)
-        let deck = match deck.steps() {
-            Ok(Some(s)) => s.at(0)?.1,
-            Ok(None) => deck,
-            Err(e) => return Err(format!(".step: {e}")),
+        // (a .step that cannot run: the deck as it is, as a simulation runs it once)
+        let deck = match deck.steps().ok().flatten().and_then(|s| s.at(0).ok()) {
+            Some((_, first)) => first,
+            None => deck,
         };
         match schematic::pz_statement(deck.text()) {
             None => return Err("the schematic has no .pz analysis (Simulation command → Poles/zeros)".into()),
