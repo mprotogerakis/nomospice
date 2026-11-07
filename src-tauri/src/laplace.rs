@@ -270,7 +270,7 @@ impl P<'_> {
                 if mentions_s(text) {
                     return Err(format!("`{text}`: only a ratio of polynomials in s runs (no delay exp(-s*T), no sqrt(s))"));
                 }
-                if ["mc", "flat", "gauss", "unif", "aunif", "agauss"].iter().any(|f| name.eq_ignore_ascii_case(f)) {
+                if calls(text, &["mc", "flat", "gauss", "unif", "aunif", "agauss"]) {
                     // (kept as text, it would be drawn anew in each coefficient it lands in)
                     return Err(format!("`{text}`: a random value here is drawn once per coefficient; draw it in a .param (.param tau=mc(1m,0.1)) and use that"));
                 }
@@ -311,13 +311,17 @@ pub fn internal(v: &str) -> bool {
 
 /// Whether `t` reads a voltage or current (`v(ctl)`, `abs(i(R1))`, `vdb(x)`): numparam cannot.
 fn probes(t: &str) -> bool {
-    const F: [&str; 14] = ["v", "i", "vm", "vp", "vr", "vi", "vdb", "vg", "im", "ip", "ir", "ii", "idb", "ig"];
+    calls(t, &["v", "i", "vm", "vp", "vr", "vi", "vdb", "vg", "im", "ip", "ir", "ii", "idb", "ig"])
+}
+
+/// Whether `t` calls one of the functions `f` anywhere (`abs(mc(1,2))`).
+fn calls(t: &str, f: &[&str]) -> bool {
     let b = t.as_bytes();
     let word = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
     (0..b.len()).any(|k| {
         (k == 0 || !word(b[k - 1])) && {
             let n = b[k..].iter().take_while(|&&c| word(c)).count();
-            n > 0 && t[k + n..].trim_start().starts_with('(') && F.iter().any(|f| t[k..k + n].eq_ignore_ascii_case(f))
+            n > 0 && t[k + n..].trim_start().starts_with('(') && f.iter().any(|f| t[k..k + n].eq_ignore_ascii_case(f))
         }
     })
 }
@@ -665,7 +669,7 @@ mod tests {
         assert!(coefficients("1/(1+2s)").unwrap_err().contains("2*s") && coefficients("1/(1+1ms)").unwrap_err().contains("1m*s"));
         assert_eq!(c("sqrt({k})/(1+s)").0, ["{sqrt((k))}"]);
         assert!(coefficients("v(ctl)/(1+s)").unwrap_err().contains("no voltages"));
-        assert!(coefficients("1/(1+s*mc(1m,0.1))").unwrap_err().contains(".param"));
+        assert!(coefficients("1/(1+s*mc(1m,0.1))").unwrap_err().contains(".param") && coefficients("1/(1+s*abs(gauss(1m)))").unwrap_err().contains(".param"));
         assert!(coefficients("abs(V (ctl))/(1+s)").unwrap_err().contains("no voltages") && coefficients("vdb(x)/(1+s)").is_err());
         assert!(coefficients("{vin*2}/(1+s)").is_ok() && coefficients("sqrt(iq)/(1+s)").is_ok(), "names, not calls");
         assert_eq!(c("{k*{a}}/(1+s)").0, ["{(k)*(a)}"], "nested braces");
