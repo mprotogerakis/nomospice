@@ -272,15 +272,20 @@ export const Schematic = memo(function Schematic() {
 
   const size = useSize(svgRef);
 
-  const fit = () => {
-    autoFit.current = true;
+  /** `its` in the middle, at the zoom that fits them (at most FIT_MAX), or as `zoom` makes of that
+   *  fitting zoom; nothing to show: the origin. */
+  const frame = (its: Item[], zoom = (fits: number) => fits) => {
     const left = leftLabels(items);
-    const b = union(items.map((it) => box(it, lib, left)));
+    const b = union(its.map((it) => box(it, lib, left)));
     const { w, h } = size;
     if (!b) return setView({ x: w / 2, y: h / 2, k: 1.5 });
     const pad = Math.min(FIT_PADDING, w / 8, h / 8); // a low canvas (plot + panel open) must not shrink the circuit to nothing
-    const k = clampZoom(Math.min((w - 2 * pad) / Math.max(b[2] - b[0], 1), (h - 2 * pad) / Math.max(b[3] - b[1], 1), FIT_MAX));
+    const k = clampZoom(zoom(Math.min((w - 2 * pad) / Math.max(b[2] - b[0], 1), (h - 2 * pad) / Math.max(b[3] - b[1], 1), FIT_MAX)));
     setView({ k, x: w / 2 - ((b[0] + b[2]) / 2) * k, y: h / 2 - ((b[1] + b[3]) / 2) * k });
+  };
+  const fit = () => {
+    autoFit.current = true;
+    frame(items);
   };
   // refit on document load, and on layout changes (waveform pane opening) while still auto-fitted
   useEffect(fit, [fitToken, size.w === 0]);
@@ -295,15 +300,13 @@ export const Schematic = memo(function Schematic() {
   }, [size]);
   useEffect(() => {
     const onFit = () => fit();
-    // (found items: in the middle; zoomed out only as far as they need, in no further than a fit)
+    // (found items: in the middle; zoomed out as far as they need, in to at least 1:1 (a part
+    // found while zoomed far out is no dot), never further than a fit)
     const onShow = (e: Event) => {
       const its = ((e as CustomEvent<number[]>).detail ?? []).map((i) => items[i]).filter(Boolean);
-      const b = union(its.map((it) => box(it, lib, leftLabels(items))));
-      if (!b || !size.w) return;
+      if (!its.length || !size.w || !size.h) return;
       autoFit.current = false;
-      const pad = Math.min(FIT_PADDING, size.w / 8, size.h / 8);
-      const k = clampZoom(Math.min(view.k, (size.w - 2 * pad) / Math.max(b[2] - b[0], 1), (size.h - 2 * pad) / Math.max(b[3] - b[1], 1)));
-      setView({ k, x: size.w / 2 - ((b[0] + b[2]) / 2) * k, y: size.h / 2 - ((b[1] + b[3]) / 2) * k });
+      frame(its, (fits) => Math.min(fits, Math.max(view.k, 1)));
     };
     window.addEventListener("nomospice:fit", onFit);
     window.addEventListener("nomospice:show", onShow);

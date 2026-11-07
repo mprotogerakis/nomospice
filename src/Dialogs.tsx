@@ -322,14 +322,15 @@ function TraceDialog() {
   );
 }
 
-/** What a search finds in an item: the words it is known by, and how it is listed. */
-function findable(it: Item): { text: string; shown: string; kind: string } | null {
+/** What a search finds in an item: the fields it is known by (each searched on its own: no match
+ *  across two), and how it is listed. */
+function findable(it: Item): { fields: string[]; shown: string; kind: string } | null {
   if (it.t === "sym") {
-    const a = it.attrs;
-    return { text: [a.InstName, a.Value, a.Value2, a.SpiceLine, it.sym].filter(Boolean).join(" "), shown: [a.InstName, a.Value].filter(Boolean).join("  ") || it.sym, kind: it.sym.split(/[\\/]/).pop() ?? it.sym };
+    const a = it.attrs, kind = it.sym.split(/[\\/]/).pop() ?? it.sym; // (the symbol's name, not its library's folders)
+    return { fields: [a.InstName, a.Value, a.Value2, a.SpiceLine, kind].filter(Boolean), shown: [a.InstName, a.Value].filter(Boolean).join("  ") || kind, kind };
   }
-  if (it.t === "flag") return { text: it.name, shown: it.name, kind: it.name === "0" ? "ground" : "net label" };
-  if (it.t === "text") return { text: it.text, shown: it.text.split("\n")[0], kind: it.directive ? "directive" : "comment" };
+  if (it.t === "flag") return { fields: [it.name], shown: it.name, kind: it.name === "0" ? "ground" : "net label" };
+  if (it.t === "text") return { fields: [it.text], shown: it.text.split("\n").find((l) => l.trim()) ?? "", kind: it.directive ? "directive" : "comment" };
   return null;
 }
 
@@ -341,11 +342,14 @@ function FindDialog() {
   const hits = useMemo(() => {
     const t = q.trim().toLowerCase();
     if (!t) return [];
-    return items.flatMap((it, i) => ((f) => (f && f.text.toLowerCase().includes(t) ? [{ i, ...f }] : []))(findable(it)));
+    return items.flatMap((it, i) => {
+      const f = findable(it);
+      return f?.fields.some((x) => x.toLowerCase().includes(t)) ? [{ i, ...f }] : [];
+    });
   }, [items, q]);
   const show = (idx: number[]) => {
     close();
-    useS.setState({ sel: idx });
+    useS.setState({ sel: idx, tool: { k: "select" } }); // (not a part still being placed)
     setTimeout(() => window.dispatchEvent(new CustomEvent("nomospice:show", { detail: idx })));
   };
   return (
