@@ -4,7 +4,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { open } from "@tauri-apps/plugin-dialog";
 import type { Item, LibEntry, LibSource } from "./types";
 import { addTrace, analysisItem, commit, currentTab, fileName, isSymbolDoc, loadSymbols, placePart, placeSymbol, refreshLibrarySymbols, setYAxis, useS } from "./store";
-import { defOf, portOf, prefixOf, vexpr } from "./geom";
+import { defOf, pinLine, portOf, prefixOf, vexpr } from "./geom";
 import { Button } from "./ui/button";
 import { closeDialog as close, Field, FIELD, Modal, numHelp, NumField, Rows, TextField } from "./ui/dialog";
 import { SourceEditor } from "./SourceEditor";
@@ -125,12 +125,16 @@ function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: 
           </Field>
           {/* (its PIN line: where the name shows on the placed part, and how far from the pin) */}
           <Field label="Name shown" hint="on the placed part, from the pin">
-            <select className={FIELD} value={pinJust(it.extra)} onChange={(e) => setIt({ ...it, extra: [`PIN ${it.x} ${it.y} ${e.target.value} ${pinOff(it.extra)}`, ...(it.extra ?? []).filter((l) => !l.startsWith("PIN "))] })}>
+            <select className={FIELD} value={pinJust(it.extra)} onChange={(e) => setIt({ ...it, extra: [`PIN ${it.x} ${it.y} ${e.target.value} ${pinLine(it.extra)?.off ?? 8}`, ...(it.extra ?? []).filter((l) => !l.startsWith("PIN "))] })}>
               <option value="NONE">not</option>
               <option value="LEFT">right of it (LEFT)</option>
               <option value="RIGHT">left of it (RIGHT)</option>
               <option value="TOP">below it (TOP)</option>
               <option value="BOTTOM">above it (BOTTOM)</option>
+              <option value="VTOP">right of it, upright (VTOP)</option>
+              <option value="VBOTTOM">left of it, upright (VBOTTOM)</option>
+              <option value="VLEFT">above it, upright (VLEFT)</option>
+              <option value="VRIGHT">below it, upright (VRIGHT)</option>
             </select>
           </Field>
         </>
@@ -156,9 +160,7 @@ function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: 
 }
 
 /** Where a pin's name shows (its PIN line's justification: NONE … ; `none` if it has no PIN line). */
-const pinJust = (extra?: string[], none = "NONE") => extra?.find((l) => l.startsWith("PIN "))?.split(/\s+/)[3]?.toUpperCase() ?? none;
-/** How far from the pin its name shows (its PIN line's offset, kept when where changes). */
-const pinOff = (extra?: string[]) => +(extra?.find((l) => l.startsWith("PIN "))?.split(/\s+/)[4] ?? "") || 8;
+const pinJust = (extra?: string[], none = "NONE") => pinLine(extra)?.just ?? none;
 
 /** A symbol's attributes (SYMATTR lines: Prefix, Value, Description, SpiceModel …) and its type:
  *  a part (CELL) or a hierarchical block (BLOCK, its schematic of the same name). */
@@ -166,13 +168,14 @@ function SymbolAttrs() {
   const items = useS((s) => s.items);
   const raw = (it: Item) => (it.t === "raw" ? it.line : "");
   const [kind, setKind] = useState(() => items.map(raw).find((l) => l.startsWith("SymbolType "))?.slice(11).trim().toUpperCase() || "CELL");
-  const [rows, setRows] = useState<string[][]>(() => items.map(raw).filter((l) => l.startsWith("SYMATTR ")).map((l) => {
-    const [, k = "", ...v] = l.split(" ");
-    return [k, v.join(" ")];
+  // (the value as written after the name and its one space; one without a value kept as such)
+  const [rows, setRows] = useState<string[][]>(() => items.map(raw).flatMap((l) => {
+    const m = /^SYMATTR (\S+) ?(.*)$/.exec(l);
+    return m ? [[m[1], m[2]]] : [];
   }));
   const done = () => {
     const keep = items.filter((it) => !(it.t === "raw" && (it.line.startsWith("SYMATTR ") || it.line.startsWith("SymbolType "))));
-    const attrs = rows.filter(([k, v]) => k.trim() && v.trim()).map(([k, v]): Item => ({ t: "raw", line: `SYMATTR ${k.trim().replace(/\s+/g, "")} ${v.trim()}` }));
+    const attrs = rows.filter(([k]) => k.trim()).map(([k, v]): Item => ({ t: "raw", line: `SYMATTR ${k.trim().replace(/\s+/g, "")}${v ? ` ${v}` : ""}` }));
     commit([{ t: "raw", line: `SymbolType ${kind}` }, ...keep, ...attrs], []); // (the items moved: nothing selected)
     close();
   };

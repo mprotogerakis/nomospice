@@ -5,7 +5,7 @@ import { useShallow } from "zustand/react/shallow";
 import { Maximize, Minus, Plus } from "lucide-react";
 import type { Item, Shape, SymbolDef } from "./types";
 import {
-  box, connectivity, defOf, portOf, arcSpan, dragPlan, mirror, outline, pins, prefixOf, rotate, dropZeroWires, dropZeroWiresKeepSel, GRID, hit, isShape, labelRect, leftLabels, matrix, shifted, snap, symBox,
+  box, connectivity, defOf, pinLine, portOf, arcSpan, dragPlan, mirror, outline, pins, prefixOf, rotate, dropZeroWires, dropZeroWiresKeepSel, GRID, hit, isShape, labelRect, leftLabels, matrix, shifted, snap, symBox,
   textLines, union, xform, type Box, type Lib, type Pt,
 } from "./geom";
 import { canProbe, commit, currentNets, isSymbolDoc, nextInst, partCurrent, powerMode, powerName, probe, probeMode, simulate, useS, useStatus } from "./store";
@@ -137,9 +137,8 @@ function PinLabels({ it, def }: { it: Extract<Item, { t: "sym" }>; def: SymbolDe
 
 /** A symbol's pin (a label with its PIN line): a square, and its name where the placed part shows it
  *  (faint where it does not). */
-function Pin({ it, line }: { it: Extract<Item, { t: "flag" }>; line: string }) {
-  const [, , , just = "NONE", off = "8"] = line.split(/\s+/);
-  const dir = JUST[just.toUpperCase()], o = +off || 8;
+function Pin({ it, pin }: { it: Extract<Item, { t: "flag" }>; pin: NonNullable<ReturnType<typeof pinLine>> }) {
+  const dir = JUST[pin.just], o = pin.off;
   const [ux, uy] = dir ?? [1, -1];
   return (
     <g>
@@ -151,8 +150,8 @@ function Pin({ it, line }: { it: Extract<Item, { t: "flag" }>; line: string }) {
 }
 
 function Flag({ it, leftward }: { it: Extract<Item, { t: "flag" }>; leftward: boolean }) {
-  const pin = it.extra?.find((l) => l.startsWith("PIN "));
-  if (pin) return <Pin it={it} line={pin} />;
+  const pin = pinLine(it.extra);
+  if (pin) return <Pin it={it} pin={pin} />;
   if (it.name === "0") return <path d={`M${it.x - 16} ${it.y} H${it.x + 16} L${it.x} ${it.y + 16} Z`} fill="none" />;
   const [x, , x2] = labelRect(it, leftward), w = x2 - x;
   return (
@@ -654,7 +653,7 @@ export const Schematic = memo(function Schematic() {
       case "wire":
         return [...plot, { label: "Net label here…", run: () => newItem({ t: "flag", x: 0, y: 0, name: "" }, g) }, { label: "Select net", disabled: !net, run: selectNet }, "-", ...clip, del];
       case "flag":
-        return [{ label: it.name === "0" ? "Ground" : "Rename…", disabled: it.name === "0", run: edit }, ...plot, { label: "Select net", disabled: !net, run: selectNet }, "-", ...(it.name === "0" ? [] : [{ label: "Make ground", run: () => commit(items.map((x) => (x === it ? { ...it, name: "0" } : x))) }]), ...clip, del];
+        return [{ label: it.name === "0" ? "Ground" : "Rename…", disabled: it.name === "0", run: edit }, ...plot, { label: "Select net", disabled: !net, run: selectNet }, "-", ...(it.name === "0" || symbolDoc ? [] : [{ label: "Make ground", run: () => commit(items.map((x) => (x === it ? { ...it, name: "0" } : x))) }]), ...clip, del];
       case "draw":
         return [{ label: "Duplicate", hint: "⌘D", run: duplicate }, "-", ...clip, del]; // (not rotated: parts only)
       case "text":

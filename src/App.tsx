@@ -160,7 +160,7 @@ async function saveFile(as = false): Promise<boolean> {
   let path = prev;
   if (as || !path || path === useS.getState().unwritten) path = await save({ filters, defaultPath: path ?? `untitled.${ext}` });
   if (!path) return false;
-  if (!path.toLowerCase().endsWith(`.${ext}`)) {
+  if (!/\.as[cy]$/i.test(path)) { // (a name typed as a schematic or a symbol: as typed)
     // GTK save dialogs do not add the filter's extension, and checked for overwrite without it
     path += `.${ext}`;
     if ((await invoke<boolean>("path_exists", { path })) && !(await ask(`${fileName(path)} already exists. Replace it?`, { title: "nomospice", kind: "warning" }))) return false;
@@ -217,10 +217,13 @@ async function openExample(items: Item[]) {
 /** A new symbol to draw: its first save asks where (beside the schematics that place it). */
 async function newSymbol() {
   if (!(await discardOk())) return;
-  const dir = dirOf(useS.getState().path);
-  const path = `${dir ? `${dir}/` : ""}untitled.asy`;
+  // (a name no file there has: the new symbol is no other one's)
+  const dir = dirOf(useS.getState().path), base = `${dir ? `${dir}/` : ""}untitled`;
+  let path = `${base}.asy`;
+  for (let k = 2; dir && (await invoke<boolean>("path_exists", { path })); k++) path = `${base}-${k}.asy`;
   await loadDoc([{ t: "raw", line: "SymbolType CELL" }, { t: "raw", line: "SYMATTR Prefix X" }], path);
   useS.setState({ unwritten: path });
+  refreshGit();
 }
 
 /** A block's schematic in place of this one (`up`: the one above); the way back is kept. */

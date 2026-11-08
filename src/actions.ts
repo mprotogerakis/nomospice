@@ -1,7 +1,7 @@
 // Editing actions shared by the toolbar, hotkeys and context menus.
 import type { Item, Shape } from "./types";
 import { commit, isSymbolDoc, loadSymbols, useS } from "./store";
-import { box, isShape, rotateInPlace, shifted, snap } from "./geom";
+import { box, isShape, pinLine, rotateInPlace, shifted, snap } from "./geom";
 
 export function deleteSelection() {
   const { items, sel } = useS.getState();
@@ -23,8 +23,9 @@ export function transform(f: (r: string) => string) {
 function forDoc<T extends Item>(it: T): T {
   if (it.t !== "flag") return it;
   const symbol = isSymbolDoc(useS.getState().path);
-  const extra = (it.extra ?? []).filter((l) => (symbol ? l.startsWith("PIN ") || (l.startsWith("PINATTR ") && !l.startsWith("PINATTR SpiceOrder")) : l.startsWith("IOPIN ")));
-  return { ...it, extra };
+  // (its number goes along: a cut pin pasted keeps its place; a copy beside it gets the next one when saved)
+  const extra = (it.extra ?? []).map((l) => l.trimStart()).filter((l) => (symbol ? l.startsWith("PIN ") || l.startsWith("PINATTR ") : l.startsWith("IOPIN ")));
+  return { ...it, extra: symbol && !pinLine(extra) ? [`PIN ${it.x} ${it.y} NONE 8`, ...extra] : extra };
 }
 
 export function duplicate() {
@@ -131,7 +132,8 @@ function pasteText(text: string): boolean {
   return true;
 }
 
-export const placeFlag = (name: string) => useS.setState({ tool: { k: "place", item: { t: "flag", x: 0, y: 0, name } }, sel: [] });
+/** Place a label (ground: `0`); a symbol has no ground. */
+export const placeFlag = (name: string) => !isSymbolDoc(useS.getState().path) && useS.setState({ tool: { k: "place", item: { t: "flag", x: 0, y: 0, name } }, sel: [] });
 
 /** Ask for a label/comment/directive's text, then place it (at `at`, or with the mouse). */
 export const newItem = (item: Item, at?: [number, number]) => useS.setState({ dialog: { k: "new", item, at } });

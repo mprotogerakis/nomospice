@@ -141,6 +141,7 @@ export const currentNets = (s: { nets: Netlist | null; netsItems: Item[] | null;
 let netTimer: ReturnType<typeof setTimeout> | undefined;
 export function refreshNets() {
   clearTimeout(netTimer);
+  if (isSymbolDoc(get().path)) return set({ nets: null, netsItems: null }); // (a symbol: no nets)
   netTimer = setTimeout(async () => {
     const { items, path } = get();
     const nets = await invoke<Netlist>("netlist", { items, dir: dirOf(path) });
@@ -201,7 +202,8 @@ let autoPlotted = new Set<string>();
 /** Git status of the open file (none for an unsaved document). */
 export async function refreshGit() {
   const path = get().path;
-  const git = path ? await invoke<GitStatus>("git_status", { path }) : null;
+  // (not a document not yet written: a new symbol, an opened netlist's .asc)
+  const git = path && path !== get().unwritten ? await invoke<GitStatus>("git_status", { path }) : null;
   if (get().path === path) set({ git }); // an older file's status must not land on the new one
 }
 

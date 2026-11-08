@@ -66,6 +66,15 @@ export function leftLabels(items: Item[]) {
   return out;
 }
 
+/** A symbol pin's PIN line (a label in a symbol): where its name shows (LTspice's LEFT, RIGHT,
+ *  TOP, BOTTOM, V…, NONE) and how far from the pin; null for a net label. */
+export function pinLine(extra?: string[]) {
+  const l = extra?.find((x) => x.trimStart().startsWith("PIN "));
+  if (!l) return null;
+  const [, , , just = "NONE", off = ""] = l.trim().split(/\s+/);
+  return { just: just.toUpperCase(), off: +off || 8 };
+}
+
 /** Label pill geometry (shared by drawing and hit-testing). */
 export function labelRect(it: Extract<Item, { t: "flag" }>, left: boolean): Box {
   const w = it.name.length * 7.8 + 12, x = left ? it.x - 6 - w : it.x + 6;
@@ -78,8 +87,8 @@ export function box(it: Item, lib: Lib, left?: Set<string>): Box | null {
     case "draw": return boxOf(outline(it)); // (what is drawn: an arc's drawn part, not its ellipse's box nor its rays)
     case "wire": return [Math.min(it.x1, it.x2), Math.min(it.y1, it.y2), Math.max(it.x1, it.x2), Math.max(it.y1, it.y2)];
     case "flag": {
+      if (pinLine(it.extra)) return [it.x - 6, it.y - 6, it.x + 6, it.y + 6]; // (a symbol's pin: its square)
       if (it.name === "0") return [it.x - 16, it.y, it.x + 16, it.y + 16];
-      if (it.extra?.some((l) => l.startsWith("PIN "))) return [it.x - 6, it.y - 6, it.x + 6, it.y + 6]; // (a symbol's pin: its square)
       const r = labelRect(it, !!left?.has(key(it.x, it.y)));
       return [Math.min(r[0], it.x - 3), r[1], Math.max(r[2], it.x + 3), r[3]];
     }
