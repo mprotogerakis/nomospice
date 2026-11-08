@@ -80,7 +80,7 @@ fn schematic_at(base: &Path, args: &Value) -> Result<(Vec<schematic::Item>, Opti
         (None, Some(p)) => {
             let path = resolve(base, p);
             let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-            Ok((schematic::parse_asc(&schematic::decode(&bytes)), Some(path)))
+            Ok((schematic::load(&path.to_string_lossy(), &bytes).0, Some(path))) // (a netlist too)
         }
         _ => Err("give `path` or `asc`".into()),
     }

@@ -36,9 +36,7 @@ async fn examples() -> Vec<(String, Vec<Item>)> {
 async fn open_asc(path: String) -> Result<(Vec<Item>, bool), String> {
     tauri::async_runtime::spawn_blocking(move || {
         let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
-        let text = schematic::decode(&bytes);
-        let netlist = schematic::is_netlist(&path);
-        Ok((if netlist { schematic::netlist_items(&text) } else { schematic::parse_asc(&text) }, netlist))
+        Ok(schematic::load(&path, &bytes))
     })
     .await
     .map_err(|e| e.to_string())?

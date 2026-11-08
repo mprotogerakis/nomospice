@@ -144,14 +144,13 @@ let saveQueue: Promise<unknown> = Promise.resolve();
 const MODEL_FILE = /\.(lib|sub|mod|inc|cir|sp|spi|bjt|dio|jft|mos)$/i;
 /** What dropping these files does (null: nothing). */
 const dropAction = (paths: string[]) =>
-  paths.some((p) => /\.asc$/i.test(p)) ? "Open schematic"
-  : !useS.getState().items.length && paths.some((p) => NETLIST.test(p)) ? "Open netlist" // (an empty document: opened; onto a schematic: included)
-  : paths.some((p) => MODEL_FILE.test(p)) ? "Add as .include directive" : null;
+  paths.some((p) => /\.asc$/i.test(p)) ? "Open schematic" : paths.some((p) => MODEL_FILE.test(p)) ? "Add as .include directive" : null;
 /** Dropped files: a schematic opens, model files become `.include` directives (relative to the
  *  schematic's folder when inside it, as LTspice writes them). */
 async function dropFiles(paths: string[]) {
   if (useS.getState().dialog) return;
-  const asc = paths.find((p) => /\.asc$/i.test(p)) ?? (!useS.getState().items.length ? paths.find((p) => NETLIST.test(p)) : undefined);
+  // (a dropped .cir is a model to include, mostly: a netlist opens by File → Open)
+  const asc = paths.find((p) => /\.asc$/i.test(p));
   if (asc) return openFile(asc);
   const models = paths.filter((p) => MODEL_FILE.test(p));
   if (models.length) newItem({ t: "text", x: 0, y: 0, directive: true, text: models.map((p) => `.include "${relToDoc(p)}"`).join("\n") });
@@ -262,6 +261,8 @@ export function App() {
       if (restore) {
         await loadDoc(rec!.items, rec!.path);
         useS.setState({ dirty: true });
+        // (a document never written, an opened netlist's .asc: its first save asks, as it would have)
+        if (rec!.path && !(await invoke<boolean>("path_exists", { path: rec!.path }))) unwritten = rec!.path;
         if (file) await message(`${file} was not opened because the previous session was restored.`, { title: "nomospice" });
         return;
       }
