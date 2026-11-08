@@ -318,9 +318,8 @@ async fn root_locus(items: Vec<Item>, dir: Option<String>, target: String, value
 async fn folder_symbols(from: String, to: String, names: Vec<String>, copy: bool) -> Result<Vec<(String, bool)>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         // the library's own rule for which .asy files are a folder's symbols
-        let old: std::collections::HashMap<_, _> = schematic::folder_symbols(std::path::Path::new(&from)).into_iter().collect();
-        let new: std::collections::HashMap<_, _> = schematic::folder_symbols(std::path::Path::new(&to)).into_iter().collect();
-        let (old_sheets, new_sheets) = (schematic::folder_sheets(std::path::Path::new(&from)), schematic::folder_sheets(std::path::Path::new(&to)));
+        let (old, old_sheets) = schematic::folder_contents(std::path::Path::new(&from));
+        let (new, new_sheets) = schematic::folder_contents(std::path::Path::new(&to));
         let (mut out, mut failed): (Vec<(String, bool)>, Vec<String>) = (vec![], vec![]);
         let mut seen = std::collections::HashSet::new(); // (many parts share a symbol)
         // (a block's schematic goes along with its symbol, and the symbols it uses with it)

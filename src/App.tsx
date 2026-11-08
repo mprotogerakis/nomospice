@@ -212,11 +212,12 @@ async function openExample(items: Item[]) {
 
 /** A block's schematic in place of this one (`up`: the one above); the way back is kept. */
 async function openSheet(path: string, up = false) {
-  const { path: from, parents } = useS.getState();
   if (!(await discardOk())) return;
+  // (after the save it may have asked for: where it went; a never written document has no way back)
+  const { path: from, parents, unwritten } = useS.getState();
   try {
     await openPath(path);
-    useS.setState({ parents: up ? parents.slice(0, -1) : from ? [...parents, from] : [] });
+    useS.setState({ parents: up ? parents.slice(0, -1) : from && from !== unwritten ? [...parents, from] : [] });
   } catch (e) {
     await fail(`Cannot open ${path}`)(e);
   }

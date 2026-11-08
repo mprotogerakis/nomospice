@@ -231,9 +231,11 @@ fn symbols_in(files: &[std::path::PathBuf]) -> Vec<(String, std::path::PathBuf)>
     keyed(files, "asy").into_iter().filter(|(k, _)| !builtin_symbol(k)).collect()
 }
 
-/// A folder's schematics by key (lowercase stem): the sheets of its block symbols.
-pub fn folder_sheets(dir: &std::path::Path) -> HashMap<String, std::path::PathBuf> {
-    keyed(&listing(dir), "asc").into_iter().collect()
+/// A folder's symbols (as `folder_symbols`) and schematics by key (the sheets of its blocks), from
+/// one listing.
+pub fn folder_contents(dir: &std::path::Path) -> (HashMap<String, std::path::PathBuf>, HashMap<String, std::path::PathBuf>) {
+    let files = listing(dir);
+    (symbols_in(&files).into_iter().collect(), keyed(&files, "asc").into_iter().collect())
 }
 
 /// (count, a sum over names, modification times and sizes) of a folder's symbol files (the list
@@ -683,6 +685,8 @@ struct Hier {
     /// symbols whose sheet is no subcircuit here (it places itself, it lacks a port), and why:
     /// their parts call a model of that name, as before there was a sheet
     refused: BTreeMap<String, String>,
+    /// the sheets' `.global` lines: the top netlist's
+    globals: Vec<String>,
 }
 
 /// A hierarchical block's sheet as a subcircuit.
@@ -1977,7 +1981,7 @@ pub const SENSED: &str = "RCLDQMJX";
 
 /// Directives a block's sheet keeps (definitions); its analyses, .meas, .options … are the top
 /// schematic's business, as in LTspice.
-const SHEET_KEEPS: [&str; 11] = [".param", ".func", ".model", ".subckt", ".ends", ".include", ".inc", ".lib", ".endl", ".ic", ".nodeset"];
+const SHEET_KEEPS: [&str; 12] = [".param", ".func", ".function", ".model", ".subckt", ".ends", ".include", ".inc", ".lib", ".endl", ".ic", ".nodeset"];
 
 /// `h.stack`: the blocks being netlisted, outermost first (empty: the top schematic; else a sheet's
 /// body, a subcircuit's: no title, analyses or `.end`).
@@ -2126,6 +2130,7 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
     for it in items {
         if let Item::Text { text, directive: true, .. } = it {
             let mut skipped = false; // `+` continuation lines of a skipped directive go too
+            let mut control = false; // a sheet's `.control` block: all of it goes
             let mut stepping = false; // ... of a .step: they belong to it
             for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
                 let l = line.to_lowercase();
@@ -2133,8 +2138,13 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
                     // (a sheet: its definitions and parts; its commands with their `+` lines go)
                     let head = l.split_whitespace().next().unwrap_or("");
                     let more = head.starts_with('+');
-                    if if more { skipped } else { head.starts_with('.') && !SHEET_KEEPS.contains(&head) } {
-                        if !more && head != ".end" && !ignored.iter().any(|h| h == head) {
+                    control = (control || head == ".control") && head != ".endc";
+                    if head == ".global" {
+                        h.globals.push(uncommented(line).trim().to_string()); // (the top's: global everywhere)
+                        continue;
+                    }
+                    if control || if more { skipped } else { head.starts_with('.') && !SHEET_KEEPS.contains(&head) } {
+                        if !more && head.starts_with('.') && head != ".end" && head != ".endc" && !ignored.iter().any(|h| h == head) {
                             ignored.push(head.to_string());
                         }
                         skipped = true;
@@ -2224,10 +2234,10 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
     // nets that reach a part other than a subcircuit: there a subcircuit pin's sensor node is held by
     // the outside; elsewhere (an open NC pin, ports of ICs only) it could float with a port the
     // subcircuit leaves unused (singular matrix) and gets a 1 TΩ hold to ground
-    let held: HashSet<String> = items.iter().zip(&nl.nets).filter(|(it, _)| match it {
+    let held: HashSet<&str> = items.iter().zip(&nl.nets).filter(|(it, _)| match it {
         Item::Sym { sym, attrs, .. } => lib.get(sym).is_some_and(|d| prefix_of(d, attrs) != 'X'),
         _ => false,
-    }).flat_map(|(_, nets)| nets.iter().cloned()).collect();
+    }).flat_map(|(_, nets)| nets.iter().map(String::as_str)).collect();
     // drawn names more than one part has (T1 a diode and T1 a resistor): those parts go by their netlist names
     let mut drawn: HashMap<String, usize> = HashMap::new();
     for it in items {
@@ -2267,16 +2277,16 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
             continue;
         }
         // a hierarchical block: its sheet's subcircuit, named as the symbol, its Value's parameters
-        // passed; a sheet that is none here (said): the part calls a model of that name
-        let block = def.sheet.as_ref().filter(|_| prefix == 'X').and_then(|path| {
-            let params = block_params(attrs.get("Value").unwrap_or(&def.value), &def.name)?.to_string();
-            let name = net_name(&def.name);
-            if !h.blocks.iter().any(|b| b.name == name) && !h.refused.contains_key(&name) {
-                sheet_subckt(&name, path, &def, lib, h, &mut nl.warnings);
+        // passed; a sheet that is none here (said, or none at all): a subcircuit of that name
+        let call = (prefix == 'X' && def.calls_sheet()).then(|| block_params(attrs.get("Value").unwrap_or(&def.value), &def.name)).flatten()
+            .map(|params| (net_name(&def.name), params.to_string()));
+        if let (Some((name, _)), Some(path)) = (&call, &def.sheet) {
+            if !h.blocks.iter().any(|b| b.name == *name) && !h.refused.contains_key(name) {
+                sheet_subckt(name, path, &def, lib, h, &mut nl.warnings);
             }
-            h.blocks.iter().any(|b| b.name == name).then_some((name, params))
-        });
-        let value = match &block {
+        }
+        let block = call.as_ref().filter(|(name, _)| h.blocks.iter().any(|b| b.name == *name));
+        let value = match &call {
             Some((name, params)) => one_line(&format!("{name} {params}")),
             None => one_line(&attrs.get("Value").cloned().unwrap_or(def.value.clone())).replace("SINE(", "SIN("),
         };
@@ -2480,6 +2490,11 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
     }
     if !sub {
         nl.warnings.extend(h.refused.values().cloned());
+        for g in std::mem::take(&mut h.globals) {
+            if !lines.contains(&g) {
+                lines.push(g);
+            }
+        }
         // a block's instances pass what one of them passes: the sheet's own .param of it where they
         // do not, else their caller's value of it (a .param above it), as LTspice has it
         let fill = |l: &String| match l.split_once(BLOCK_TAG) {
@@ -2514,8 +2529,12 @@ fn sheet_subckt(name: &str, path: &str, def: &SymbolDef, lib: &mut Library, h: &
     let mut warn = |w: String| if !warnings.contains(&w) { warnings.push(w) };
     // (said once, by the top schematic's netlist)
     let refuse = |why: String, h: &mut Hier| _ = h.refused.insert(name.to_string(), format!("{file} {why}: it is no subcircuit here, a {name} calls a model of that name"));
-    if h.stack.iter().any(|n| n == name) {
-        // (a test bench of a library part, placing it: the part's model, as before it had a sheet)
+    if let Some(at) = h.stack.iter().position(|n| n == name) {
+        // (a test bench of a library part, placing it: the part's model, as before it had a sheet;
+        // every block of the loop alike, whichever of them came first)
+        for n in h.stack[at + 1..].to_vec() {
+            h.refused.insert(n.clone(), format!("{n}'s schematic places itself (through its blocks): it is no subcircuit here, a {n} calls a model of that name"));
+        }
         return refuse("places its own block (through its blocks)".into(), h);
     }
     let items = match std::fs::read(path) {
@@ -2533,7 +2552,14 @@ fn sheet_subckt(name: &str, path: &str, def: &SymbolDef, lib: &mut Library, h: &
     if h.refused.contains_key(name) {
         return; // (it places itself)
     }
-    let ports = def.pins.iter().filter_map(|p| child.nets[label(&p.name)?].first().cloned()).collect();
+    let ports: Vec<String> = def.pins.iter().filter_map(|p| child.nets[label(&p.name)?].first().cloned()).collect();
+    // (a port on ground, two on one net: no subcircuit SPICE takes)
+    if let Some(k) = ports.iter().position(|n| n == "0") {
+        return refuse(format!("has its port {} on ground", def.pins[k].name), h);
+    }
+    if let Some((a, b)) = (0..ports.len()).flat_map(|a| (a + 1..ports.len()).map(move |b| (a, b))).find(|&(a, b)| ports[a] == ports[b]) {
+        return refuse(format!("has its ports {} and {} on one net", def.pins[a].name, def.pins[b].name), h);
+    }
     for w in child.warnings {
         warn(format!("{file}: {w}"));
     }
@@ -2907,7 +2933,7 @@ mod tests {
         // a divider of R={R} (its own .param 1k) over 1k; its .tran is not run (the top's .op is)
         let div = "Version 4\nSHEET 1 880 680\nFLAG 16 16 in\nIOPIN 0 0 In\nFLAG 16 96 out\nIOPIN 16 96 Out\nFLAG 160 16 OUT\nIOPIN 160 16 Out\nFLAG 160 96 0\n\
 SYMBOL res 0 0 R0\nSYMATTR InstName R1\nSYMATTR Value {R}\nSYMBOL res 144 0 R0\nSYMATTR InstName R2\nSYMATTR Value 1k\n\
-TEXT 0 200 Left 2 !.param R=1k\\n.tran 1m\n";
+TEXT 0 200 Left 2 !.param R=1k\\n.tran 1m\\n.control\\nrun\\n.endc\\n.global vcc\n";
         assert!(write_asc(&parse_asc(div)).contains("FLAG 16 16 in\nIOPIN 16 16 In\n"), "a port's IOPIN where its label is");
         // its symbol from its ports: in left, out right (once), as pins of those names
         let asy = block_asy(&parse_asc(div)).unwrap();
@@ -2943,14 +2969,16 @@ SYMBOL half 400 300 R0\nSYMATTR InstName U4\nSYMATTR Value R=3k\nFLAG 352 300 a\
         assert_eq!(t.matches(".subckt div ").count(), 1, "one definition for both: {t}");
         assert!(t.contains(".subckt div in out params: r=0\n") && t.contains("\n.param R=1k\n") && !t.contains(".tran"), "{t}");
         assert!(t.lines().any(|l| l.starts_with("XU2 ") && l.ends_with(" div R=3k")), "{t}");
-        assert!(nl.warnings.iter().any(|w| w.starts_with("Div.asc: .tran not run")), "{:?}", nl.warnings);
+        assert!(nl.warnings.iter().any(|w| w.starts_with("Div.asc: .tran, .control not run")), "{:?}", nl.warnings);
+        assert!(!t.contains("\nrun\n") && t.matches(".global vcc").count() == 1 && t.find(".global vcc") < t.find(".subckt"), "no .control, one .global at the top: {t}");
         let run = crate::ngspice::run(&prepare(t, Some(&dir), &mut vec![]).with_sensors(nl.sensors.clone())).unwrap_or_else(|l| panic!("{l:?}\n{t}"));
         let v = |n: &str| run.op.iter().find(|o| o.0 == n).unwrap_or_else(|| panic!("{n}: {:?}", run.op)).1;
         assert!((v("b") - 0.5).abs() < 1e-9 && (v("c") - 0.25).abs() < 1e-9, "the sheet's default, the passed R: {:?}", run.op);
         assert!((v("d") - 0.5).abs() < 1e-9 && (v("e") - 0.25).abs() < 1e-9, "the caller's R, the passed R: {:?}", run.op);
         let nl = netlist(&parse_asc("Version 4\nSYMBOL ping 0 0 R0\nSYMATTR InstName U1\nSYMBOL other 0 100 R0\nSYMATTR InstName U2\n"), &mut lib);
         assert!(nl.warnings.iter().any(|w| w.starts_with("ping.asc places its own block")), "{:?}", nl.warnings);
-        assert!(!nl.text.contains(".subckt ping") && nl.text.contains(".subckt pong"), "a sheet placing itself is no subcircuit (no endless one): {}", nl.text);
+        assert!(!nl.text.contains(".subckt ping") && !nl.text.contains(".subckt pong") && nl.text.lines().any(|l| l.starts_with("XU1 ") && l.ends_with(" ping")), "a loop of sheets is no subcircuit (no endless one), its parts called by name: {}", nl.text);
+        assert!(nl.warnings.iter().any(|w| w.starts_with("pong's schematic places itself")), "{:?}", nl.warnings);
         assert!(nl.warnings.iter().any(|w| w.starts_with("other.asc has no label a")) && !nl.text.contains(".subckt other"), "{:?}", nl.warnings);
         std::fs::remove_dir_all(dir).ok();
     }
