@@ -110,12 +110,13 @@ function pasteText(text: string): boolean {
   }
   const its = (Array.isArray(raw) ? raw : []).map(shape).filter((x): x is Shape => !!x);
   if (!its.length) return false;
-  // (a drawing by what is drawn: not an arc's rays, which may reach far out)
-  const xs = its.flatMap((it) => (it.t === "wire" ? [it.x1, it.x2] : it.t === "draw" ? ((b) => [b[0], b[2]])(box(it, {})!) : [it.x]));
-  const ys = its.flatMap((it) => (it.t === "wire" ? [it.y1, it.y2] : it.t === "draw" ? ((b) => [b[1], b[3]])(box(it, {})!) : [it.y]));
-  const [x0, y0] = [snap(xs.reduce((a, b) => Math.min(a, b))), snap(ys.reduce((a, b) => Math.min(a, b)))];
-  // (a group wider than any schematic: placed anywhere it would leave the core's coordinates)
-  if (xs.some((x) => x - x0 > 2 ** 24) || ys.some((y) => y - y0 > 2 ** 24)) return false;
+  // (anchored by what is drawn: not an arc's rays, which may reach far out)
+  const bs = its.map((it) => (it.t === "wire" ? [it.x1, it.y1, it.x2, it.y2] : it.t === "draw" ? box(it, {})! : [it.x, it.y, it.x, it.y]));
+  const [x0, y0] = [snap(Math.min(...bs.map((b) => b[0]))), snap(Math.min(...bs.map((b) => b[1])))];
+  // (a group wider than any schematic: placed anywhere it would leave the core's coordinates;
+  // every coordinate, an arc's rays too)
+  const coords = its.flatMap((it) => (it.t === "wire" ? [[it.x1, it.y1], [it.x2, it.y2]] : it.t === "draw" ? it.p.flatMap((v, k) => (k % 2 ? [] : [[v, it.p[k + 1]]])) : [[it.x, it.y]]));
+  if (coords.some(([x, y]) => Math.abs(x - x0) > 2 ** 24 || Math.abs(y - y0) > 2 ** 24)) return false;
   useS.setState({ tool: { k: "paste", items: its.map((it) => shifted(it, -x0, -y0)) }, sel: [] });
   void loadSymbols(its).catch(() => {}); // (parts from another schematic: their symbols, if this one has none)
   return true;

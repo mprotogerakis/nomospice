@@ -75,10 +75,7 @@ export function labelRect(it: Extract<Item, { t: "flag" }>, left: boolean): Box 
 export function box(it: Item, lib: Lib, left?: Set<string>): Box | null {
   switch (it.t) {
     case "raw": return null;
-    case "draw": { // (what is drawn: an arc's drawn part, not its ellipse's box nor its rays)
-      const o = outline(it);
-      return [Math.min(...o.map((q) => q[0])), Math.min(...o.map((q) => q[1])), Math.max(...o.map((q) => q[0])), Math.max(...o.map((q) => q[1]))];
-    }
+    case "draw": return boxOf(outline(it)); // (what is drawn: an arc's drawn part, not its ellipse's box nor its rays)
     case "wire": return [Math.min(it.x1, it.x2), Math.min(it.y1, it.y2), Math.max(it.x1, it.x2), Math.max(it.y1, it.y2)];
     case "flag": {
       if (it.name === "0") return [it.x - 16, it.y, it.x + 16, it.y + 16];
@@ -140,20 +137,24 @@ function outline(it: Extract<Item, { t: "draw" }>): Pt[] {
   }
   return Array.from({ length: 65 }, (_, j) => { const a = a0 - (span * j) / 64; return [cx + rx * Math.cos(a), cy + ry * Math.sin(a)] as Pt; });
 }
-/** Whether p is on a drawing's outline (within tol): a frame is picked by its edge, not its inside,
- *  so the circuit it frames stays clickable. */
-const onDrawing = (it: Extract<Item, { t: "draw" }>, p: Pt, tol: number) =>
-  outline(it).some((a, j, o) => j > 0 && distSeg(p, o[j - 1][0], o[j - 1][1], a[0], a[1]) <= tol);
-/** Topmost item under p; flags > texts > wires > symbols > drawings. */
-export function hit(items: Item[], lib: Lib, p: Pt, tol: number): number {
+const boxOf = (o: Pt[]): Box => [Math.min(...o.map((q) => q[0])), Math.min(...o.map((q) => q[1])), Math.max(...o.map((q) => q[0])), Math.max(...o.map((q) => q[1]))];
+const inBox = (b: Box, p: Pt, tol: number) => p[0] >= b[0] - tol && p[0] <= b[2] + tol && p[1] >= b[1] - tol && p[1] <= b[3] + tol;
+/** Whether p is on a drawing's outline (within tol; its box first): a frame is picked by its edge,
+ *  not its inside, so the circuit it frames stays clickable. */
+function onDrawing(it: Extract<Item, { t: "draw" }>, p: Pt, tol: number) {
+  const o = outline(it);
+  return inBox(boxOf(o), p, tol) && o.some((a, j) => j > 0 && distSeg(p, o[j - 1][0], o[j - 1][1], a[0], a[1]) <= tol);
+}
+/** Topmost item under p; flags > texts > wires > symbols > drawings (`drawings` false: none of
+ *  them, while probing: no target there). */
+export function hit(items: Item[], lib: Lib, p: Pt, tol: number, drawings = true): number {
   let best = -1, rank = 9;
   const left = leftLabels(items);
   items.forEach((it, i) => {
-    if (it.t === "raw" || RANK[it.t] > rank) return; // equal rank: later = drawn on top wins
-    const b = box(it, lib, left)!;
+    if (it.t === "raw" || RANK[it.t] > rank || (it.t === "draw" && !drawings)) return; // equal rank: later = drawn on top wins
     const ok = it.t === "wire" ? distSeg(p, it.x1, it.y1, it.x2, it.y2) <= tol
-      : it.t === "draw" ? p[0] >= b[0] - tol && p[0] <= b[2] + tol && p[1] >= b[1] - tol && p[1] <= b[3] + tol && onDrawing(it, p, tol) // (its box first: cheap)
-      : p[0] >= b[0] - tol && p[0] <= b[2] + tol && p[1] >= b[1] - tol && p[1] <= b[3] + tol;
+      : it.t === "draw" ? onDrawing(it, p, tol)
+      : inBox(box(it, lib, left)!, p, tol);
     if (ok) (best = i), (rank = RANK[it.t]);
   });
   return best;

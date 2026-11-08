@@ -34,6 +34,7 @@ const PROBE_I = cursorSvg("<circle cx='13' cy='11' r='7' fill='none' stroke='%23
 function arcPath([x1, y1, x2, y2, sx, sy, ex, ey]: number[]) {
   const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2, rx = Math.abs(x2 - x1) / 2 || 1, ry = Math.abs(y2 - y1) / 2 || 1;
   const a0 = Math.atan2((sy - cy) / ry, (sx - cx) / rx), a1 = Math.atan2((ey - cy) / ry, (ex - cx) / rx);
+  if (x1 === x2 || y1 === y2) return `M${x1} ${y1}L${x2} ${y2}`; // (flat: a line, as it is picked)
   let d = a0 - a1; // LTspice/GDI arcs run counter-clockwise on screen
   if (d <= 1e-9) d += 2 * Math.PI;
   const p = (a: number) => `${cx + rx * Math.cos(a)} ${cy + ry * Math.sin(a)}`;
@@ -364,7 +365,7 @@ export const Schematic = memo(function Schematic() {
 
   const placed = (it: Item, [x, y]: Pt): Item => {
     if (it.t === "wire" || it.t === "raw") return it;
-    if (it.t === "draw") return shifted(it, x - it.p[0], y - it.p[1]); // (its first point at the cursor: duplicated, it follows)
+    if (it.t === "draw") return ((b) => shifted(it, x - b[0], y - b[1]))(box(it, lib)!); // (what is drawn at the cursor, as a paste: duplicated, it follows)
     if (it.t === "sym" && !it.attrs.InstName) {
       const def = defOf(lib, it);
       return { ...it, x, y, attrs: { InstName: nextInst(items, prefixOf(it, def) || "X"), ...it.attrs } };
@@ -444,7 +445,7 @@ export const Schematic = memo(function Schematic() {
       if (i >= 0) commit(items.filter((_, j) => j !== i), []), setHover(-1);
     } else {
       // (probing: a drawing is no target; a click on its edge plots or pans, as before it was one)
-      const i = ((j) => (probing && items[j]?.t === "draw" ? -1 : j))(hit(items, lib, p, 6 / view.k));
+      const i = hit(items, lib, p, 6 / view.k, !probing); // (probing: a drawing is no target; its edge plots or pans)
       if (i >= 0) {
         let next = sel;
         if (e.shiftKey || e.metaKey || e.ctrlKey) next = selSet.has(i) ? sel.filter((j) => j !== i) : [...sel, i];
@@ -475,7 +476,7 @@ export const Schematic = memo(function Schematic() {
       setHFirst(Math.abs(g[0] - wireStart[0]) >= Math.abs(g[1] - wireStart[1]));
     const d = drag.current;
     if (!d) {
-      const h = tool.k === "place" || tool.k === "paste" || tool.k === "wire" ? -1 : hit(items, lib, p, 6 / view.k);
+      const h = tool.k === "place" || tool.k === "paste" || tool.k === "wire" ? -1 : hit(items, lib, p, 6 / view.k, !probing);
       setHover(h);
       return setHoverPin(probing && h >= 0 ? pinAt(items[h], p) : undefined);
     }
