@@ -584,11 +584,16 @@ pub fn asy_items(src: &str) -> Vec<Item> {
                     }
                 }
             }
-            Some("TEXT") => items.push(Item::Text { x: num(1).unwrap_or(0), y: num(2).unwrap_or(0), text: unescape(&rest(5)), directive: false, align: format!("{} {}", tok.get(3).unwrap_or(&"Left"), tok.get(4).unwrap_or(&"2")) }),
+            // (its text as written after the one space following its size: an indented note stays so)
+            Some("TEXT") => items.push(Item::Text { x: num(1).unwrap_or(0), y: num(2).unwrap_or(0), text: unescape({
+                let s = after_words(line, 4).trim_start_matches(|c: char| !c.is_whitespace());
+                s.strip_prefix(|c: char| c.is_whitespace()).unwrap_or(s)
+            }), directive: false, align: format!("{} {}", tok.get(3).unwrap_or(&"Left"), tok.get(4).unwrap_or(&"2")) }),
             Some("Version") | None => {}
             // (found by its head: SymbolType, SYMATTR its name and value one space apart)
             Some("SYMATTR") if tok.len() >= 2 => items.push(Item::Raw { line: format!("SYMATTR {} {}", tok[1], rest(2)).trim_end().to_string() }),
-            Some("SymbolType") => items.push(Item::Raw { line: tok.join(" ") }),
+            Some("SymbolType") if tok.len() >= 2 => items.push(Item::Raw { line: tok.join(" ") }),
+            Some("SymbolType") => {} // (of no type: written as CELL)
             _ => items.push(Item::Raw { line: line.trim().to_string() }),
         }
     }
@@ -3321,7 +3326,7 @@ SYMBOL half 400 300 R0\nSYMATTR InstName U4\nSYMATTR Value R=3k\nFLAG 352 300 a\
         // tabs and doubled spaces read as words
         let d = parse_asy("x", &write_asy(&asy_items("PIN 0 0 NONE 8\nPINATTR\tPinName\tA\nSYMATTR  Value  10k\nTEXT  -32 0 Left 2 hi\n")));
         assert_eq!((d.pins[0].name.as_str(), d.value.as_str()), ("A", "10k"));
-        assert!(write_asy(&asy_items("TEXT  -32 0 Left 2 hi\n")).contains("TEXT -32 0 Left 2 hi\n"));
+        assert!(write_asy(&asy_items("TEXT  -32 0 Left 2 hi\nTEXT 0 0 Left 2   note\nSymbolType\n")).contains("TEXT -32 0 Left 2 hi\nTEXT 0 0 Left 2   note\n"));
         // a copy of a pin, its number with it: the next free one
         let a = items.iter().find(|it| matches!(it, Item::Flag { .. })).cloned().unwrap();
         items.push(match a { Item::Flag { extra, .. } => Item::Flag { x: 0, y: 64, name: "D".into(), extra }, _ => unreachable!() });

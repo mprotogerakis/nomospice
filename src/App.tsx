@@ -146,7 +146,8 @@ let saveQueue: Promise<unknown> = Promise.resolve();
 const MODEL_FILE = /\.(lib|sub|mod|inc|cir|sp|spi|bjt|dio|jft|mos)$/i; // (not .net: a whole circuit, LTspice's netlist of a schematic)
 /** What dropping these files does (null: nothing). */
 const dropAction = (paths: string[]) =>
-  paths.some((p) => /\.asc$/i.test(p)) ? "Open schematic" : paths.some(isSymbolDoc) ? "Open symbol" : paths.some((p) => MODEL_FILE.test(p)) ? "Add as .include directive" : null;
+  paths.some((p) => /\.asc$/i.test(p)) ? "Open schematic" : paths.some(isSymbolDoc) ? "Open symbol"
+    : paths.some((p) => MODEL_FILE.test(p)) && !isSymbolDoc(useS.getState().path) ? "Add as .include directive" : null; // (a symbol holds no directives)
 /** Dropped files: a schematic opens, model files become `.include` directives (relative to the
  *  schematic's folder when inside it, as LTspice writes them). */
 async function dropFiles(paths: string[]) {
@@ -154,7 +155,7 @@ async function dropFiles(paths: string[]) {
   // (a dropped .cir is a model to include, mostly: a netlist opens by File → Open)
   const asc = paths.find((p) => /\.asc$/i.test(p)) ?? paths.find(isSymbolDoc);
   if (asc) return openFile(asc);
-  const models = paths.filter((p) => MODEL_FILE.test(p));
+  const models = isSymbolDoc(useS.getState().path) ? [] : paths.filter((p) => MODEL_FILE.test(p));
   if (models.length) newItem({ t: "text", x: 0, y: 0, directive: true, text: models.map((p) => `.include "${relToDoc(p)}"`).join("\n") });
 }
 

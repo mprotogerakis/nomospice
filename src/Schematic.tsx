@@ -138,7 +138,7 @@ function PinLabels({ it, def }: { it: Extract<Item, { t: "sym" }>; def: SymbolDe
 /** A symbol's pin (a label with its PIN line): a square, and its name where the placed part shows it
  *  (faint where it does not). */
 function Pin({ it, pin }: { it: Extract<Item, { t: "flag" }>; pin: NonNullable<ReturnType<typeof pinLine>> }) {
-  const dir = JUST[pin.just], o = pin.off;
+  const dir = JUST[pin.just], o = dir ? pin.off : 8; // (a hidden one's name, here only: beside its square)
   const [ux, uy] = dir ?? [1, -1];
   return (
     <g>
