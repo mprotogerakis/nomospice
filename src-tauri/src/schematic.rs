@@ -119,8 +119,6 @@ fn sheet_label(items: &[Item], pin: &str) -> Option<usize> {
     items.iter().position(|it| matches!(it, Item::Flag { name, .. } if name.trim().eq_ignore_ascii_case(pin.trim())))
 }
 
-/// How the netlist ends a warning of a model it has nowhere (a file included anywhere may have it).
-const NO_MODEL: &str = ": no model or subcircuit of that name in the libraries";
 
 /// A block instance's parameters (`R=1k C=1n`) from its Value: None if the Value names a
 /// subcircuit other than the block's own (a model call, not the sheet).
@@ -286,9 +284,6 @@ impl Library {
         if !moved && !rescan {
             return false; // netlisting: no disk access
         }
-        // (a run, a reload: blocks' schematics read again; the live netlist trusts their size and
-        // time, which an edit within the clock's granularity that keeps the size can fool)
-        self.sheets.clear();
         let (list, sheets) = dir.map(folder_contents).unwrap_or_default(); // one listing for the stamp and the load
         let mut list: Vec<_> = list.into_iter().collect();
         list.sort();
@@ -297,6 +292,7 @@ impl Library {
         if !moved && stamp == self.local.stamp {
             return false;
         }
+        self.sheets.clear();
         self.local.stamp = stamp;
         for k in self.local.own.drain() {
             self.defs.remove(&k);
@@ -331,6 +327,12 @@ impl Library {
             return None;
         }
         self.load(name, key)
+    }
+
+    /// A run reads the blocks' schematics again: netlisting trusts their size and time, which an
+    /// edit within the clock's granularity that keeps the size can fool.
+    pub fn reread_sheets(&mut self) {
+        self.sheets.clear();
     }
 
     /// A block's schematic: its items, read again only once the file changed.
@@ -712,7 +714,7 @@ pub struct Netlist {
 
 /// The hierarchical blocks of one netlisting: the sheets being netlisted (outermost first), and
 /// the subcircuits done, each once (the top schematic's netlist writes them all, none nested).
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct Hier {
     /// (subcircuit name, the symbol's when its refusal is said: a BLOCK symbol's)
     stack: Vec<(String, Option<String>)>,
@@ -723,13 +725,12 @@ struct Hier {
     /// the sheets' `.global` lines: the top netlist's (their includes stay in their subcircuits,
     /// inlined there: what a file holds is that block's)
     hoisted: Vec<String>,
-    /// some sheet has a source with an AC amplitude
+    /// some sheet has a source with an AC amplitude, a ground
     ac: bool,
+    grounded: bool,
     /// the top schematic's .model and .subckt names, whether it includes files: its sheets' too
     top_defs: HashSet<String>,
     top_includes: bool,
-    /// some sheet includes files (which may define what another missed)
-    included: bool,
     /// names of refused BLOCK symbols' calls: their refusal is said, not a missing model
     quiet: HashSet<String>,
     /// each block symbol's subcircuit name, unique (two symbols whose names read alike as SPICE
@@ -757,7 +758,7 @@ impl Hier {
 }
 
 /// A hierarchical block's sheet as a subcircuit.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct Block {
     /// the symbol's name, as SPICE takes it
     name: String,
@@ -2200,8 +2201,10 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
             sub == 0 && t.len() >= 3 && t[0].starts_with(|c: char| c.is_ascii_alphabetic()) && t[1..t.len() - 1].contains(&"0")
         })
     }));
-    if !sub && ground.is_none() && items.iter().any(|it| matches!(it, Item::Sym { .. })) && !grounded_by_lines() {
-        nl.warnings.push("no ground (0) in schematic".into());
+    // (said once the blocks are netlisted: node 0 in a sheet grounds it all)
+    let ungrounded = ground.is_none() && items.iter().any(|it| matches!(it, Item::Sym { .. })) && !grounded_by_lines();
+    if sub {
+        h.grounded |= ground.is_some() || grounded_by_lines();
     }
 
     // 4. directives (`.control` blocks are removed later by `prepare`, the single security filter)
@@ -2572,8 +2575,7 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
     if !sub {
         lines.push(".param pi=3.141592653589793".into()); // LTspice built-in; a user .param pi comes later and wins
     }
-    let includes = directives.iter().any(include) || h.top_includes || (!sub && h.included); // (the top's; at the top, any sheet's)
-    h.included |= includes && sub;
+    let includes = directives.iter().any(include) || h.top_includes; // (in a sheet, the top's too: global)
     lines.extend(directives);
     // after the user's directives (ngspice keeps the first definition, so .include/.lib models win):
     // the libraries (LTspice's stock models as LTspice loads them implicitly, Micro-Cap 12, user
@@ -2589,7 +2591,7 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
             (Some(defs), _) => Some(defs.join("\n")),
             (None, Some(text)) => h.emitted.insert(m.clone()).then_some(text),
             (None, None) if !includes && !h.emitted.contains(&m) && !h.quiet.contains(&m) => {
-                nl.warnings.push(format!("`{m}`{NO_MODEL}"));
+                nl.warnings.push(format!("`{m}`: no model or subcircuit of that name in the libraries"));
                 None
             }
             _ => None,
@@ -2601,11 +2603,10 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
         }
     }
     if !sub {
-        nl.warnings.extend(h.refused.values().filter(|w| !w.is_empty()).cloned());
-        if includes {
-            // (a file a sheet includes, hoisted: it may define what an earlier sheet missed)
-            nl.warnings.retain(|w| !w.ends_with(NO_MODEL));
+        if ungrounded && !h.grounded {
+            nl.warnings.insert(0, "no ground (0) in schematic".into());
         }
+        nl.warnings.extend(h.refused.values().filter(|w| !w.is_empty()).cloned());
         for g in std::mem::take(&mut h.hoisted) {
             if !lines.contains(&g) {
                 lines.push(g);
@@ -2691,22 +2692,15 @@ fn sheet_subckt(name: &str, path: &str, def: &SymbolDef, lib: &mut Library, h: &
         return refuse(why, h);
     }
     let label = |pin: &str| sheet_label(&items, pin);
-    // (what netlisting it adds goes again if it is refused: its own blocks, their hoisted lines)
-    // (and the parameters its parts gave blocks there before, its AC sources and includes; the library
-    // definitions it pulled stay, unused; what it said of blocks in it stays said: true anyway)
-    let (blocks, hoisted, ac, included) = (h.blocks.len(), h.hoisted.len(), h.ac, h.included);
-    let params: Vec<_> = h.blocks.iter().map(|b| b.params.clone()).collect();
-    let rollback = |h: &mut Hier| {
-        h.blocks.truncate(blocks);
-        h.blocks.iter_mut().zip(params).for_each(|(b, p)| b.params = p);
-        h.hoisted.truncate(hoisted);
-        (h.ac, h.included) = (ac, included);
-    };
-    h.stack.push((name.to_string(), said.clone()));
-    let child = build_netlist(&items, lib, false, h);
-    h.stack.pop();
-    if h.refused.contains_key(name) {
-        return rollback(h); // (it places itself, through its blocks: said)
+    // (netlisted on trial: refused, what it added goes again, but for what it found refused and
+    // the names it gave: true anyway, and not to be found again)
+    let mut trial = h.clone();
+    let keep = |trial: Hier, h: &mut Hier| (h.refused, h.names) = (trial.refused, trial.names);
+    trial.stack.push((name.to_string(), said.clone()));
+    let child = build_netlist(&items, lib, false, &mut trial);
+    trial.stack.pop();
+    if trial.refused.contains_key(name) {
+        return keep(trial, h); // (it places itself, through its blocks: said)
     }
     // (every pin has its label: refused above otherwise)
     let ports: Vec<String> = def.pins.iter().map(|p| label(&p.name).and_then(|k| child.nets[k].first().cloned()).unwrap_or_default()).collect();
@@ -2718,9 +2712,10 @@ fn sheet_subckt(name: &str, path: &str, def: &SymbolDef, lib: &mut Library, h: &
         _ => None,
     };
     if let Some(why) = why {
-        rollback(h);
+        keep(trial, h);
         return refuse(why, h);
     }
+    *h = trial;
     for w in child.warnings {
         warn(format!("{file}: {w}"));
     }
@@ -3176,7 +3171,9 @@ SYMBOL half 400 300 R0\nSYMATTR InstName U4\nSYMATTR Value R=3k\nFLAG 352 300 a\
         let nl = netlist(&parse_asc(&bare), &mut lib);
         assert!(nl.warnings.iter().any(|w| w.starts_with("XU1 passes no r")), "{:?}", nl.warnings);
         let nl = netlist(&parse_asc(&top.replace("\\n.param R=1k", "")), &mut lib);
-        assert!(!nl.warnings.iter().any(|w| w.contains("passes no")), "a sheet includes a file: {:?}", nl.warnings);
+        assert!(nl.warnings.iter().any(|w| w.starts_with("XU3 passes no r")), "a sheet's include is its own: {:?}", nl.warnings);
+        let nl = netlist(&parse_asc("Version 4\nSYMBOL div 0 0 R0\nSYMATTR InstName U1\n"), &mut lib);
+        assert!(!nl.warnings.iter().any(|w| w.contains("no ground")), "grounded in its sheet: {:?}", nl.warnings);
         let nl = netlist(&parse_asc("Version 4\nSYMBOL bench 0 0 R0\nSYMATTR InstName U1\n"), &mut lib);
         assert!(!nl.text.contains(".subckt sheet_bench") && nl.text.lines().any(|l| l.starts_with("XU1 ") && l.ends_with(" bench")) && !nl.warnings.iter().any(|w| w.contains("bench.asc")), "{:?}\n{}", nl.warnings, nl.text);
         let t = netlist(&parse_asc("Version 4\nSYMBOL secs 0 0 R0\nSYMATTR InstName U1\n"), &mut lib).text;

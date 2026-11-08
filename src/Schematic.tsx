@@ -13,7 +13,7 @@ import { copySelection, deleteSelection, duplicate, newItem, pasteClipboard, tra
 import { ANALYSIS, ANY_ANALYSIS, analysisOptions, continuation } from "./spice";
 import { openMenu, type MenuItem } from "./Menu";
 import { useSize } from "./lib/useSize";
-import { cn, MAC } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import { inlineStyles, saveSvg, withLightTheme } from "./svgExport";
 
 type View = { x: number; y: number; k: number };
@@ -604,9 +604,7 @@ export const Schematic = memo(function Schematic() {
         const kind = ({ D: "D", Q: "NPN|PNP", M: "NMOS|PMOS|VDMOS", J: "NJF|PJF", X: "SUBCKT" } as Record<string, string>)[prefix];
         // its schematic opens (to fix one the netlist refuses, too), unless it is this one (a test
         // bench of its part); a model is chosen for a part the netlist runs as no block
-        // (case-insensitive disks on macOS and Windows: the same file however its case is spelled)
-        const fold = (p?: string | null) => (MAC || /Win/i.test(navigator.userAgent) ? p?.toLowerCase() : p);
-        const sheet = defOf(lib, it)?.sheet, here = !!sheet && fold(sheet) === fold(useS.getState().path);
+        const sheet = defOf(lib, it)?.sheet, here = sheet === useS.getState().path;
         const block = nets ? !!nets.sheets?.[i] : !!sheet && !here;
         return [
           { label: "Edit…", hint: probing ? undefined : "dbl-click", run: edit },

@@ -222,6 +222,7 @@ async fn simulate(items: Vec<Item>, dir: Option<String>, lib: tauri::State<'_, L
         let mut lib = lib.0.lock().unwrap_or_else(|e| e.into_inner());
         // a run looks again: a symbol edited next to the schematic counts (the UI reloads it)
         let symbols = lib.set_dir(dir.as_deref().map(std::path::Path::new), true);
+        lib.reread_sheets();
         (schematic::netlist(&items, &mut lib), schematic::netlist_for_sim(&items, &mut lib), symbols)
     };
     // the newer request wins: a running root locus stops at its next step, then this runs
