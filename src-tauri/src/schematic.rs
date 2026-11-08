@@ -98,9 +98,29 @@ impl SymbolDef {
     /// Whether a schematic of its name would be its subcircuit: a BLOCK, or a symbol calling a
     /// subcircuit (Prefix X) without naming another one in its Value or a library file.
     pub fn calls_sheet(&self) -> bool {
-        self.block || (matches!(self.prefix.trim(), "" | "X" | "x") && !self.model_file && block_params(&self.value, &self.name).is_some())
+        !self.model_file && (self.block || (matches!(self.prefix.trim(), "" | "X" | "x") && block_params(&self.value, &self.name).is_some()))
+    }
+
+    /// Whether `items` (a schematic of its name) can be its subcircuit: it does not place this
+    /// symbol itself (a library part's test bench), and has a label for every pin.
+    pub fn sheet_fits(&self, items: &[Item]) -> Result<(), String> {
+        if items.iter().any(|it| matches!(it, Item::Sym { sym, .. } if sym_key(sym) == self.name)) {
+            return Err("places its own block".into());
+        }
+        match self.pins.iter().find(|p| sheet_label(items, &p.name).is_none()) {
+            Some(p) => Err(format!("has no label {} for the pin of that name", p.name)),
+            None => Ok(()),
+        }
     }
 }
+
+/// The label of a block's pin in its schematic (its index in the items).
+fn sheet_label(items: &[Item], pin: &str) -> Option<usize> {
+    items.iter().position(|it| matches!(it, Item::Flag { name, .. } if name.trim().eq_ignore_ascii_case(pin.trim())))
+}
+
+/// How the netlist ends a warning of a model it has nowhere (a file included anywhere may have it).
+const NO_MODEL: &str = ": no model or subcircuit of that name in the libraries";
 
 /// A block instance's parameters (`R=1k C=1n`) from its Value: None if the Value names a
 /// subcircuit other than the block's own (a model call, not the sheet).
@@ -194,7 +214,7 @@ pub struct Library {
     local: Local,
     /// blocks' schematics as last read, by path: (modified, size, items), so netlisting on every
     /// edit reads only those that changed
-    sheets: HashMap<String, (Option<std::time::SystemTime>, u64, Vec<Item>)>,
+    sheets: HashMap<String, (Option<std::time::SystemTime>, u64, std::sync::Arc<Vec<Item>>)>,
 }
 
 /// Where symbols came from, so they can go again.
@@ -226,21 +246,12 @@ fn keyed(files: &[std::path::PathBuf], ext: &str) -> Vec<(String, std::path::Pat
     list
 }
 
-/// The schematic folder's own symbol files: (key, path) of each .asy, not those of a built-in
-/// symbol (nomospice's win). Library::set_dir and Save As (carry them along) share it.
-pub fn folder_symbols(dir: &std::path::Path) -> Vec<(String, std::path::PathBuf)> {
-    symbols_in(&listing(dir))
-}
-
-fn symbols_in(files: &[std::path::PathBuf]) -> Vec<(String, std::path::PathBuf)> {
-    keyed(files, "asy").into_iter().filter(|(k, _)| !builtin_symbol(k)).collect()
-}
-
-/// A folder's symbols (as `folder_symbols`) and schematics by key (the sheets of its blocks), from
-/// one listing.
+/// A folder's own symbol files by key (each .asy, not those of a built-in symbol: nomospice's
+/// win) and its schematics by key (the sheets of its blocks), from one listing. Library::set_dir,
+/// Save As (carry them along) and block symbols share it.
 pub fn folder_contents(dir: &std::path::Path) -> (HashMap<String, std::path::PathBuf>, HashMap<String, std::path::PathBuf>) {
     let files = listing(dir);
-    (symbols_in(&files).into_iter().collect(), keyed(&files, "asc").into_iter().collect())
+    (keyed(&files, "asy").into_iter().filter(|(k, _)| !builtin_symbol(k)).collect(), keyed(&files, "asc").into_iter().collect())
 }
 
 /// (count, a sum over names, modification times and sizes) of a folder's symbol files (the list
@@ -278,9 +289,9 @@ impl Library {
         // (a run, a reload: blocks' schematics read again; the live netlist trusts their size and
         // time, which an edit within the clock's granularity that keeps the size can fool)
         self.sheets.clear();
-        let files = dir.map(listing).unwrap_or_default(); // one listing for the stamp and the load
-        let list = symbols_in(&files);
-        let sheets: HashMap<_, _> = keyed(&files, "asc").into_iter().collect();
+        let (list, sheets) = dir.map(folder_contents).unwrap_or_default(); // one listing for the stamp and the load
+        let mut list: Vec<_> = list.into_iter().collect();
+        list.sort();
         // (None: no such folder; a schematic added or removed beside a symbol makes it a block or not)
         let stamp = dir.and_then(|d| std::fs::metadata(d).ok()).map(|_| (asy_stamp(&list), sheets.values().cloned().collect::<std::collections::BTreeSet<_>>()));
         if !moved && stamp == self.local.stamp {
@@ -323,13 +334,13 @@ impl Library {
     }
 
     /// A block's schematic: its items, read again only once the file changed.
-    fn sheet(&mut self, path: &str) -> Result<Vec<Item>, String> {
+    fn sheet(&mut self, path: &str) -> Result<std::sync::Arc<Vec<Item>>, String> {
         let m = std::fs::metadata(path).map_err(|e| e.to_string())?;
         let stamp = (m.modified().ok(), m.len());
         if let Some((_, _, items)) = self.sheets.get(path).filter(|(t, n, _)| (*t, *n) == stamp) {
             return Ok(items.clone());
         }
-        let items = parse_asc(&decode(&std::fs::read(path).map_err(|e| e.to_string())?));
+        let items = std::sync::Arc::new(parse_asc(&decode(&std::fs::read(path).map_err(|e| e.to_string())?)));
         self.sheets.insert(path.to_string(), (stamp.0, stamp.1, items.clone()));
         Ok(items)
     }
@@ -2320,7 +2331,7 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
         // a hierarchical block: its sheet's subcircuit, named as the symbol, its Value's parameters
         // passed; a sheet that is none here (said, or none at all): a subcircuit of that name
         let written = attrs.get("Value").unwrap_or(&def.value);
-        let call = (prefix == 'X' && (def.sheet.is_some() || def.block) && def.calls_sheet()).then(|| block_params(written, &def.name)).flatten();
+        let call = (prefix == 'X' && (def.sheet.is_some() || (def.block && !def.model_file))).then(|| block_params(written, &def.name)).flatten();
         // (a name of its own: a sheet wrapping a library part of its name calls that one, not itself)
         let name = format!("sheet_{}", net_name(&def.name));
         if let (Some(_), Some(path)) = (&call, &def.sheet) {
@@ -2353,7 +2364,11 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
         if prefix == 'M' && nodes.len() == 3 && !vdmos.contains(&model) && !lib_vdmos() {
             nodes.push(nodes[2].clone()); // bulk tied to source
         }
-        if "DQMXJSW".contains(prefix) && block.is_none() && !model.is_empty() && !defined(&model) && !used_models.contains(&model) {
+        // (a BLOCK symbol whose sheet is none here, said: its name is no library's either)
+        let refused = def.block && h.refused.get(&format!("sheet_{}", net_name(&def.name))).is_some_and(|w| !w.is_empty());
+        if "DQMXJSW".contains(prefix) && model.is_empty() {
+            nl.warnings.push(format!("{inst}: no model or subcircuit named (its Value is empty)"));
+        } else if "DQMXJSW".contains(prefix) && block.is_none() && !refused && !defined(&model) && !used_models.contains(&model) {
             used_models.push(model);
         }
         let extra: Vec<String> = ["Value2", "SpiceLine", "SpiceLine2"].iter()
@@ -2537,7 +2552,7 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
             (Some(defs), _) => Some(defs.join("\n")),
             (None, Some(text)) => h.emitted.insert(m.clone()).then_some(text),
             (None, None) if !includes && !h.emitted.contains(&m) => {
-                nl.warnings.push(format!("`{m}`: no model or subcircuit of that name in the libraries"));
+                nl.warnings.push(format!("`{m}`{NO_MODEL}"));
                 None
             }
             _ => None,
@@ -2550,6 +2565,10 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
     }
     if !sub {
         nl.warnings.extend(h.refused.values().filter(|w| !w.is_empty()).cloned());
+        if includes {
+            // (a file a sheet includes, hoisted: it may define what an earlier sheet missed)
+            nl.warnings.retain(|w| !w.ends_with(NO_MODEL));
+        }
         for g in std::mem::take(&mut h.hoisted) {
             if !lines.contains(&g) {
                 lines.push(g);
@@ -2625,21 +2644,14 @@ fn sheet_subckt(name: &str, path: &str, def: &SymbolDef, lib: &mut Library, h: &
     }
     let items = match lib.sheet(path) {
         Ok(items) => items,
-        Err(e) => {
-            h.refused.insert(name.to_string(), format!("{file}: {e}")); // (once: not read again for every part)
-            return;
-        }
+        Err(e) => return refuse(format!("cannot be read ({e})"), h), // (once: not tried again for every part)
     };
-    // (a test bench of a library part, placing it: the part's model, as before it had a sheet; seen
-    // before netlisting it)
-    if items.iter().any(|it| matches!(it, Item::Sym { sym: s, .. } if sym_key(s) == def.name)) {
-        return refuse("places its own block".into(), h);
+    // (seen before netlisting it: a library part's test bench, placing it, is the part's model, as
+    // before it had a sheet; a schematic of another kind that only shares its name lacks a pin)
+    if let Err(why) = def.sheet_fits(&items) {
+        return refuse(why, h);
     }
-    // (every pin a port there: a schematic of another kind that only shares the symbol's name is none)
-    let label = |pin: &str| items.iter().position(|it| matches!(it, Item::Flag { name, .. } if name.trim().eq_ignore_ascii_case(pin.trim())));
-    if let Some(p) = def.pins.iter().find(|p| label(&p.name).is_none()) {
-        return refuse(format!("has no label {} for the pin of that name", p.name), h);
-    }
+    let label = |pin: &str| sheet_label(&items, pin);
     // (what netlisting it adds goes again if it is refused: its own blocks, their hoisted lines)
     // (and the parameters its parts gave blocks there before, its AC sources; the library
     // definitions it pulled stay, unused; what it said of blocks in it stays said: true anyway)
@@ -3076,6 +3088,7 @@ TEXT 0 200 Left 2 !.param R=1k\\n.tran 1m\\n.control\\nrun\\n.endc\\n.global vcc
         assert!(block_asy(&parse_asc("Version 4\nFLAG 0 0 a\n")).is_err(), "no ports: no symbol");
         assert!(block_asy(&parse_asc("Version 4\nFLAG 0 0 GND\nIOPIN 0 0 BiDir\nFLAG 0 0 a\nIOPIN 0 0 In\n")).is_ok_and(|a| !a.contains("GND")), "ground is no pin");
         assert!(!parse_asy("x", "SYMATTR Prefix X\nSYMATTR Value x\nSYMATTR ModelFile x.lib\n").calls_sheet(), "a library subcircuit's symbol");
+        assert!(!parse_asy("x", "SymbolType BLOCK\nSYMATTR SpiceModel x.sub\n").calls_sheet(), "a library block symbol");
         std::fs::write(dir.join("div.asy"), &asy).unwrap();
         std::fs::write(dir.join("Div.asc"), div).unwrap();
         // a sheet of no .param of its own: an instance passing none gets its caller's
@@ -3128,7 +3141,7 @@ SYMBOL half 400 300 R0\nSYMATTR InstName U4\nSYMATTR Value R=3k\nFLAG 352 300 a\
         let nl = netlist(&parse_asc("Version 4\nSYMBOL ping 0 0 R0\nSYMATTR InstName U1\nSYMBOL other 0 100 R0\nSYMATTR InstName U2\n"), &mut lib);
         assert!(nl.warnings.iter().any(|w| w.starts_with("ping.asc places its own block")), "{:?}", nl.warnings);
         assert!(!nl.text.contains(".subckt sheet_ping") && !nl.text.contains(".subckt sheet_pong") && nl.text.lines().any(|l| l.starts_with("XU1 ") && l.ends_with(" ping")), "a loop of sheets is no subcircuit (no endless one), its parts called by name: {}", nl.text);
-        assert!(nl.warnings.iter().any(|w| w.starts_with("pong's schematic places itself")), "{:?}", nl.warnings);
+        assert!(nl.warnings.iter().any(|w| w.starts_with("pong's schematic places itself")) && !nl.warnings.iter().any(|w| w.contains("`ping`")), "the loop said, no missing library: {:?}", nl.warnings);
         assert!(nl.warnings.iter().any(|w| w.starts_with("other.asc has no label a")) && !nl.text.contains(".subckt sheet_other"), "{:?}", nl.warnings);
         // a parameter the caller lacks: said (ngspice stops on it)
         let bare = top.replace("\\n.param R=1k", "").replace("SYMBOL half", "SYMBOL bare").replace("SYMBOL div", "SYMBOL bare");

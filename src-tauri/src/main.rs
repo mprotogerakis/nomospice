@@ -154,7 +154,7 @@ async fn block_symbol(path: String, items: Vec<Item>, replace: bool) -> Result<O
     let data = schematic::encode(&schematic::block_asy(&items)?);
     tauri::async_runtime::spawn_blocking(move || {
         let dir = path.parent().unwrap_or(std::path::Path::new("."));
-        let there = schematic::folder_symbols(dir).into_iter().find(|(k, _)| *k == schematic::sym_key(&stem)).map(|(_, p)| p);
+        let there = schematic::folder_contents(dir).0.remove(&schematic::sym_key(&stem));
         match there {
             Some(p) if !replace => Ok(Some(p.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default())),
             // (the one there: on a case-sensitive disk another case of it would not be the one used)
@@ -331,16 +331,15 @@ async fn folder_symbols(from: String, to: String, names: Vec<String>, copy: bool
             files.push((src.clone(), new.get(&key)));
             // (not where the new folder has its own symbol of that name, which it would turn into a
             // block; not the document itself, a test bench of its own block, which is saved anyway)
-            let block = new.get(&key).is_none() && std::fs::read(src).is_ok_and(|b| schematic::parse_asy(&key, &schematic::decode(&b)).calls_sheet());
+            let def = std::fs::read(src).ok().map(|b| schematic::parse_asy(&key, &schematic::decode(&b))).filter(|d| new.get(&key).is_none() && d.calls_sheet());
             // (case-insensitive disks: another spelling of the same file)
             let own = |p: &std::path::PathBuf| doc.as_deref().is_some_and(|d| if cfg!(any(target_os = "macos", windows)) { d.to_lowercase() == p.to_string_lossy().to_lowercase() } else { std::path::Path::new(d) == p.as_path() });
-            if let Some(sheet) = old_sheets.get(&key).filter(|p| block && !own(p)) {
-                // (a library part's test bench, which places it: no block's, stays)
+            if let (Some(def), Some(sheet)) = (def, old_sheets.get(&key).filter(|p| !own(p))) {
+                // (only one the netlist would take as its block's: not a library part's test bench)
                 let items = std::fs::read(sheet).map(|b| schematic::parse_asc(&schematic::decode(&b))).unwrap_or_default();
-                let syms: Vec<String> = items.into_iter().filter_map(|it| match it { Item::Sym { sym, .. } => Some(sym), _ => None }).collect();
-                if !syms.iter().any(|s| schematic::sym_key(s) == key) {
+                if def.sheet_fits(&items).is_ok() {
                     files.push((sheet.clone(), new_sheets.get(&key)));
-                    queue.extend(syms);
+                    queue.extend(items.into_iter().filter_map(|it| match it { Item::Sym { sym, .. } => Some(sym), _ => None }));
                 }
             }
         }
