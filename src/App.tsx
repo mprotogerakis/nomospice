@@ -45,7 +45,8 @@ const G = {
   volt: glyph("M12 2v3M12 19v3M12 5a7 7 0 1 0 0 14a7 7 0 1 0 0-14M9 12c1-2.5 2-2.5 3 0s2 2.5 3 0"),
 };
 
-const FILTERS = [{ name: "LTspice schematic", extensions: ["asc"] }];
+const FILTERS = [{ name: "Schematic or netlist", extensions: ["asc", "cir", "net", "sp", "spi", "ckt"] }, { name: "LTspice schematic", extensions: ["asc"] }, { name: "SPICE netlist", extensions: ["cir", "net", "sp", "spi", "ckt"] }];
+const NETLIST = /\.(cir|net|sp|spi|ckt)$/i;
 /** Typing into a text field (a focused checkbox or button must not swallow the hotkeys). */
 const typing = (e: KeyboardEvent) =>
   e.target instanceof HTMLElement && e.target.closest("input:not([type=checkbox]):not([type=radio]):not([type=button]),textarea,select,dialog") !== null;
@@ -115,10 +116,21 @@ async function openFile(path?: string) {
     path = picked;
   }
   try {
-    await loadDoc(await invoke<Item[]>("open_asc", { path }), path);
+    await openPath(path);
   } catch (e) {
     await fail(`Cannot open ${path}`)(e);
   }
+}
+/** Open a schematic, or a netlist as a new schematic of it: beside it (its .includes found from
+ *  there), never saved over it: name.asc, or name-2.asc … if that is taken. */
+async function openPath(path: string) {
+  const items = await invoke<Item[]>("open_asc", { path });
+  if (!NETLIST.test(path)) return loadDoc(items, path);
+  const base = path.replace(NETLIST, "");
+  let asc = `${base}.asc`;
+  for (let k = 2; await invoke<boolean>("path_exists", { path: asc }); k++) asc = `${base}-${k}.asc`;
+  await loadDoc(items, asc);
+  useS.setState({ dirty: true });
 }
 let saveQueue: Promise<unknown> = Promise.resolve();
 
@@ -232,7 +244,7 @@ export function App() {
       await loadSymbols();
       setExamples(await invoke<[string, Item[]][]>("examples"));
       const args = await invoke<string[]>("cli_args");
-      const file = args.find((a) => a.toLowerCase().endsWith(".asc"));
+      const file = args.find((a) => /\.asc$/i.test(a) || NETLIST.test(a));
       const rec = await invoke<{ path: string | null; items: Item[] } | null>("recovery_take");
       // an empty document is a valid snapshot too (the user deleted everything)
       const restore = Array.isArray(rec?.items) && (await ask(`Restore unsaved changes${rec.path ? ` to ${rec.path}` : ""} from the last session?`, { title: "nomospice", kind: "info" }));
@@ -244,7 +256,7 @@ export function App() {
         return;
       }
       try {
-        if (file) await loadDoc(await invoke<Item[]>("open_asc", { path: file }), file);
+        if (file) await openPath(file);
         if (args.includes("--run")) await simulate();
       } catch (e) {
         await fail(`Cannot open ${file}`)(e);

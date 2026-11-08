@@ -429,6 +429,28 @@ fn drawing(tok: &[&str]) -> Option<Item> {
     (nums.len() == n || nums.len() == n + 1).then(|| Item::Draw { kind: tok[0].to_string(), width: tok[1].to_string(), p: nums[..n].to_vec(), style: nums.get(n).copied() })
 }
 
+/// Whether `path` names a SPICE netlist (opened as a schematic of it, see `netlist_items`).
+pub fn is_netlist(path: &str) -> bool {
+    let p = path.to_ascii_lowercase();
+    [".cir", ".net", ".sp", ".spi", ".ckt"].iter().any(|e| p.ends_with(e))
+}
+
+/// A SPICE netlist as a schematic: its title as a comment, the rest (up to `.end`) as one SPICE
+/// directive, which a run takes as it is (parts, models, analyses alike), so it simulates and its
+/// nodes can be plotted by name; nothing is drawn of it.
+pub fn netlist_items(text: &str) -> Vec<Item> {
+    let mut lines = text.lines();
+    let title = lines.next().unwrap_or("").trim().trim_start_matches('*').trim().to_string();
+    let body: Vec<&str> = lines.take_while(|l| !l.trim().eq_ignore_ascii_case(".end")).collect();
+    let body = body.join("\n").trim_matches('\n').to_string();
+    let mut items = vec![];
+    if !title.is_empty() {
+        items.push(Item::Text { x: 0, y: -48, text: title, directive: false, align: "Left 2".into() });
+    }
+    items.push(Item::Text { x: 0, y: 0, text: body, directive: true, align: "Left 2".into() });
+    items
+}
+
 pub fn write_asc(items: &[Item]) -> String {
     let sheet = items.iter().find_map(|it| match it {
         Item::Raw { line } if line.starts_with("SHEET ") => Some(line.as_str()),
@@ -2648,6 +2670,21 @@ mod tests {
 
     fn lt_random_t(t: &str) -> std::borrow::Cow<'_, str> {
         lt_random(t, &mut vec![])
+    }
+
+    #[test]
+    fn netlist_import() {
+        // a netlist opened: its title a comment, the rest one directive, simulated as it was
+        let net = "* RC divider\nV1 in 0 DC 2\nR1 in out 1k\nR2 out 0 1k\n.op\n.end\nnot read\n";
+        let items = netlist_items(net);
+        assert!(matches!(&items[0], Item::Text { text, directive: false, .. } if text == "RC divider"));
+        assert!(matches!(&items[1], Item::Text { text, directive: true, .. } if text.starts_with("V1 in 0") && text.ends_with(".op")), "{items:?}");
+        let _s = SIM.lock();
+        let nl = netlist_for_sim(&items, &mut Library::builtin());
+        let run = crate::ngspice::run(&nl.prepared(None, &mut vec![])).unwrap();
+        let v = crate::ngspice::trace("v(out)", &run.scale, run.id).unwrap();
+        assert!((v.re[0] - 1.0).abs() < 1e-9, "{:?}", v.re);
+        assert!(is_netlist("/a/b.CIR") && is_netlist("x.net") && !is_netlist("x.asc"));
     }
 
     #[test]

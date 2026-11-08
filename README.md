@@ -47,6 +47,8 @@ files — with a modern UI, ngspice as the engine, a Rust core and a React front
   (one click downloads the original package from the Internet Archive; ~45,000 models and
   subcircuits) and your own folders. Search, preview, place — subcircuits get a generated box symbol;
   definitions and their dependencies are pulled into the netlist automatically.
+- **Netlists**: open a `.cir`/`.net`/`.sp` file and it becomes a schematic of one SPICE directive
+  holding it: it runs, its nodes plot by name (Add trace), saving writes an `.asc` beside it.
 - **Git**: branch and file state in the status bar; History panel to commit, compare a revision
   on the canvas (added/removed parts highlighted) and restore it.
 - **MCP server**: `nomospice --mcp` lets AI assistants read/write schematics, simulate them and
