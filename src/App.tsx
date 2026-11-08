@@ -342,7 +342,8 @@ export function App() {
         f5: () => (useS.getState().sel.length ? deleteSelection() : useS.setState({ tool: { k: "delete" } })),
         f6: duplicate, f9: e.shiftKey ? redo : undo,
         // (F7/F8 as LTspice has them; on a Mac they are media keys unless fn is held: M too)
-        f1: () => useS.setState({ dialog: { k: "help" } }),
+        // (F1; on a Mac a brightness key unless fn is held: ? too)
+        f1: () => useS.setState({ dialog: { k: "help" } }), "?": () => useS.setState({ dialog: { k: "help" } }),
         f7: moveTool, m: moveTool, f8: () => useS.setState({ tool: { k: "select" } }),
         " ": () => window.dispatchEvent(new Event("nomospice:fit")),
       };
@@ -417,7 +418,7 @@ export function App() {
         <ToolbarSpacer />
         <ToolbarButton label="Log & netlist" hotkey="⌘L" icon={<ScrollText />} pressable active={!!s.panel} onClick={togglePanel} />
         <ToolbarButton label="Toggle theme" icon={mode === "dark" ? <Sun /> : <Moon />} onClick={() => setMode(updateThemePreference(mode === "dark" ? "light" : "dark").mode)} />
-        <ToolbarButton label="Quick reference" hotkey="F1" icon={<CircleHelp />} onClick={() => useS.setState({ dialog: { k: "help" } })} />
+        <ToolbarButton label="Quick reference" hotkey="? / F1" icon={<CircleHelp />} onClick={() => useS.setState({ dialog: { k: "help" } })} />
         <ToolbarButton label="About & licenses" icon={<Info />} onClick={() => useS.setState({ dialog: { k: "about" } })} />
       </Toolbar>
 
