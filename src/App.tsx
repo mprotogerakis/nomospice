@@ -125,14 +125,19 @@ async function openFile(path?: string) {
     await fail(`Cannot open ${path}`)(e);
   }
 }
+/** `base.ext`, or `base-2.ext` … if that is taken: the name of no file there. */
+async function freeName(base: string, ext: string) {
+  let path = `${base}.${ext}`;
+  for (let k = 2; await invoke<boolean>("path_exists", { path }); k++) path = `${base}-${k}.${ext}`;
+  return path;
+}
+
 /** Open a schematic, or a netlist as a new schematic of it: beside it (its .includes found from
  *  there), never saved over it: name.asc, or name-2.asc … if that is taken. */
 async function openPath(path: string) {
   const [items, netlist] = await invoke<[Item[], boolean]>("open_asc", { path });
   if (!netlist) return loadDoc(items, path);
-  const base = path.replace(/\.[^./\\]*$/, "");
-  let asc = `${base}.asc`;
-  for (let k = 2; await invoke<boolean>("path_exists", { path: asc }); k++) asc = `${base}-${k}.asc`;
+  const asc = await freeName(path.replace(/\.[^./\\]*$/, ""), "asc");
   await loadDoc(items, asc, true); // (its first save asks where, offering this name: a file made there since is not overwritten unasked)
   useS.setState({ dirty: true });
 }
@@ -225,9 +230,7 @@ async function newSymbol() {
   // (a name no file there has: the new symbol is no other one's)
   // (in the folder's own separator; a root's ends in one)
   const dir = dirOf(useS.getState().path), sep = dir?.includes("\\") ? "\\" : "/";
-  const base = dir ? `${dir.endsWith(sep) ? dir : dir + sep}untitled` : "untitled";
-  let path = `${base}.asy`;
-  for (let k = 2; dir && (await invoke<boolean>("path_exists", { path })); k++) path = `${base}-${k}.asy`;
+  const path = dir ? await freeName(`${dir.endsWith(sep) ? dir : dir + sep}untitled`, "asy") : "untitled.asy";
   await loadDoc([{ t: "raw", line: "SymbolType CELL" }, { t: "raw", line: "SYMATTR Prefix X" }], path, true);
 }
 

@@ -37,7 +37,7 @@ function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: 
   const lib = useS((s) => s.lib);
   // (a label in a symbol is one of its pins: a PIN line always, where its name shows)
   const symbol = useS((s) => isSymbolDoc(s.path));
-  const [it, setIt] = useState(item.t === "flag" && symbol ? forDoc(item, false) : item);
+  const [it, setIt] = useState(item.t === "flag" && symbol ? forDoc(item) ?? item : item);
   const attr = (k: string) => (it.t === "sym" ? it.attrs[k] ?? "" : "");
   const setAttr = (k: string, v: string) => it.t === "sym" && setIt({ ...it, attrs: { ...it.attrs, [k]: v } });
   const def = it.t === "sym" ? defOf(lib, it) : undefined;

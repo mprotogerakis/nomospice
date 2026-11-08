@@ -446,7 +446,8 @@ export const Schematic = memo(function Schematic() {
   // named once per paste (not per mouse move): the preview follows the cursor by shifting these
   const pasteNamed = useMemo(() => (tool.k === "paste" ? pasted(tool.items) : []), [tool, items, lib]); // eslint-disable-line react-hooks/exhaustive-deps
   const wirePath = (a: Pt, b: Pt): Item[] => {
-    if (symbolDoc) return dropZeroWires([{ t: "wire", x1: a[0], y1: a[1], x2: b[0], y2: b[1] }]); // (a symbol's line: straight, any angle)
+    // (a symbol's line: a drawing, straight at any angle)
+    if (symbolDoc) return a[0] === b[0] && a[1] === b[1] ? [] : [{ t: "draw", kind: "LINE", width: "Normal", p: [a[0], a[1], b[0], b[1]] }];
     const corner: Pt = hFirst ?? true ? [b[0], a[1]] : [a[0], b[1]];
     return dropZeroWires([
       { t: "wire", x1: a[0], y1: a[1], x2: corner[0], y2: corner[1] },
@@ -494,7 +495,7 @@ export const Schematic = memo(function Schematic() {
         let built: ReturnType<typeof dragPlan> | null = null;
         const chosen = new Set(next);
         // (a symbol's lines are no wires: what is moved moves alone)
-        const plan = tool.k === "move" || symbolDoc
+        const plan = tool.k === "move"
           ? (dx: number, dy: number) => items.map((it, j) => (chosen.has(j) && isShape(it) ? shifted(it, dx, dy) : it))
           : (dx: number, dy: number) => (built ??= dragPlan(items, lib, chosen))(dx, dy);
         drag.current = { k: "move", start: g, plan, moved: false, index: i, at: [0, 0], base: items, pin: probing ? pinAt(items[i], p) : undefined };
@@ -554,8 +555,7 @@ export const Schematic = memo(function Schematic() {
         const left = leftLabels(items);
         // (a drawing only when wholly inside: a band around parts within a frame does not take the frame)
         const within = (q: Box) => q[0] >= r[0] && q[2] <= r[2] && q[1] >= r[1] && q[3] <= r[3];
-        // (a symbol's lines, at any angle, alike: their box is not where they are)
-        const hits = items.flatMap((it, i) => { const q = box(it, lib, left); return q && (it.t === "draw" || (symbolDoc && it.t === "wire") ? within(q) : q[0] <= r[2] && q[2] >= r[0] && q[1] <= r[3] && q[3] >= r[1]) ? [i] : []; });
+        const hits = items.flatMap((it, i) => { const q = box(it, lib, left); return q && (it.t === "draw" ? within(q) : q[0] <= r[2] && q[2] >= r[0] && q[1] <= r[3] && q[3] >= r[1]) ? [i] : []; });
         useS.setState({ sel: [...new Set([...sel, ...hits])] });
       }
     }
@@ -746,10 +746,10 @@ export const Schematic = memo(function Schematic() {
             return (
               <g
                 key={i}
-                // (a symbol's lines and pins: drawn as a part's are)
-                color={selected ? "var(--selection)" : diffSets?.added.has(i) ? "var(--series-3)" : symbolDoc && (it.t === "wire" || it.t === "flag") ? "var(--sch-symbol)" : colorOf(it)}
+                // (a symbol's drawing and pins: as a part's are)
+                color={selected ? "var(--selection)" : diffSets?.added.has(i) ? "var(--series-3)" : symbolDoc && (it.t === "draw" || it.t === "flag") ? "var(--sch-symbol)" : colorOf(it)}
                 stroke="currentColor"
-                strokeWidth={it.t === "wire" && !symbolDoc ? (netHi ? 4 : 2) : 1.6}
+                strokeWidth={it.t === "wire" ? (netHi ? 4 : 2) : 1.6}
                 style={{ vectorEffect: "non-scaling-stroke", opacity: i === hover && !selected ? 0.75 : 1 }}
                 className="[&_*]:[vector-effect:non-scaling-stroke]"
               >
@@ -762,8 +762,8 @@ export const Schematic = memo(function Schematic() {
               <ItemView it={it} lib={lib} />
             </g>
           ))}
-          {/* (a symbol's lines are drawing, no wires: no junctions; its origin is where it is placed) */}
-          {!symbolDoc && conn.dots.map(([x, y]) => <circle key={`d${x},${y}`} cx={x} cy={y} r={4} fill="var(--sch-wire)" />)}
+          {/* (a symbol's origin: where it is placed) */}
+          {conn.dots.map(([x, y]) => <circle key={`d${x},${y}`} cx={x} cy={y} r={4} fill="var(--sch-wire)" />)}
           {symbolDoc && <path d="M-12 0H12M0 -12V12" stroke="var(--text-tertiary)" strokeWidth={1} vectorEffect="non-scaling-stroke" />}
           {conn.open.map(([x, y]) => <rect key={`o${x},${y}`} x={x - 3} y={y - 3} width={6} height={6} stroke="var(--sch-pin)" strokeWidth={1} vectorEffect="non-scaling-stroke" />)}
           {!!ghosts.length && (
@@ -773,7 +773,7 @@ export const Schematic = memo(function Schematic() {
           )}
           {wireStart && (
             <g stroke="var(--selection)" strokeWidth={2} strokeDasharray="8 6" opacity={0.8} className="[&_*]:[vector-effect:non-scaling-stroke]">
-              {wirePath(wireStart, cursor).map((w, i) => w.t === "wire" && <line key={i} x1={w.x1} y1={w.y1} x2={w.x2} y2={w.y2} />)}
+              {wirePath(wireStart, cursor).map((w, i) => (w.t === "wire" ? <line key={i} x1={w.x1} y1={w.y1} x2={w.x2} y2={w.y2} /> : w.t === "draw" && <line key={i} x1={w.p[0]} y1={w.p[1]} x2={w.p[2]} y2={w.p[3]} />))}
             </g>
           )}
           {!selecting && (

@@ -20,21 +20,27 @@ export function transform(f: (r: string) => string) {
 
 /** A label as this document takes it: in a symbol a pin (where its name shows; a number of its
  *  own when saved), in a schematic a net label (its port kind). */
-export function forDoc<T extends Item>(it: T, copy = true): T {
+// (its number goes along: a cut pin pasted keeps its place; a copy of one still there, after it,
+// gets the next free one when saved)
+export function forDoc(it: Item): Item | null {
+  const symbol = isSymbolDoc(useS.getState().path);
+  // (a symbol: no parts or directives; a schematic's wire a line of it)
+  if (symbol && (it.t === "sym" || (it.t === "text" && it.directive))) return null;
+  if (symbol && it.t === "wire") return { t: "draw", kind: "LINE", width: "Normal", p: [it.x1, it.y1, it.x2, it.y2] };
   if (it.t !== "flag") return it;
-  const { path, items } = useS.getState(), symbol = isSymbolDoc(path);
-  // (a copy's number: a cut pin pasted keeps its place, a copy of one still there gets the next one when saved)
-  const order = (e?: string[]) => e?.find((l) => l.trimStart().startsWith("PINATTR SpiceOrder "))?.trim();
-  const taken = copy && items.some((x) => x.t === "flag" && order(x.extra) && order(x.extra) === order(it.extra));
-  const extra = (it.extra ?? []).map((l) => l.trimStart()).filter((l) => (symbol ? l.startsWith("PIN ") || (l.startsWith("PINATTR ") && !(taken && l.startsWith("PINATTR SpiceOrder "))) : l.startsWith("IOPIN ")));
-  return { ...it, extra: symbol && !pinLine(extra) ? [`PIN ${it.x} ${it.y} NONE 8`, ...extra] : extra };
+  const extra = (it.extra ?? []).map((l) => l.trimStart()).filter((l) => (symbol ? l.startsWith("PIN ") || l.startsWith("PINATTR ") : l.startsWith("IOPIN ")));
+  if (symbol) return { ...it, extra: pinLine(extra) ? extra : [`PIN ${it.x} ${it.y} NONE 8`, ...extra] };
+  // (a pin into a schematic: a net label, named as one)
+  const name = it.name.trim().replace(/\s+/g, "_");
+  return name ? { ...it, name, extra } : null;
 }
 
 export function duplicate() {
   const { items, sel } = useS.getState();
   const it = sel.length === 1 ? items[sel[0]] : null;
   if (!it || it.t === "wire" || it.t === "raw") return;
-  const copy: Item = it.t === "sym" ? { ...it, attrs: Object.fromEntries(Object.entries(it.attrs).filter(([k]) => k !== "InstName")) } : forDoc({ ...it });
+  const copy = it.t === "sym" ? { ...it, attrs: Object.fromEntries(Object.entries(it.attrs).filter(([k]) => k !== "InstName")) } : forDoc({ ...it });
+  if (!copy) return;
   useS.setState({ tool: { k: "place", item: copy }, sel: [] });
 }
 
@@ -67,9 +73,9 @@ function shape(v: unknown): Shape | null {
     return { t: "draw", kind: it.kind.toUpperCase(), width: /^wide$/i.test(String(it.width)) ? "Wide" : "Normal", p: it.p as number[], ...(typeof it.style === "number" && it.style >= 0 && it.style <= 4 ? { style: it.style } : {}) }; // (another style: none, not a 0 that was not there)
   if (!num(it.x) || !num(it.y)) return null;
   // (a label as read from a file may end in spaces: its name is the rest)
-  // (a symbol's pin, its PIN line with it, may have no name or one of words)
+  // (a symbol's pin, its PIN line with it, may have no name or one of words; one line all the same)
   const pin = Array.isArray(it.extra) && it.extra.some((l) => str(l) && /^\s*PIN\s/.test(l as string));
-  if (it.t === "flag" && typeof it.name === "string" && (word(it.name.trim()) || (pin && !CONTROL.test(it.name)))) return { t: "flag", x: it.x as number, y: it.y as number, name: it.name.trim(), ...extras(it.extra, "(IOPIN|PIN|PINATTR)") };
+  if (it.t === "flag" && typeof it.name === "string" && (word(it.name.trim()) || (pin && str(it.name)))) return { t: "flag", x: it.x as number, y: it.y as number, name: it.name.trim(), ...extras(it.extra, "(IOPIN|PIN|PINATTR)") };
   // (a text keeps its tabs and line breaks; its alignment is one of the .asc's words)
   if (it.t === "text" && typeof it.text === "string" && !CONTROL.test(it.text)) {
     // ("Left 2": the alignment and the font size)
@@ -121,7 +127,7 @@ function pasteText(text: string): boolean {
   } catch {
     return false;
   }
-  const its = (Array.isArray(raw) ? raw : []).map(shape).filter((x): x is Shape => !!x).map((x) => forDoc(x));
+  const its = (Array.isArray(raw) ? raw : []).map(shape).filter((x): x is Shape => !!x).map((x) => forDoc(x)).filter((x): x is Shape => !!x && x.t !== "raw");
   if (!its.length) return false;
   // (anchored by what is drawn: not an arc's rays, which may reach far out)
   const bs = its.map((it) => (it.t === "wire" ? [Math.min(it.x1, it.x2), Math.min(it.y1, it.y2)] : it.t === "draw" ? box(it, {})! : [it.x, it.y]));

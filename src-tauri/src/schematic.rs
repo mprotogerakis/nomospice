@@ -550,8 +550,7 @@ pub fn is_symbol(path: &str) -> bool {
     path.to_ascii_lowercase().ends_with(".asy")
 }
 
-/// A symbol as items to edit: its plain lines as wires (drawn and dragged like them), its other
-/// shapes as drawings, its pins as labels (named as the pin; `extra`: the PIN line, its other
+/// A symbol as items to edit: its shapes as drawings, its pins as labels (named as the pin; `extra`: the PIN line, its other
 /// PINATTRs), its texts as comments; the rest (SymbolType, WINDOW, SYMATTR …) kept as it is.
 pub fn asy_items(src: &str) -> Vec<Item> {
     let mut items = vec![];
@@ -561,11 +560,6 @@ pub fn asy_items(src: &str) -> Vec<Item> {
         let num = |i: usize| tok.get(i).and_then(|s| s.parse::<i32>().ok());
         let rest = |n: usize| line.trim_start().splitn(n + 1, ' ').nth(n).unwrap_or("").to_string();
         match tok.first().copied() {
-            // (not one of no length, a dot: a wire of none is cleaned away on the canvas)
-            Some("LINE") if tok.len() == 6 && tok[1] == "Normal" && (num(2), num(3)) != (num(4), num(5)) => match (num(2), num(3), num(4), num(5)) {
-                (Some(x1), Some(y1), Some(x2), Some(y2)) => items.push(Item::Wire { x1, y1, x2, y2 }),
-                _ => items.push(Item::Raw { line: line.to_string() }),
-            },
             Some("LINE" | "RECTANGLE" | "CIRCLE" | "ARC") => items.push(drawing(&tok).unwrap_or_else(|| Item::Raw { line: line.to_string() })),
             // (its lines as words with single spaces: written back as read, found by their heads; a
             // pin of no position kept as written)
@@ -716,7 +710,9 @@ pub fn write_asc(items: &[Item]) -> String {
                     out += &format!("FLAG {x} {y} {name}\n");
                     // (a port's IOPIN where its label is now: moved since it was read; a symbol pin's
                     // lines, pasted from one, are no schematic's)
-                    extra.iter().filter_map(|l| port_kind(l)).for_each(|kind| out += &format!("IOPIN {x} {y} {kind}\n"));
+                    for l in extra.iter().filter(|l| !l.starts_with("PIN ") && !l.starts_with("PINATTR ")) {
+                        out += &port_kind(l).map_or(format!("{l}\n"), |kind| format!("IOPIN {x} {y} {kind}\n"));
+                    }
                 }
                 (2, Item::Sym { sym, x, y, rot, attrs, extra }) => {
                     out += &format!("SYMBOL {sym} {x} {y} {rot}\n");
