@@ -75,9 +75,9 @@ export function labelRect(it: Extract<Item, { t: "flag" }>, left: boolean): Box 
 export function box(it: Item, lib: Lib, left?: Set<string>): Box | null {
   switch (it.t) {
     case "raw": return null;
-    case "draw": { // (an arc: its ellipse's box, the first two points)
-      const [x1, y1, x2, y2] = it.p;
-      return [Math.min(x1, x2), Math.min(y1, y2), Math.max(x1, x2), Math.max(y1, y2)];
+    case "draw": { // (what is drawn: an arc's drawn part, not its ellipse's box nor its rays)
+      const o = outline(it);
+      return [Math.min(...o.map((q) => q[0])), Math.min(...o.map((q) => q[1])), Math.max(...o.map((q) => q[0])), Math.max(...o.map((q) => q[1]))];
     }
     case "wire": return [Math.min(it.x1, it.x2), Math.min(it.y1, it.y2), Math.max(it.x1, it.x2), Math.max(it.y1, it.y2)];
     case "flag": {
@@ -123,29 +123,27 @@ export function inside(p: Pt, w: Extract<Item, { t: "wire" }>) {
 }
 
 const RANK = { flag: 0, text: 1, wire: 2, sym: 3, draw: 4 } as const;
-/** Whether p is on a drawing's outline (within tol): a frame is picked by its edge, not its inside,
- *  so the circuit it frames stays clickable (a circle or an arc: by its ellipse). */
-function onDrawing(it: Extract<Item, { t: "draw" }>, p: Pt, tol: number) {
+/** A drawing's outline as a polyline: a line, a rectangle's four sides, a circle's or an arc's
+ *  curve in 64 segments (an arc's drawn part only: counter-clockwise on screen from its start
+ *  ray to its end ray, as it is drawn; both rays alike: the whole ellipse, as LTspice does). */
+function outline(it: Extract<Item, { t: "draw" }>): Pt[] {
   const [x1, y1, x2, y2] = it.p, k = it.kind.toUpperCase();
-  if (k === "LINE") return distSeg(p, x1, y1, x2, y2) <= tol;
-  if (k === "RECTANGLE") return [[x1, y1, x2, y1], [x2, y1, x2, y2], [x2, y2, x1, y2], [x1, y2, x1, y1]].some(([a, b, c, d]) => distSeg(p, a, b, c, d) <= tol);
-  // (a circle or an arc: along its curve, 64 segments of the ellipse, an arc's drawn part only:
-  // counter-clockwise on screen from its start to its end, as it is drawn)
-  const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2, rx = Math.abs(x2 - x1) / 2 || 1, ry = Math.abs(y2 - y1) / 2 || 1;
+  if (k === "LINE") return [[x1, y1], [x2, y2]];
+  if (k === "RECTANGLE") return [[x1, y1], [x2, y1], [x2, y2], [x1, y2], [x1, y1]];
+  const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2, rx = Math.abs(x2 - x1) / 2, ry = Math.abs(y2 - y1) / 2;
   let [a0, span] = [0, 2 * Math.PI];
   if (k === "ARC") {
     const [sx, sy, ex, ey] = it.p.slice(4);
-    a0 = Math.atan2((sy - cy) / ry, (sx - cx) / rx);
-    span = a0 - Math.atan2((ey - cy) / ry, (ex - cx) / rx);
-    if (span <= 0) span += 2 * Math.PI;
+    a0 = Math.atan2((sy - cy) / (ry || 1), (sx - cx) / (rx || 1));
+    span = a0 - Math.atan2((ey - cy) / (ry || 1), (ex - cx) / (rx || 1));
+    if (span <= 1e-9) span += 2 * Math.PI;
   }
-  const at = (j: number) => { const a = a0 - (span * j) / 64; return [cx + rx * Math.cos(a), cy + ry * Math.sin(a)]; };
-  for (let j = 0; j < 64; j++) {
-    const [ax, ay] = at(j), [bx, by] = at(j + 1);
-    if (distSeg(p, ax, ay, bx, by) <= tol) return true;
-  }
-  return false;
+  return Array.from({ length: 65 }, (_, j) => { const a = a0 - (span * j) / 64; return [cx + rx * Math.cos(a), cy + ry * Math.sin(a)] as Pt; });
 }
+/** Whether p is on a drawing's outline (within tol): a frame is picked by its edge, not its inside,
+ *  so the circuit it frames stays clickable. */
+const onDrawing = (it: Extract<Item, { t: "draw" }>, p: Pt, tol: number) =>
+  outline(it).some((a, j, o) => j > 0 && distSeg(p, o[j - 1][0], o[j - 1][1], a[0], a[1]) <= tol);
 /** Topmost item under p; flags > texts > wires > symbols > drawings. */
 export function hit(items: Item[], lib: Lib, p: Pt, tol: number): number {
   let best = -1, rank = 9;
@@ -154,7 +152,7 @@ export function hit(items: Item[], lib: Lib, p: Pt, tol: number): number {
     if (it.t === "raw" || RANK[it.t] > rank) return; // equal rank: later = drawn on top wins
     const b = box(it, lib, left)!;
     const ok = it.t === "wire" ? distSeg(p, it.x1, it.y1, it.x2, it.y2) <= tol
-      : it.t === "draw" ? onDrawing(it, p, tol)
+      : it.t === "draw" ? p[0] >= b[0] - tol && p[0] <= b[2] + tol && p[1] >= b[1] - tol && p[1] <= b[3] + tol && onDrawing(it, p, tol) // (its box first: cheap)
       : p[0] >= b[0] - tol && p[0] <= b[2] + tol && p[1] >= b[1] - tol && p[1] <= b[3] + tol;
     if (ok) (best = i), (rank = RANK[it.t]);
   });

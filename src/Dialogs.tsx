@@ -500,7 +500,7 @@ export const Dialogs = memo(function Dialogs() {
   switch (dialog.k) {
     case "edit": {
       const it = items[dialog.index];
-      if (!it) return null;
+      if (!it || it.t === "draw") return null; // (a drawing has nothing to edit)
       // an alternative analysis (a comment of nothing but analyses: the tabs offer it) opens the form
       const lines = it.t === "text" ? it.text.split("\n") : [];
       if (it.t === "text" && !it.directive && !dialog.raw && analysisOptions([it]).length && analysisEditableAt(lines, analysisLineIndex(lines, null, false))) return <SimDialog key={dialog.index} index={dialog.index} />;
@@ -509,7 +509,7 @@ export const Dialogs = memo(function Dialogs() {
     }
     case "new": {
       const at = dialog.at;
-      const place = (it: Item) => (at && it.t !== "wire" && it.t !== "raw" && it.t !== "draw" ? (commit([...items, { ...it, x: at[0], y: at[1] }]), close()) : useS.setState({ dialog: null, tool: { k: "place", item: it } }));
+      const place = (it: Item) => (at && it.t !== "wire" && it.t !== "raw" && it.t !== "draw" /* (for the type: only texts and labels come here) */ ? (commit([...items, { ...it, x: at[0], y: at[1] }]), close()) : useS.setState({ dialog: null, tool: { k: "place", item: it } }));
       if (dialog.item.t === "text") return <DirectiveDialog item={dialog.item} title={dialog.item.directive ? "SPICE Directive" : "Comment"} raw={!dialog.item.directive} onDone={place} />;
       return <ItemForm item={dialog.item} title="Net Name" onDone={place} />;
     }

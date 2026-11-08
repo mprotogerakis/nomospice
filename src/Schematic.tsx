@@ -35,8 +35,10 @@ function arcPath([x1, y1, x2, y2, sx, sy, ex, ey]: number[]) {
   const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2, rx = Math.abs(x2 - x1) / 2 || 1, ry = Math.abs(y2 - y1) / 2 || 1;
   const a0 = Math.atan2((sy - cy) / ry, (sx - cx) / rx), a1 = Math.atan2((ey - cy) / ry, (ex - cx) / rx);
   let d = a0 - a1; // LTspice/GDI arcs run counter-clockwise on screen
-  if (d <= 0) d += 2 * Math.PI;
+  if (d <= 1e-9) d += 2 * Math.PI;
   const p = (a: number) => `${cx + rx * Math.cos(a)} ${cy + ry * Math.sin(a)}`;
+  // (both rays alike: the whole ellipse, as GDI draws it; one SVG arc cannot end where it starts)
+  if (d > 2 * Math.PI - 1e-9) return `M${p(a0)} A${rx} ${ry} 0 1 0 ${p(a0 + Math.PI)} A${rx} ${ry} 0 1 0 ${p(a0)}`;
   return `M${p(a0)} A${rx} ${ry} 0 ${d > Math.PI ? 1 : 0} 0 ${p(a1)}`;
 }
 
@@ -50,7 +52,8 @@ function shapeEl(k: string, p: number[], key: number | string) {
   const s = { vectorEffect: "non-scaling-stroke", strokeDasharray: DASH[p[k === "arc" ? 8 : 4]] } as const;
   return k === "line" ? <line key={key} {...s} x1={p[0]} y1={p[1]} x2={p[2]} y2={p[3]} />
   : k === "rect" ? <rect key={key} {...s} x={Math.min(p[0], p[2])} y={Math.min(p[1], p[3])} width={Math.abs(p[2] - p[0])} height={Math.abs(p[3] - p[1])} />
-  : k === "circle" ? <ellipse key={key} {...s} cx={(p[0] + p[2]) / 2} cy={(p[1] + p[3]) / 2} rx={Math.abs(p[2] - p[0]) / 2} ry={Math.abs(p[3] - p[1]) / 2} />
+  // (a flat one, 0 wide or high: a line, as it is picked; SVG would not draw an ellipse of radius 0)
+  : k === "circle" ? (p[0] === p[2] || p[1] === p[3] ? <line key={key} {...s} x1={p[0]} y1={p[1]} x2={p[2]} y2={p[3]} /> : <ellipse key={key} {...s} cx={(p[0] + p[2]) / 2} cy={(p[1] + p[3]) / 2} rx={Math.abs(p[2] - p[0]) / 2} ry={Math.abs(p[3] - p[1]) / 2} />)
   : <path key={key} {...s} d={arcPath(p)} />;
 }
 
@@ -440,7 +443,8 @@ export const Schematic = memo(function Schematic() {
       const i = hit(items, lib, p, 6 / view.k);
       if (i >= 0) commit(items.filter((_, j) => j !== i), []), setHover(-1);
     } else {
-      const i = hit(items, lib, p, 6 / view.k);
+      // (probing: a drawing is no target; a click on its edge plots or pans, as before it was one)
+      const i = ((j) => (probing && items[j]?.t === "draw" ? -1 : j))(hit(items, lib, p, 6 / view.k));
       if (i >= 0) {
         let next = sel;
         if (e.shiftKey || e.metaKey || e.ctrlKey) next = selSet.has(i) ? sel.filter((j) => j !== i) : [...sel, i];

@@ -1,7 +1,7 @@
 // Editing actions shared by the toolbar, hotkeys and context menus.
 import type { Item, Shape } from "./types";
 import { commit, loadSymbols, useS } from "./store";
-import { isShape, rotateInPlace, shifted, snap } from "./geom";
+import { box, isShape, rotateInPlace, shifted, snap } from "./geom";
 
 export function deleteSelection() {
   const { items, sel } = useS.getState();
@@ -51,8 +51,9 @@ function shape(v: unknown): Shape | null {
   if (!it || typeof it !== "object") return null;
   if (it.t === "wire" && [it.x1, it.y1, it.x2, it.y2].every(num) && (it.x1 !== it.x2 || it.y1 !== it.y2)) return { t: "wire", x1: it.x1 as number, y1: it.y1 as number, x2: it.x2 as number, y2: it.y2 as number };
   // (a drawing: its kind, pen, all its points, a line style if any)
-  if (it.t === "draw" && typeof it.kind === "string" && /^(LINE|RECTANGLE|CIRCLE|ARC)$/i.test(it.kind) && word(it.width) && Array.isArray(it.p) && it.p.length === (/^arc$/i.test(it.kind) ? 8 : 4) && it.p.every(num) && (it.style == null || num(it.style)))
-    return { t: "draw", kind: it.kind.toUpperCase(), width: it.width as string, p: it.p as number[], ...(it.style != null ? { style: it.style as number } : {}) };
+  // (the pen as LTspice knows it, Normal or Wide; a style 0 … 4, another as solid)
+  if (it.t === "draw" && typeof it.kind === "string" && /^(LINE|RECTANGLE|CIRCLE|ARC)$/i.test(it.kind) && Array.isArray(it.p) && it.p.length === (/^arc$/i.test(it.kind) ? 8 : 4) && it.p.every(num) && (it.style == null || num(it.style)))
+    return { t: "draw", kind: it.kind.toUpperCase(), width: /^wide$/i.test(String(it.width)) ? "Wide" : "Normal", p: it.p as number[], ...(it.style != null ? { style: (it.style as number) >= 0 && (it.style as number) <= 4 ? (it.style as number) : 0 } : {}) };
   if (!num(it.x) || !num(it.y)) return null;
   // (a label as read from a file may end in spaces: its name is the rest)
   if (it.t === "flag" && typeof it.name === "string" && word(it.name.trim())) return { t: "flag", x: it.x as number, y: it.y as number, name: it.name.trim(), ...extras(it.extra, "IOPIN") };
@@ -109,8 +110,9 @@ function pasteText(text: string): boolean {
   }
   const its = (Array.isArray(raw) ? raw : []).map(shape).filter((x): x is Shape => !!x);
   if (!its.length) return false;
-  const xs = its.flatMap((it) => (it.t === "wire" ? [it.x1, it.x2] : it.t === "draw" ? it.p.filter((_, k) => k % 2 === 0) : [it.x]));
-  const ys = its.flatMap((it) => (it.t === "wire" ? [it.y1, it.y2] : it.t === "draw" ? it.p.filter((_, k) => k % 2 === 1) : [it.y]));
+  // (a drawing by what is drawn: not an arc's rays, which may reach far out)
+  const xs = its.flatMap((it) => (it.t === "wire" ? [it.x1, it.x2] : it.t === "draw" ? ((b) => [b[0], b[2]])(box(it, {})!) : [it.x]));
+  const ys = its.flatMap((it) => (it.t === "wire" ? [it.y1, it.y2] : it.t === "draw" ? ((b) => [b[1], b[3]])(box(it, {})!) : [it.y]));
   const [x0, y0] = [snap(xs.reduce((a, b) => Math.min(a, b))), snap(ys.reduce((a, b) => Math.min(a, b)))];
   // (a group wider than any schematic: placed anywhere it would leave the core's coordinates)
   if (xs.some((x) => x - x0 > 2 ** 24) || ys.some((y) => y - y0 > 2 ** 24)) return false;
