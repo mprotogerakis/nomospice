@@ -228,15 +228,18 @@ async function blockSymbol() {
   if (useS.getState().dirty && !(await saveFile())) return;
   const { path, unwritten, items } = useS.getState();
   if (!path || path === unwritten) return void message("Save the schematic first: its symbol goes beside it.", { title: "nomospice" });
-  const asy = path.replace(/\.asc$/i, "") + ".asy";
-  if ((await invoke<boolean>("path_exists", { path: asy })) && !(await ask(`${fileName(asy)} already exists. Replace it with a new block symbol?`, { title: "nomospice", kind: "warning" }))) return;
+  const name = fileName(path).replace(/\.asc$/i, "");
   try {
-    await invoke("block_symbol", { path, items });
+    const there = await invoke<string | null>("block_symbol", { path, items, replace: false });
+    if (there) {
+      if (!(await ask(`${there} already exists. Replace it with a new block symbol?`, { title: "nomospice", kind: "warning" }))) return;
+      await invoke("block_symbol", { path, items, replace: true });
+    }
   } catch (e) {
     return void message(String(e), { title: "No block symbol", kind: "warning" });
   }
   await loadSymbols(useS.getState().items, undefined, { force: true }).catch(() => {});
-  await message(`${fileName(asy)} is written. Place it (Component, ${fileName(asy).replace(/\.asy$/i, "")}) in a schematic in this folder: it stands for this one, its port labels are the pins.`, { title: "nomospice" });
+  await message(`The block symbol ${name} is written. Place it (Component, ${name}) in a schematic in this folder: it stands for this one, its port labels are the pins.`, { title: "nomospice" });
 }
 
 

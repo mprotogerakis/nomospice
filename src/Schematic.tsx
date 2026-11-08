@@ -5,7 +5,7 @@ import { useShallow } from "zustand/react/shallow";
 import { Maximize, Minus, Plus } from "lucide-react";
 import type { Item, Shape, SymbolDef } from "./types";
 import {
-  box, connectivity, defOf, arcSpan, dragPlan, mirror, outline, pins, prefixOf, rotate, dropZeroWires, dropZeroWiresKeepSel, GRID, hit, isShape, labelRect, leftLabels, matrix, shifted, snap, symBox,
+  box, connectivity, defOf, portOf, sheetOf, arcSpan, dragPlan, mirror, outline, pins, prefixOf, rotate, dropZeroWires, dropZeroWiresKeepSel, GRID, hit, isShape, labelRect, leftLabels, matrix, shifted, snap, symBox,
   textLines, union, xform, type Box, type Lib, type Pt,
 } from "./geom";
 import { canProbe, commit, currentNets, nextInst, partCurrent, powerMode, powerName, probe, probeMode, simulate, useS, useStatus } from "./store";
@@ -142,7 +142,7 @@ function Flag({ it, leftward }: { it: Extract<Item, { t: "flag" }>; leftward: bo
     <g>
       <circle cx={it.x} cy={it.y} r={2.5} fill="currentColor" />
       {/* (a port, a pin of the schematic's block symbol: pointed at both ends) */}
-      {it.extra?.some((l) => l.startsWith("IOPIN ")) ? (
+      {portOf(it.extra) ? (
         <polygon points={`${x},${it.y} ${x + 6},${it.y - 10} ${x + w - 6},${it.y - 10} ${x + w},${it.y} ${x + w - 6},${it.y + 10} ${x + 6},${it.y + 10}`} fill="var(--surface-panel)" fillOpacity={0.85} />
       ) : (
         <rect x={x} y={it.y - 10} width={w} height={20} rx={3} fill="var(--surface-panel)" fillOpacity={0.85} />
@@ -602,7 +602,7 @@ export const Schematic = memo(function Schematic() {
       case "sym": {
         const prefix = prefixOf(it, defOf(lib, it)); // the part's own Prefix wins, as in the netlist
         const kind = ({ D: "D", Q: "NPN|PNP", M: "NMOS|PMOS|VDMOS", J: "NJF|PJF", X: "SUBCKT" } as Record<string, string>)[prefix];
-        const sheet = defOf(lib, it)?.sheet;
+        const sheet = sheetOf(it, defOf(lib, it));
         return [
           { label: "Edit…", hint: probing ? undefined : "dbl-click", run: edit },
           ...(sheet ? [{ label: "Open its schematic", run: () => window.dispatchEvent(new CustomEvent("nomospice:sheet", { detail: sheet })) }] : []),

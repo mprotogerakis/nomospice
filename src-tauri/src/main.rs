@@ -138,21 +138,31 @@ async fn save_asc(path: String, items: Vec<Item>) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-/// A block symbol for the schematic at `path` (`<name>.asy` beside it, written over one there: the
-/// app asks first), from its port labels: placed in another schematic of that folder, it stands
-/// for this one.
+/// A block symbol for the schematic at `path` (`<name>.asy` beside it), from its port labels:
+/// placed in another schematic of that folder, it stands for this one. The folder's symbol of that
+/// name (any case) is written over if `replace`; else its file name comes back (None: written).
 #[tauri::command]
-async fn block_symbol(path: String, items: Vec<Item>) -> Result<String, String> {
-    let asy = std::path::Path::new(&path).with_extension("asy");
-    let stem = asy.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+async fn block_symbol(path: String, items: Vec<Item>, replace: bool) -> Result<Option<String>, String> {
+    let path = std::path::PathBuf::from(path);
+    let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
     if schematic::builtin_symbol(&schematic::sym_key(&stem)) {
         return Err(format!("{stem} is the name of a built-in symbol, which a placed {stem} would be: save the schematic under another name first"));
     }
+    if stem.contains(char::is_whitespace) {
+        return Err(format!("“{stem}”: a symbol's name has no spaces (a schematic places it by name): save the schematic as e.g. {}.asc first", stem.split_whitespace().collect::<Vec<_>>().join("_")));
+    }
     let data = schematic::encode(&schematic::block_asy(&items)?);
-    tauri::async_runtime::spawn_blocking(move || write_atomic(&asy, &data).map(|_| asy.to_string_lossy().into_owned()))
-        .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = path.parent().unwrap_or(std::path::Path::new("."));
+        let there = schematic::folder_symbols(dir).into_iter().find(|(k, _)| *k == schematic::sym_key(&stem)).map(|(_, p)| p);
+        match there {
+            Some(p) if !replace => Ok(Some(p.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default())),
+            // (the one there: on a case-sensitive disk another case of it would not be the one used)
+            there => write_atomic(&there.unwrap_or_else(|| path.with_extension("asy")), &data).map(|_| None).map_err(|e| e.to_string()),
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Live netlist for the UI; includes are resolved too, only to surface their warnings.

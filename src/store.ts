@@ -211,7 +211,7 @@ export async function loadDoc(items: Item[], path: string | null) {
   await loadSymbols(items, dirOf(path), { fresh: true, force: true }); // reopening reads edited symbols
   docGen++;
   autoPlotted = new Set();
-  set({ dialog: null, menu: null, tab: null, tabs: {}, shown: null, items, path, unwritten: null, parents: [], past: [], future: [], sel: [], dirty: false, sim: null, traces: [], stale: false, nets: null, netsItems: null, plot: NO_PLOT, panel: get().panel === "op" ? null : get().panel, diff: null, tool: { k: "select" }, fitToken: get().fitToken + 1 });
+  set({ dialog: null, menu: null, tab: null, tabs: {}, shown: null, items, path, unwritten: null, parents: path && path === get().path ? get().parents : [], past: [], future: [], sel: [], dirty: false, sim: null, traces: [], stale: false, nets: null, netsItems: null, plot: NO_PLOT, panel: get().panel === "op" ? null : get().panel, diff: null, tool: { k: "select" }, fitToken: get().fitToken + 1 });
   refreshNets();
   refreshGit();
 }
