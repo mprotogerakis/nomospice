@@ -335,9 +335,13 @@ async fn folder_symbols(from: String, to: String, names: Vec<String>, copy: bool
             // (case-insensitive disks: another spelling of the same file)
             let own = |p: &std::path::PathBuf| doc.as_deref().is_some_and(|d| if cfg!(any(target_os = "macos", windows)) { d.to_lowercase() == p.to_string_lossy().to_lowercase() } else { std::path::Path::new(d) == p.as_path() });
             if let Some(sheet) = old_sheets.get(&key).filter(|p| block && !own(p)) {
-                files.push((sheet.clone(), new_sheets.get(&key)));
+                // (a library part's test bench, which places it: no block's, stays)
                 let items = std::fs::read(sheet).map(|b| schematic::parse_asc(&schematic::decode(&b))).unwrap_or_default();
-                queue.extend(items.into_iter().filter_map(|it| match it { Item::Sym { sym, .. } => Some(sym), _ => None }));
+                let syms: Vec<String> = items.into_iter().filter_map(|it| match it { Item::Sym { sym, .. } => Some(sym), _ => None }).collect();
+                if !syms.iter().any(|s| schematic::sym_key(s) == key) {
+                    files.push((sheet.clone(), new_sheets.get(&key)));
+                    queue.extend(syms);
+                }
             }
         }
         for (src, there) in files {
