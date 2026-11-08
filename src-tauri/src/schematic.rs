@@ -463,10 +463,11 @@ pub fn netlist_items(text: &str) -> Vec<Item> {
         match w.as_str() {
             ".control" => control = true,
             ".endc" => control = false,
-            // (an analysis of the control language's variables, `tran 1n $&tstop`: no dot command, left out)
-            w if control && !l.contains(['$', '&']) && ANALYSES.iter().any(|(c, _)| *c == w) => {
+            // (an analysis of the control language's variables, `tran 1n $&tstop`: no dot command, left
+            // out; a `$ comment` after it is no variable)
+            w if control && !uncommented(l).contains(['$', '&']) && ANALYSES.iter().any(|(c, _)| *c == w) => {
                 let dot = ANALYSES.iter().find(|(c, _)| *c == w).unwrap().1;
-                let line = format!("{dot}{}", &l.trim()[w.len()..]);
+                let line = format!("{dot}{}", &uncommented(l).trim()[w.len()..]);
                 if !taken.contains(&line) {
                     taken.push(line); // (an analysis repeated in the block, `alter` between: once)
                 }
@@ -476,15 +477,18 @@ pub fn netlist_items(text: &str) -> Vec<Item> {
             _ => body.push(l.to_string()),
         }
     }
-    // (an analysis the deck has as a dot command already: not twice)
-    taken.retain(|t| !body.iter().any(|b| first(b) == first(t)));
+    // (an analysis the deck has as a dot command already: not twice; one of other values: said)
+    let (twice, kept): (Vec<String>, Vec<String>) = taken.into_iter().partition(|t| body.iter().any(|b| first(b) == first(t)));
+    let taken = kept;
+    let replaced: Vec<String> = twice.into_iter().filter(|t| !body.iter().any(|b| b.trim().eq_ignore_ascii_case(t))).collect();
     body.extend(taken.iter().cloned());
     let body = body.join("\n").trim_matches('\n').to_string();
     let mut items = vec![];
     // (named as a netlist's title: a title `.tran 10m` is no commented-out analysis)
     let mut note = if title.is_empty() { title } else { format!("Netlist: {title}") };
-    if !taken.is_empty() || dropped > 0 {
-        note += &format!("{}(its .control block is not run: {}{} other command{} left out)", if note.is_empty() { "" } else { "\n" }, if taken.is_empty() { String::new() } else { format!("{} taken as dot commands, ", taken.join(" ")) }, dropped, if dropped == 1 { "" } else { "s" });
+    if !taken.is_empty() || dropped > 0 || !replaced.is_empty() {
+        let also = if replaced.is_empty() { String::new() } else { format!(", {} not (the deck has its own)", replaced.join(" ")) };
+        note += &format!("{}(its .control block is not run: {}{} other command{} left out{also})", if note.is_empty() { "" } else { "\n" }, if taken.is_empty() { String::new() } else { format!("{} taken as dot commands, ", taken.join(" ")) }, dropped, if dropped == 1 { "" } else { "s" });
     }
     if !note.is_empty() {
         items.push(Item::Text { x: 0, y: -48 - 17 * (note.lines().count() as i32 - 1), text: note, directive: false, align: "Left 2".into() });
@@ -1953,10 +1957,19 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool) -> Netlist {
     }
     // (a schematic of no parts, an opened netlist: its lines ground it or not, ngspice says; a part
     // line in a directive with a node 0 grounds the drawing too)
-    let grounded_by_lines = || items.iter().any(|it| matches!(it, Item::Text { text, directive: true, .. } if text.lines().any(|l| {
-        let t: Vec<&str> = l.split_whitespace().collect();
-        t.len() >= 3 && t[0].starts_with(|c: char| c.is_ascii_alphabetic()) && t[1..t.len() - 1].contains(&"0")
-    })));
+    // (not inside a .subckt: its 0 grounds what calls it, not the drawing)
+    let grounded_by_lines = || items.iter().any(|it| matches!(it, Item::Text { text, directive: true, .. } if {
+        let mut sub = 0;
+        text.lines().any(|l| {
+            let t: Vec<&str> = l.split_whitespace().collect();
+            match t.first().map(|w| w.to_ascii_lowercase()).as_deref() {
+                Some(".subckt") => sub += 1,
+                Some(".ends") => sub = (sub - 1).max(0),
+                _ => {}
+            }
+            sub == 0 && t.len() >= 3 && t[0].starts_with(|c: char| c.is_ascii_alphabetic()) && t[1..t.len() - 1].contains(&"0")
+        })
+    }));
     if ground.is_none() && items.iter().any(|it| matches!(it, Item::Sym { .. })) && !grounded_by_lines() {
         nl.warnings.push("no ground (0) in schematic".into());
     }
@@ -1999,10 +2012,12 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool) -> Netlist {
     // a .step that will not run is said before a run; the netlist shows them (nomospice runs them)
     nl.warnings.extend(nl.steps.iter().filter_map(|s| parse_step(s).err()));
     directives.extend(nl.steps.iter().map(|s| format!("* {s} (nomospice: one run per step)")));
-    let defined = |name: &str| directives.iter().any(|d| {
+    // (the names the directives define, once: looked up per part, a big netlist's thousands too)
+    let defs: HashSet<String> = directives.iter().filter_map(|d| {
         let t: Vec<String> = d.split_whitespace().take(2).map(str::to_lowercase).collect();
-        matches!(t.first().map(String::as_str), Some(".model" | ".subckt")) && t.get(1).map(String::as_str) == Some(name)
-    });
+        matches!(t.first().map(String::as_str), Some(".model" | ".subckt")).then(|| t.get(1).cloned()).flatten()
+    }).collect();
+    let defined = |name: &str| defs.contains(name);
     // LTspice runs .noise without an AC value on the input source; ngspice refuses: add `AC 1`
     let noise_src: Vec<String> = directives.iter().filter_map(|d| {
         let t = spice_tokens(d);
@@ -2228,22 +2243,26 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool) -> Netlist {
     // a netlist's own part lines (an opened .cir, parts written in a directive): their models from
     // the libraries too, as a drawn part's; only names the libraries know (a node, a value: none)
     {
-        // (where SPICE has the model: D n+ n- model; Q c b e [s] model; M d g s b model; J/Z d g s
-        // model; X …nodes subckt [params]: the last word before them)
-        let wanted: Vec<String> = directives.iter().flat_map(|d| {
+        // (each part line with its `+` lines; where SPICE has the model: D n+ n- model; Q c b e [s]
+        // model; M d g s [b] model (a VDMOS has 3 nodes); J/Z d g s model; X …nodes subckt
+        // [params]: the last word before them)
+        let mut logical: Vec<String> = vec![];
+        for d in &directives {
+            match (d.trim_start().strip_prefix('+'), logical.last_mut()) {
+                (Some(more), Some(last)) => (last.push(' '), last.push_str(more)).1,
+                _ => logical.push(d.clone()),
+            }
+        }
+        let wanted: Vec<String> = logical.iter().flat_map(|d| {
             let t: Vec<&str> = d.split_whitespace().collect();
-            let at: &[usize] = match t.first().and_then(|w| w.chars().next()).map(|c| c.to_ascii_uppercase()) {
-                Some('D') => &[3],
-                Some('Q') => &[4, 5],
-                Some('M') => &[5],
-                Some('J' | 'Z') => &[4],
-                Some('X') => &[],
-                _ => return vec![],
-            };
-            if t[0].starts_with(['X', 'x']) {
-                t[1..].iter().take_while(|w| !w.contains('=') && !w.eq_ignore_ascii_case("params:")).last().map(|w| w.to_lowercase()).into_iter().collect()
-            } else {
-                at.iter().filter_map(|&k| t.get(k)).map(|w| w.to_lowercase()).collect()
+            let words = |at: &[usize]| at.iter().filter_map(|&k| t.get(k)).map(|w| w.to_lowercase()).collect::<Vec<_>>();
+            match t.first().and_then(|w| w.chars().next()).map(|c| c.to_ascii_uppercase()) {
+                Some('D') => words(&[3]),
+                Some('Q') => words(&[4, 5]),
+                Some('M') => words(&[4, 5]),
+                Some('J' | 'Z') => words(&[4]),
+                Some('X') => t[1..].iter().take_while(|w| !w.contains('=') && !w.eq_ignore_ascii_case("params:")).last().map(|w| w.to_lowercase()).into_iter().collect(),
+                _ => vec![],
             }
         }).filter(|m| !defined(m) && !used_models.contains(m)).collect();
         // (the library's index only when there is something to look up: building it takes a while)

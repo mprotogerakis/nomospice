@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 const PROTOCOL: &str = "2025-06-18";
 
 fn tools() -> Value {
-    let path = json!({ "type": "string", "description": "Path to an LTspice-compatible .asc schematic (absolute, or relative to the server's working directory)" });
+    let path = json!({ "type": "string", "description": "Path to an LTspice-compatible .asc schematic, or a SPICE netlist (.cir, .net, .sp, .spi, .ckt: read as a schematic of one directive holding it); absolute, or relative to the server's working directory" });
     let asc = json!({ "type": "string", "description": "Schematic as .asc text (alternative to path)" });
     json!([
         {
