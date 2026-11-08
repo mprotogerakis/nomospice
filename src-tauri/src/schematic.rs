@@ -2270,7 +2270,20 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
     if sub {
         defs.extend(h.top_defs.iter().cloned());
     } else {
-        (h.top_defs, h.top_includes) = (defs.clone(), directives.iter().any(include));
+        // (not those inside a .subckt of the top's own: local to it)
+        let mut depth = 0;
+        let global = directives.iter().filter(|d| {
+            let w = d.split_whitespace().next().unwrap_or("").to_lowercase();
+            depth += i32::from(w == ".subckt");
+            let top = depth == 0;
+            depth = (depth - i32::from(w == ".ends")).max(0);
+            top || (depth == 1 && w == ".subckt") // (a .subckt's own name is global)
+        });
+        h.top_defs = global.filter_map(|d| {
+            let t: Vec<String> = d.split_whitespace().take(2).map(str::to_lowercase).collect();
+            matches!(t.first().map(String::as_str), Some(".model" | ".subckt")).then(|| t.get(1).cloned()).flatten()
+        }).collect();
+        h.top_includes = directives.iter().any(include);
     }
     let defined = |name: &str| defs.contains(name);
     // LTspice runs .noise without an AC value on the input source; ngspice refuses: add `AC 1`
@@ -3174,6 +3187,9 @@ SYMBOL half 400 300 R0\nSYMATTR InstName U4\nSYMATTR Value R=3k\nFLAG 352 300 a\
         assert!(nl.warnings.iter().any(|w| w.starts_with("XU3 passes no r")), "a sheet's include is its own: {:?}", nl.warnings);
         let nl = netlist(&parse_asc("Version 4\nSYMBOL div 0 0 R0\nSYMATTR InstName U1\n"), &mut lib);
         assert!(!nl.warnings.iter().any(|w| w.contains("no ground")), "grounded in its sheet: {:?}", nl.warnings);
+        // (a model inside a .subckt of the top's own is no sheet's: the library's is pulled)
+        let t = netlist(&parse_asc("Version 4\nSYMBOL half 0 0 R0\nSYMATTR InstName U1\nTEXT 0 0 Left 2 !.subckt mysub a\\n.model 1N4148 D\\n.ends\n"), &mut lib).text;
+        assert!(t.contains(".model 1N4148 D(IS="), "{t}");
         let nl = netlist(&parse_asc("Version 4\nSYMBOL bench 0 0 R0\nSYMATTR InstName U1\n"), &mut lib);
         assert!(!nl.text.contains(".subckt sheet_bench") && nl.text.lines().any(|l| l.starts_with("XU1 ") && l.ends_with(" bench")) && !nl.warnings.iter().any(|w| w.contains("bench.asc")), "{:?}\n{}", nl.warnings, nl.text);
         let t = netlist(&parse_asc("Version 4\nSYMBOL secs 0 0 R0\nSYMATTR InstName U1\n"), &mut lib).text;
