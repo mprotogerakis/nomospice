@@ -7,7 +7,7 @@ import { listen } from "@tauri-apps/api/event";
 import { ask, message, open, save } from "@tauri-apps/plugin-dialog";
 import {
   Code, Component, Copy, FilePlus, FlipHorizontal2, FolderOpen, Moon, MousePointer2, Move, Play, Redo2, RotateCw, Save,
-  Info, Plus, Scissors, X, ScrollText, SlidersHorizontal, Spline, Square, Sun, Tag, Type, Undo2, Zap,
+  CircleHelp, Info, Plus, Scissors, X, ScrollText, SlidersHorizontal, Spline, Square, Sun, Tag, Type, Undo2, Zap,
 } from "lucide-react";
 import type { Item } from "./types";
 import { Schematic } from "./Schematic";
@@ -342,6 +342,7 @@ export function App() {
         f5: () => (useS.getState().sel.length ? deleteSelection() : useS.setState({ tool: { k: "delete" } })),
         f6: duplicate, f9: e.shiftKey ? redo : undo,
         // (F7/F8 as LTspice has them; on a Mac they are media keys unless fn is held: M too)
+        f1: () => useS.setState({ dialog: { k: "help" } }),
         f7: moveTool, m: moveTool, f8: () => useS.setState({ tool: { k: "select" } }),
         " ": () => window.dispatchEvent(new Event("nomospice:fit")),
       };
@@ -416,6 +417,7 @@ export function App() {
         <ToolbarSpacer />
         <ToolbarButton label="Log & netlist" hotkey="⌘L" icon={<ScrollText />} pressable active={!!s.panel} onClick={togglePanel} />
         <ToolbarButton label="Toggle theme" icon={mode === "dark" ? <Sun /> : <Moon />} onClick={() => setMode(updateThemePreference(mode === "dark" ? "light" : "dark").mode)} />
+        <ToolbarButton label="Quick reference" hotkey="F1" icon={<CircleHelp />} onClick={() => useS.setState({ dialog: { k: "help" } })} />
         <ToolbarButton label="About & licenses" icon={<Info />} onClick={() => useS.setState({ dialog: { k: "about" } })} />
       </Toolbar>
 

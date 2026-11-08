@@ -11,7 +11,7 @@ import { SourceEditor } from "./SourceEditor";
 import { SimDialog } from "./SimDialog";
 import { DirectiveDialog } from "./DirectiveDialog";
 import { analysisEditable, analysisEditableAt, analysisLine, analysisLineIndex, analysisOptions, balanced, exprUnit, getParam, paramValue, setParam, spiceNum, tokens, xUnitOf } from "./spice";
-import { cn } from "@/lib/utils";
+import { cn, keys as shortcut } from "@/lib/utils";
 import thirdParty from "./third-party.json";
 import { checkForUpdate } from "./updater";
 
@@ -435,6 +435,66 @@ function YRangeDialog({ pane, unit, log }: { pane: string; unit: string; log: bo
   );
 }
 
+/** The quick reference (F1): what the keys, clicks and menus do, by task. ⌘ is Ctrl off a Mac. */
+const HELP: [string, [string, string][]][] = [
+  ["Drawing", [
+    ["R C L D V I", "place a resistor, capacitor, inductor, diode, voltage or current source"],
+    ["P, F2, ⌘K", "any part: the component library (symbols, models, subcircuits)"],
+    ["G · W · N", "ground · wire (click, click; Esc ends) · net label"],
+    ["S · T", "SPICE directive (.tran, .param, .step …) · comment"],
+    ["⌃R · ⌃E", "rotate · mirror (the part being placed, or the selection)"],
+    ["drag · M or F7", "move parts, their wires following · move them off their wires"],
+    ["⌘C ⌘X ⌘V · ⌘D", "copy, cut, paste (also between windows) · duplicate"],
+    ["⌘F · Space", "find parts, labels, texts · fit the view"],
+    ["double-click · right-click", "edit a part (value, model, its L/W/area) · its menu"],
+  ]],
+  ["Simulating", [
+    ["⌘↵", "run (the toolbar's lightning: Live, a run after every edit)"],
+    ["Simulation command", "the analysis in a form: .tran, .ac, .dc, .op, .noise, .tf, .pz, .sens; each its own result tab"],
+    [".step param R list 1k 2k", "a family of curves, .meas per step; {mc(1k,0.05)} with .step param run 1 100 1: Monte Carlo"],
+    ["E1 … Laplace=1/(1+s*tau)", "a transfer function as a source"],
+    ["File → Open a .cir", "a netlist, run as it is (saved as an .asc beside it)"],
+  ]],
+  ["Plotting", [
+    ["click a wire · a part", "its voltage · its current (near a pin: that pin's, Ib(Q1))"],
+    ["Add trace", "an expression: V(out)-V(in), I(R1), V(in)*I(R1) (W), db(), group_delay() …"],
+    ["click · shift-click", "cursor A · cursor B; shift-drag: the range A–B (average, RMS, integral)"],
+    ["drag · wheel · dbl-click", "zoom · zoom and pan · reset"],
+    ["right-click a trace", "right axis, another unit's pane, group delay, remove"],
+    ["right-click the plot", "FFT, Nyquist, Nichols, log or fixed y axis, CSV, SVG, .raw"],
+  ]],
+  ["Files", [
+    ["⌘S · ⌘O · ⌘N", "save · open (.asc, netlists) · new"],
+    ["drop a .lib/.sub on it", "an .include directive for it"],
+    ["right-click the canvas", "export the schematic as SVG"],
+  ]],
+];
+
+function HelpDialog() {
+  return (
+    <Modal title="Quick reference" wide="xl" ok="Close" cancel={false} onSubmit={close}>
+      <div className="grid max-h-[70vh] grid-cols-2 gap-x-6 gap-y-3 overflow-auto pr-1 text-xs">
+        {HELP.map(([section, rows]) => (
+          <section key={section}>
+            <h3 className="mb-1 font-medium text-text-strong">{section}</h3>
+            <table className="w-full table-fixed">
+              <tbody>
+                {rows.map(([keys, what]) => (
+                  <tr key={keys} className="border-b border-border-subtle align-top">
+                    <td className="w-[38%] py-1 pr-2 font-mono text-2xs text-text-strong">{shortcut(keys)}</td>
+                    <td className="py-1 text-text-secondary">{what}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </section>
+        ))}
+        <p className="col-span-2 text-2xs text-text-tertiary">More in the README: github.com/mprotogerakis/nomospice</p>
+      </div>
+    </Modal>
+  );
+}
+
 /** Version, license, and every third-party component with its license (same list as NOTICE.md). */
 function AboutDialog() {
   const [version, setVersion] = useState("");
@@ -523,5 +583,6 @@ export const Dialogs = memo(function Dialogs() {
     case "find": return <FindDialog />;
     case "yrange": return <YRangeDialog pane={dialog.pane} unit={dialog.unit} log={dialog.log} />;
     case "about": return <AboutDialog />;
+    case "help": return <HelpDialog />;
   }
 });

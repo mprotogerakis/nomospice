@@ -27,7 +27,9 @@ export type Dialog =
   | { k: "find" }
   /** a pane's fixed y range (`pane`: its key in PlotView.y) */
   | { k: "yrange"; pane: string; unit: string; log: boolean }
-  | { k: "about" };
+  | { k: "about" }
+  /** the quick reference: keys, probing, plots, analyses */
+  | { k: "help" };
 
 interface State {
   items: Item[];
