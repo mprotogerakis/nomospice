@@ -454,7 +454,8 @@ pub fn netlist_items(text: &str) -> Vec<Item> {
     let title = if titled { lines[0].trim().trim_start_matches('*').trim().to_string() } else { String::new() };
     // up to `.end`; a `.control` block (not run: commands can do anything) left out, its analyses
     // (`tran 1n 1u`) taken as the dot commands they stand for
-    const ANALYSES: [&str; 9] = ["tran", "ac", "dc", "op", "noise", "tf", "pz", "sens", "four"];
+    // (ngspice's commands that are analyses, and what dot command each is: fourier is .four)
+    const ANALYSES: [(&str, &str); 12] = [("tran", ".tran"), ("ac", ".ac"), ("dc", ".dc"), ("op", ".op"), ("noise", ".noise"), ("tf", ".tf"), ("pz", ".pz"), ("sens", ".sens"), ("fourier", ".four"), ("disto", ".disto"), ("pss", ".pss"), ("sp", ".sp")];
     let (mut body, mut control, mut taken, mut dropped) = (vec![], false, vec![], 0);
     let first = |l: &str| l.split_whitespace().next().unwrap_or("").to_ascii_lowercase();
     for l in lines.iter().skip(usize::from(titled)).take_while(|l| first(l) != ".end") {
@@ -462,7 +463,13 @@ pub fn netlist_items(text: &str) -> Vec<Item> {
         match w.as_str() {
             ".control" => control = true,
             ".endc" => control = false,
-            w if control && ANALYSES.contains(&w) => taken.push(format!(".{}", l.trim())),
+            w if control && ANALYSES.iter().any(|(c, _)| *c == w) => {
+                let dot = ANALYSES.iter().find(|(c, _)| *c == w).map_or(w, |(_, d)| *d);
+                let line = format!("{dot}{}", &l.trim()[w.len()..]);
+                if !taken.contains(&line) {
+                    taken.push(line); // (an analysis repeated in the block, `alter` between: once)
+                }
+            }
             // (a comment line in it: no command)
             _ if control => dropped += usize::from(!low.is_empty() && !low.starts_with('*')),
             _ => body.push(l.to_string()),
@@ -473,14 +480,17 @@ pub fn netlist_items(text: &str) -> Vec<Item> {
     body.extend(taken.iter().cloned());
     let body = body.join("\n").trim_matches('\n').to_string();
     let mut items = vec![];
-    let mut note = title;
+    // (named as a netlist's title: a title `.tran 10m` is no commented-out analysis)
+    let mut note = if title.is_empty() { title } else { format!("Netlist: {title}") };
     if !taken.is_empty() || dropped > 0 {
         note += &format!("{}(its .control block is not run: {}{} other command{} left out)", if note.is_empty() { "" } else { "\n" }, if taken.is_empty() { String::new() } else { format!("{} taken as dot commands, ", taken.join(" ")) }, dropped, if dropped == 1 { "" } else { "s" });
     }
     if !note.is_empty() {
         items.push(Item::Text { x: 0, y: -48 - 17 * (note.lines().count() as i32 - 1), text: note, directive: false, align: "Left 2".into() });
     }
-    items.push(Item::Text { x: 0, y: 0, text: body, directive: true, align: "Left 2".into() });
+    if !body.trim().is_empty() {
+        items.push(Item::Text { x: 0, y: 0, text: body, directive: true, align: "Left 2".into() });
+    }
     items
 }
 
@@ -1940,8 +1950,13 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool) -> Netlist {
     for (i, p) in pins.iter().enumerate() {
         nl.nets[i] = p.iter().map(|&p| names[&dsu.find(p)].clone()).collect();
     }
-    // (a schematic of no parts, an opened netlist in a directive: its own lines ground it, or not)
-    if ground.is_none() && items.iter().any(|it| matches!(it, Item::Sym { .. })) {
+    // (a schematic of no parts, or with part lines in a directive (an opened netlist): those lines
+    // ground it, or not; only drawn parts alone are said to float)
+    let part_lines = || items.iter().any(|it| matches!(it, Item::Text { text, directive: true, .. } if text.lines().any(|l| {
+        let t: Vec<&str> = l.split_whitespace().collect();
+        t.len() >= 3 && t[0].starts_with(|c: char| c.is_ascii_alphabetic())
+    })));
+    if ground.is_none() && items.iter().any(|it| matches!(it, Item::Sym { .. })) && !part_lines() {
         nl.warnings.push("no ground (0) in schematic".into());
     }
 
@@ -2208,6 +2223,30 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool) -> Netlist {
     any_ac |= directives.iter().any(|d| d.starts_with(['V', 'v', 'I', 'i']) && spice_tokens(d).iter().skip(3).any(|t| t.eq_ignore_ascii_case("ac")));
     if !any_ac && directives.iter().any(|d| is(d, ".ac")) {
         nl.warnings.push(".ac: no source has an AC amplitude, so every result is 0; add e.g. `AC 1` to the input source".into());
+    }
+    // a netlist's own part lines (an opened .cir, parts written in a directive): their models from
+    // the libraries too, as a drawn part's; only names the libraries know (a node, a value: none)
+    {
+        let index = crate::library::index();
+        let known = |m: &str| index.as_ref().is_some_and(|ix| ix.get(m).is_some());
+        for d in &directives {
+            let t: Vec<&str> = d.split_whitespace().collect();
+            let prefix = t.first().and_then(|w| w.chars().next()).map_or(' ', |c| c.to_ascii_uppercase());
+            if !"DQMJZX".contains(prefix) {
+                continue;
+            }
+            // (X: its subcircuit, the last word before the parameters; others: any word after the nodes)
+            let names: Vec<String> = if prefix == 'X' {
+                t[1..].iter().take_while(|w| !w.contains('=') && !w.eq_ignore_ascii_case("params:")).last().map(|w| w.to_lowercase()).into_iter().collect()
+            } else {
+                t.iter().skip(3).map(|w| w.to_lowercase()).collect()
+            };
+            for m in names {
+                if known(&m) && !defined(&m) && !used_models.contains(&m) {
+                    used_models.push(m);
+                }
+            }
+        }
     }
     lines.push(".param pi=3.141592653589793".into()); // LTspice built-in; a user .param pi comes later and wins
     let includes = directives.iter().any(|d| { let l = d.to_lowercase(); l.starts_with(".inc") || l.starts_with(".lib") });
@@ -2711,7 +2750,7 @@ mod tests {
         // a netlist opened: its title a comment, the rest one directive, simulated as it was
         let net = "* RC divider\nV1 in 0 DC 2\nR1 in out 1k\nR2 out 0 1k\n.op\n.end\nnot read\n";
         let items = netlist_items(net);
-        assert!(matches!(&items[0], Item::Text { text, directive: false, .. } if text == "RC divider"));
+        assert!(matches!(&items[0], Item::Text { text, directive: false, .. } if text == "Netlist: RC divider"));
         assert!(matches!(&items[1], Item::Text { text, directive: true, .. } if text.starts_with("V1 in 0") && text.ends_with(".op")), "{items:?}");
         let _s = SIM.lock();
         let nl = netlist_for_sim(&items, &mut Library::builtin());
@@ -2721,9 +2760,9 @@ mod tests {
         assert!((v.re[0] - 1.0).abs() < 1e-9, "{:?}", v.re);
         assert!(is_netlist("/a/b.CIR") && is_netlist("x.net") && !is_netlist("x.asc"));
         // ngspice's .control analyses as dot commands; a library: no title taken from it
-        let items = netlist_items("* t\nV1 1 0 1\nR1 1 0 1k\n.control\n* show it\ntran 1n 1u\nop\nrun\nplot v(1)\n.endc\n.op\n.end ; deck\nmore\n");
-        assert!(matches!(&items[1], Item::Text { text, .. } if text.ends_with("R1 1 0 1k\n.op\n.tran 1n 1u") && !text.contains("plot") && !text.contains("more")), "{items:?}");
-        assert!(matches!(&items[0], Item::Text { text, .. } if text.contains(".tran 1n 1u taken") && text.contains("2 other commands")), "{items:?}");
+        let items = netlist_items("* t\nV1 1 0 1\nR1 1 0 1k\n.control\n* show it\ntran 1n 1u\nop\nrun\nalter R1 2k\ntran 1n 1u\nfourier 1meg v(1)\nplot v(1)\n.endc\n.op\n.end ; deck\nmore\n");
+        assert!(matches!(&items[1], Item::Text { text, .. } if text.ends_with("R1 1 0 1k\n.op\n.tran 1n 1u\n.four 1meg v(1)") && !text.contains("plot") && !text.contains("more")), "{items:?}");
+        assert!(matches!(&items[0], Item::Text { text, .. } if text.contains(".tran 1n 1u .four 1meg v(1) taken") && text.contains("3 other commands")), "{items:?}");
         let lib = netlist_items(".subckt OPA 1 2 3\nR1 1 2 1k\n.ends\n");
         assert!(lib.len() == 1 && matches!(&lib[0], Item::Text { text, .. } if text.starts_with(".subckt OPA")));
     }

@@ -51,6 +51,8 @@ interface State {
   panel: "log" | "netlist" | "op" | "history" | null;
   dialog: Dialog | null;
   fitToken: number;
+  /** the document's path while no file is there yet (an opened netlist's .asc): its first save asks */
+  unwritten: string | null;
   /** Waveform x-zoom and cursors A/B; reset per document and analysis kind. */
   plot: PlotView;
   menu: { x: number; y: number; items: import("./Menu").MenuItem[] } | null;
@@ -98,7 +100,7 @@ export const plotKind = (sim: Sim | null) => `${sim?.run?.plot.replace(/\d+$/, "
 export const useS = create<State>(() => ({
   items: [], past: [], future: [], sel: [], tool: { k: "select" }, lib: {}, path: null, dirty: false,
   nets: null, netsItems: null, sim: null, running: false, stale: false, traces: [], live: false, panel: null, dialog: null,
-  fitToken: 0, plot: NO_PLOT, menu: null, git: null, diff: null, tab: null, tabs: {}, shown: null,
+  fitToken: 0, unwritten: null, plot: NO_PLOT, menu: null, git: null, diff: null, tab: null, tabs: {}, shown: null,
 }));
 const set = useS.setState;
 const get = useS.getState;
@@ -205,7 +207,7 @@ export async function loadDoc(items: Item[], path: string | null) {
   await loadSymbols(items, dirOf(path), { fresh: true, force: true }); // reopening reads edited symbols
   docGen++;
   autoPlotted = new Set();
-  set({ dialog: null, menu: null, tab: null, tabs: {}, shown: null, items, path, past: [], future: [], sel: [], dirty: false, sim: null, traces: [], stale: false, nets: null, netsItems: null, plot: NO_PLOT, panel: get().panel === "op" ? null : get().panel, diff: null, tool: { k: "select" }, fitToken: get().fitToken + 1 });
+  set({ dialog: null, menu: null, tab: null, tabs: {}, shown: null, items, path, unwritten: null, past: [], future: [], sel: [], dirty: false, sim: null, traces: [], stale: false, nets: null, netsItems: null, plot: NO_PLOT, panel: get().panel === "op" ? null : get().panel, diff: null, tool: { k: "select" }, fitToken: get().fitToken + 1 });
   refreshNets();
   refreshGit();
 }

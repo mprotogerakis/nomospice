@@ -128,20 +128,16 @@ async function openFile(path?: string) {
  *  there), never saved over it: name.asc, or name-2.asc … if that is taken. */
 async function openPath(path: string) {
   const [items, netlist] = await invoke<[Item[], boolean]>("open_asc", { path });
-  unwritten = null;
   if (!netlist) return loadDoc(items, path);
   const base = path.replace(/\.[^./\\]*$/, "");
   let asc = `${base}.asc`;
   for (let k = 2; await invoke<boolean>("path_exists", { path: asc }); k++) asc = `${base}-${k}.asc`;
   await loadDoc(items, asc);
-  useS.setState({ dirty: true });
-  unwritten = asc; // (its first save asks where, offering this name: a file made there since is not overwritten unasked)
+  useS.setState({ dirty: true, unwritten: asc }); // (its first save asks where, offering this name: a file made there since is not overwritten unasked)
 }
-/** A path the document has but no file yet (an opened netlist's .asc): saving asks first. */
-let unwritten: string | null = null;
 let saveQueue: Promise<unknown> = Promise.resolve();
 
-const MODEL_FILE = /\.(lib|sub|mod|inc|cir|sp|spi|bjt|dio|jft|mos)$/i;
+const MODEL_FILE = /\.(lib|sub|mod|inc|cir|net|ckt|sp|spi|bjt|dio|jft|mos)$/i;
 /** What dropping these files does (null: nothing). */
 const dropAction = (paths: string[]) =>
   paths.some((p) => /\.asc$/i.test(p)) ? "Open schematic" : paths.some((p) => MODEL_FILE.test(p)) ? "Add as .include directive" : null;
@@ -160,7 +156,7 @@ async function dropFiles(paths: string[]) {
 async function saveFile(as = false): Promise<boolean> {
   const prev = useS.getState().path;
   let path = prev;
-  if (as || !path || path === unwritten) path = await save({ filters: FILTERS, defaultPath: path ?? "untitled.asc" });
+  if (as || !path || path === useS.getState().unwritten) path = await save({ filters: FILTERS, defaultPath: path ?? "untitled.asc" });
   if (!path) return false;
   if (!/\.asc$/i.test(path)) {
     // GTK save dialogs do not add the filter's extension, and checked for overwrite without it
@@ -199,7 +195,7 @@ async function saveFile(as = false): Promise<boolean> {
     const tabs = Object.fromEntries(Object.entries(useS.getState().tabs).map(([k, t]) => [k, { ...t, stale: true }]));
     useS.setState({ path, dirty: useS.getState().items !== items, ...(moved && { tabs, ...(useS.getState().sim && { stale: true }) }) });
     if (moved) void loadSymbols(useS.getState().items).catch(() => {}).finally(refreshNets); // the new folder's symbols
-    unwritten = null; // (a file now: saved without asking from here on)
+    useS.setState({ unwritten: null }); // (a file now: saved without asking from here on)
     refreshGit();
     return true;
   } catch (e) {
@@ -208,7 +204,7 @@ async function saveFile(as = false): Promise<boolean> {
   }
 }
 async function newFile() {
-  if (await discardOk()) (unwritten = null), await loadDoc([], null);
+  if (await discardOk()) await loadDoc([], null);
 }
 async function openExample(items: Item[]) {
   if (await discardOk()) await loadDoc(items, null);
@@ -262,7 +258,7 @@ export function App() {
         await loadDoc(rec!.items, rec!.path);
         useS.setState({ dirty: true });
         // (a document never written, an opened netlist's .asc: its first save asks, as it would have)
-        if (rec!.path && !(await invoke<boolean>("path_exists", { path: rec!.path }))) unwritten = rec!.path;
+        if (rec!.path && !(await invoke<boolean>("path_exists", { path: rec!.path }))) useS.setState({ unwritten: rec!.path });
         if (file) await message(`${file} was not opened because the previous session was restored.`, { title: "nomospice" });
         return;
       }
