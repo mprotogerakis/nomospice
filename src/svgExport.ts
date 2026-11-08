@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { message, save } from "@tauri-apps/plugin-dialog";
-import { dirOf, fileName, useS } from "./store";
+import { dirOf, fileName, idle, simulate, useS } from "./store";
 
 /** Run `fn` with the light theme's CSS variables: exports are for slides and paper. The class is
  *  restored in the same task, so nothing is painted in between. */
@@ -61,6 +61,11 @@ export const saveSvg = (svg: string, suffix: string) => saveBeside("svg", "SVG i
 
 /** The shown run's results as a .raw file (ngspice's binary raw format). */
 export async function saveRaw() {
+  // (as a trace is added: once no run is in flight, and the shown run again if ngspice no longer
+  // holds it, a result tab brought back, a crash)
+  await idle();
+  if (!useS.getState().sim?.run) return;
+  if (useS.getState().sim!.run!.id !== (await invoke<number>("run_id"))) await simulate();
   const run = useS.getState().sim?.run;
   if (!run) return;
   const left = await saveBeside<string[]>("raw", "Simulation results (raw)", "", "export_raw", { run: run.id });

@@ -97,6 +97,7 @@ extern "C" fn on_stat(_: *const c_char, _: c_int, _: *mut c_void) -> c_int {
 
 extern "C" fn on_exit(status: c_int, _: bool, _: bool, _: c_int, _: *mut c_void) -> c_int {
     DEAD.store(true, Ordering::SeqCst);
+    RUNS.fetch_add(1, Ordering::SeqCst); // (its results are gone: run_id says so at once, before the reload)
     if let Ok(mut log) = LOG.lock() {
         log.push(format!("ngspice stopped after a fatal error (status {status}); it is reloaded for the next run"));
     }
@@ -228,9 +229,6 @@ fn load() -> Result<Api, String> {
         }
         take_log(); // init chatter
         LOADS.fetch_add(1, Ordering::SeqCst);
-        if n > 0 {
-            RUNS.fetch_add(1, Ordering::SeqCst); // (a fresh engine holds no run's results: traces and exports of the last one say so)
-        }
         Ok(api)
     }
 }
@@ -586,7 +584,8 @@ fn plot_vectors(api: &Api, plot: &str, sensors: &[crate::schematic::Sensor], par
     }));
     // the helper sources ngspice makes for `.meas … par('…')`: pa_00, bpa_00#branch … one per par()
     let helpers: std::collections::HashSet<String> = (0..pars).flat_map(|k| [format!("pa_{k:02}"), format!("bpa_{k:02}#branch")]).collect();
-    vectors.retain(|v| !helpers.contains(v) && !crate::laplace::internal(v)); // (and a Laplace source's states)
+    // (and a Laplace source's states, and the app's own trace scratch vector, should a trace have left it)
+    vectors.retain(|v| !helpers.contains(v) && !crate::laplace::internal(v) && v != "nmsp_trace");
     vectors.sort();
     let scale = ["time", "frequency", "v-sweep", "i-sweep", "temp-sweep", "res-sweep"]
         .into_iter()
@@ -643,6 +642,8 @@ fn raw_plotname(plot: &str) -> &'static str {
     }
 }
 
+/// ponytail: the whole file is built in memory under the engine lock; stream it plot by plot if
+/// exports of many big steps come to need it.
 /// Run `run`'s results as a .raw file in ngspice's binary format (a text header, then each point's
 /// values as little-endian doubles; complex: real and imaginary), which other tools read: the
 /// vectors the results list (`v(out)`, `i(v1)`), the part currents under their names (`I(R1)`,
@@ -688,11 +689,14 @@ pub fn export_raw(run: u64) -> Result<(Vec<u8>, Vec<String>), String> {
                 }
             }
         }
-        // (a column of another length than the scale's, or than most, without one: not this plot's
-        // data, said)
+        // (the scale unreadable: no plot to write; a column of another length than the scale's, or
+        // than most, without one: not this plot's data, said, but for single values, a .meas's)
+        if !scale.is_empty() && cols.first().map(|c| &c.0) != Some(&scale) {
+            return Err(format!("{p}: ngspice gives no {scale} to write the results over"));
+        }
         let n = if scale.is_empty() { cols.iter().map(|c| c.1.re.len()).max().unwrap_or(0) } else { cols.first().map_or(0, |c| c.1.re.len()) };
         let (cols, other): (Vec<(String, Trace)>, Vec<(String, Trace)>) = cols.into_iter().partition(|c| c.1.re.len() == n);
-        dropped.extend(other.into_iter().map(|c| c.0));
+        dropped.extend(other.into_iter().filter(|c| c.1.re.len() != 1).map(|c| c.0));
         let complex = cols.iter().any(|c| c.1.im.is_some());
         // (Command: ngspice: readers take ngspice's layout by it, all values doubles)
         // (a .noise run's totals: integrated, no frequency scale)
