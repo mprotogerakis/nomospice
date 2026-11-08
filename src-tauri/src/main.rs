@@ -328,11 +328,18 @@ fn cancel_locus() {
 
 /// The results of run `run` (its plot `plot`) as a .raw file.
 #[tauri::command]
-async fn export_raw(path: String, plot: String, run: u64) -> Result<(), String> {
+/// Returns the vectors left out (see ngspice::export_raw).
+async fn export_raw(path: String, plot: String, run: u64) -> Result<Vec<String>, String> {
     if !path.to_lowercase().ends_with(".raw") {
         return Err(format!("{path}: not a .raw file"));
     }
-    tauri::async_runtime::spawn_blocking(move || ngspice::export_raw(&path, &plot, run)).await.map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        let (bytes, skipped) = ngspice::export_raw(&plot, run)?;
+        write_atomic(std::path::Path::new(&path), &bytes).map_err(|e| format!("{path}: {e}"))?; // (a failed write leaves the file as it was)
+        Ok(skipped)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// `run`: the id of the Run the trace is for (ngspice keeps only the latest run's results).

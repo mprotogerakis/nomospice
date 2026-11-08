@@ -2658,13 +2658,12 @@ mod tests {
         let src = EXAMPLES.iter().find(|e| e.0 == "step_rc").unwrap().1.replace("FLAG 224 64 out", "FLAG 224 64 out+").replace("vdb(out)", "vdb(out+)");
         let nl = netlist_for_sim(&parse_asc(&src), &mut Library::builtin());
         let run = crate::ngspice::run(&nl.prepared(None, &mut vec![])).unwrap();
-        let path = std::env::temp_dir().join(format!("nomospice-test-{}.raw", std::process::id()));
-        crate::ngspice::export_raw(path.to_str().unwrap(), &run.plot, run.id).unwrap();
-        let bytes = std::fs::read(&path).unwrap();
-        let _ = std::fs::remove_file(&path);
+        let (bytes, skipped) = crate::ngspice::export_raw(&run.plot, run.id).unwrap();
         let text = String::from_utf8_lossy(&bytes);
-        assert_eq!(text.matches("Plotname:").count(), 3, "one plot per step");
-        assert!(text.contains("v(out+)") && text.contains("i(r1)") && !text.contains("vsense"), "{}", &text[..text.find("Binary:").unwrap_or(400).min(text.len())]);
+        assert!(skipped.is_empty() && text.matches("Plotname:").count() == 3, "one plot per step: {skipped:?}");
+        assert!(text.contains("\tv(out+)\t") && text.contains("\tI(R1)\tcurrent") && !text.contains("vsense"), "{}", &text[..text.find("Binary:").unwrap_or(400).min(text.len())]);
+        // the results themselves unchanged: a part current still traced as before
+        assert!(crate::ngspice::trace("I(R1)", &run.scale, run.id).is_ok());
     }
 
     #[test]

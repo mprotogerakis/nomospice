@@ -44,25 +44,28 @@ export function inlineStyles(svg: SVGSVGElement) {
   }
 }
 
-/** Ask for a file name next to the document and write the SVG. */
 /** Ask where to save a `.ext` file beside the schematic (named after it, plus `suffix`), then let
- *  the core write it with `command` (its error shown). */
-async function saveBeside(ext: string, filter: string, suffix: string, command: string, args: Record<string, unknown>) {
+ *  the core write it with `command` (its error shown); what the command returns, or undefined. */
+async function saveBeside<T>(ext: string, filter: string, suffix: string, command: string, args: Record<string, unknown>): Promise<T | undefined> {
   const { path } = useS.getState();
   const base = fileName(path).replace(/\.asc$/i, ""), dir = path ? dirOf(path) : undefined;
   const name = `${base}${suffix}.${ext}`;
   const target = await save({ defaultPath: dir ? `${dir}/${name}` : name, filters: [{ name: filter, extensions: [ext] }] });
   if (!target) return;
   const file = target.toLowerCase().endsWith(`.${ext}`) ? target : `${target}.${ext}`;
-  await invoke(command, { path: file, ...args }).catch((e) => message(String(e), { title: "Export failed", kind: "error" }));
+  return invoke<T>(command, { path: file, ...args }).catch((e) => void message(String(e), { title: "Export failed", kind: "error" }));
 }
 
+/** An SVG (the schematic, the plots) beside the schematic. */
 export const saveSvg = (svg: string, suffix: string) => saveBeside("svg", "SVG image", suffix, "export_svg", { svg });
 
 /** The shown run's results as a .raw file (ngspice's binary raw format). */
-export function saveRaw() {
+export async function saveRaw() {
   const run = useS.getState().sim?.run;
-  return run ? saveBeside("raw", "Simulation results (raw)", "", "export_raw", { plot: run.plot, run: run.id }) : Promise.resolve();
+  if (!run) return;
+  const left = await saveBeside<string[]>("raw", "Simulation results (raw)", "", "export_raw", { plot: run.plot, run: run.id });
+  // (names ngspice's command line would read as something else, a$b: said, not silently missing)
+  if (left?.length) await message(`Written without ${left.join(", ")}: ngspice cannot write a vector of that name.`, { title: "Export", kind: "warning" });
 }
 
 export const xmlEscape = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
