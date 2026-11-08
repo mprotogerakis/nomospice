@@ -31,12 +31,14 @@ async fn examples() -> Vec<(String, Vec<Item>)> {
 
 /// Off the main thread: reading an iCloud-evicted or network file can block for a while.
 #[tauri::command]
-async fn open_asc(path: String) -> Result<Vec<Item>, String> {
+/// The items, and whether the file was a netlist (a schematic of one directive holding it: the
+/// app saves it elsewhere, never over it).
+async fn open_asc(path: String) -> Result<(Vec<Item>, bool), String> {
     tauri::async_runtime::spawn_blocking(move || {
         let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
         let text = schematic::decode(&bytes);
-        // (a netlist: a schematic of one directive holding it)
-        Ok(if schematic::is_netlist(&path) { schematic::netlist_items(&text) } else { schematic::parse_asc(&text) })
+        let netlist = schematic::is_netlist(&path);
+        Ok((if netlist { schematic::netlist_items(&text) } else { schematic::parse_asc(&text) }, netlist))
     })
     .await
     .map_err(|e| e.to_string())?

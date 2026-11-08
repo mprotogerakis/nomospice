@@ -439,13 +439,33 @@ pub fn is_netlist(path: &str) -> bool {
 /// directive, which a run takes as it is (parts, models, analyses alike), so it simulates and its
 /// nodes can be plotted by name; nothing is drawn of it.
 pub fn netlist_items(text: &str) -> Vec<Item> {
-    let mut lines = text.lines();
-    let title = lines.next().unwrap_or("").trim().trim_start_matches('*').trim().to_string();
-    let body: Vec<&str> = lines.take_while(|l| !l.trim().eq_ignore_ascii_case(".end")).collect();
+    let lines: Vec<&str> = text.lines().collect();
+    // the first line a title, as SPICE reads a deck; a library's first line (`.subckt …`) not
+    let titled = lines.first().is_some_and(|l| !l.trim_start().starts_with('.'));
+    let title = if titled { lines[0].trim().trim_start_matches('*').trim().to_string() } else { String::new() };
+    // up to `.end`; a `.control` block (not run: commands can do anything) left out, its analyses
+    // (`tran 1n 1u`) taken as the dot commands they stand for
+    const ANALYSES: [&str; 8] = ["tran", "ac", "dc", "op", "noise", "tf", "pz", "sens"];
+    let (mut body, mut control, mut taken, mut dropped) = (vec![], false, vec![], 0);
+    for l in lines.iter().skip(usize::from(titled)).take_while(|l| !l.trim().eq_ignore_ascii_case(".end")) {
+        let low = l.trim().to_ascii_lowercase();
+        match low.split_whitespace().next() {
+            Some(".control") => control = true,
+            Some(".endc") => control = false,
+            Some(w) if control && ANALYSES.contains(&w) => taken.push(format!(".{}", l.trim())),
+            _ if control => dropped += usize::from(!low.is_empty()),
+            _ => body.push(l.to_string()),
+        }
+    }
+    body.extend(taken.iter().cloned());
     let body = body.join("\n").trim_matches('\n').to_string();
     let mut items = vec![];
-    if !title.is_empty() {
-        items.push(Item::Text { x: 0, y: -48, text: title, directive: false, align: "Left 2".into() });
+    let mut note = title;
+    if !taken.is_empty() || dropped > 0 {
+        note += &format!("{}(its .control block is not run: {}{} other command{} left out)", if note.is_empty() { "" } else { "\n" }, if taken.is_empty() { String::new() } else { format!("{} taken as dot commands, ", taken.join(" ")) }, dropped, if dropped == 1 { "" } else { "s" });
+    }
+    if !note.is_empty() {
+        items.push(Item::Text { x: 0, y: -48 - 17 * (note.lines().count() as i32 - 1), text: note, directive: false, align: "Left 2".into() });
     }
     items.push(Item::Text { x: 0, y: 0, text: body, directive: true, align: "Left 2".into() });
     items
@@ -1907,7 +1927,12 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool) -> Netlist {
     for (i, p) in pins.iter().enumerate() {
         nl.nets[i] = p.iter().map(|&p| names[&dsu.find(p)].clone()).collect();
     }
-    if ground.is_none() {
+    // (a netlist in a directive grounds itself: an element line there with a node 0)
+    let grounded_text = items.iter().any(|it| matches!(it, Item::Text { text, directive: true, .. } if text.lines().any(|l| {
+        let t: Vec<&str> = l.split_whitespace().collect();
+        t.first().is_some_and(|w| w.starts_with(|c: char| c.is_ascii_alphabetic())) && t.iter().skip(1).take(4).any(|n| *n == "0")
+    })));
+    if ground.is_none() && !grounded_text {
         nl.warnings.push("no ground (0) in schematic".into());
     }
 
@@ -2681,10 +2706,17 @@ mod tests {
         assert!(matches!(&items[1], Item::Text { text, directive: true, .. } if text.starts_with("V1 in 0") && text.ends_with(".op")), "{items:?}");
         let _s = SIM.lock();
         let nl = netlist_for_sim(&items, &mut Library::builtin());
+        assert!(nl.warnings.is_empty(), "grounded by its own lines: {:?}", nl.warnings);
         let run = crate::ngspice::run(&nl.prepared(None, &mut vec![])).unwrap();
         let v = crate::ngspice::trace("v(out)", &run.scale, run.id).unwrap();
         assert!((v.re[0] - 1.0).abs() < 1e-9, "{:?}", v.re);
         assert!(is_netlist("/a/b.CIR") && is_netlist("x.net") && !is_netlist("x.asc"));
+        // ngspice's .control analyses as dot commands; a library: no title taken from it
+        let items = netlist_items("* t\nV1 1 0 1\nR1 1 0 1k\n.control\ntran 1n 1u\nrun\nplot v(1)\n.endc\n.end\n");
+        assert!(matches!(&items[1], Item::Text { text, .. } if text.ends_with("R1 1 0 1k\n.tran 1n 1u") && !text.contains("plot")), "{items:?}");
+        assert!(matches!(&items[0], Item::Text { text, .. } if text.contains(".tran 1n 1u taken") && text.contains("2 other commands")), "{items:?}");
+        let lib = netlist_items(".subckt OPA 1 2 3\nR1 1 2 1k\n.ends\n");
+        assert!(lib.len() == 1 && matches!(&lib[0], Item::Text { text, .. } if text.starts_with(".subckt OPA")));
     }
 
     #[test]

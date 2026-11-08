@@ -45,8 +45,11 @@ const G = {
   volt: glyph("M12 2v3M12 19v3M12 5a7 7 0 1 0 0 14a7 7 0 1 0 0-14M9 12c1-2.5 2-2.5 3 0s2 2.5 3 0"),
 };
 
-const FILTERS = [{ name: "Schematic or netlist", extensions: ["asc", "cir", "net", "sp", "spi", "ckt"] }, { name: "LTspice schematic", extensions: ["asc"] }, { name: "SPICE netlist", extensions: ["cir", "net", "sp", "spi", "ckt"] }];
-const NETLIST = /\.(cir|net|sp|spi|ckt)$/i;
+/** Netlists the app opens (as schematics of them); the core's is_netlist decides, this list offers. */
+const NETLIST_EXT = ["cir", "net", "sp", "spi", "ckt"];
+const NETLIST = new RegExp(`\\.(${NETLIST_EXT.join("|")})$`, "i");
+const OPEN_FILTERS = [{ name: "Schematic or netlist", extensions: ["asc", ...NETLIST_EXT] }, { name: "LTspice schematic", extensions: ["asc"] }, { name: "SPICE netlist", extensions: NETLIST_EXT }];
+const FILTERS = [{ name: "LTspice schematic", extensions: ["asc"] }];
 /** Typing into a text field (a focused checkbox or button must not swallow the hotkeys). */
 const typing = (e: KeyboardEvent) =>
   e.target instanceof HTMLElement && e.target.closest("input:not([type=checkbox]):not([type=radio]):not([type=button]),textarea,select,dialog") !== null;
@@ -111,7 +114,7 @@ const fail = (what: string) => (e: unknown) => message(`${what}: ${e}`, { title:
 async function openFile(path?: string) {
   if (!(await discardOk())) return;
   if (path === undefined) {
-    const picked = await open({ filters: FILTERS, multiple: false });
+    const picked = await open({ filters: OPEN_FILTERS, multiple: false });
     if (typeof picked !== "string") return;
     path = picked;
   }
@@ -124,25 +127,31 @@ async function openFile(path?: string) {
 /** Open a schematic, or a netlist as a new schematic of it: beside it (its .includes found from
  *  there), never saved over it: name.asc, or name-2.asc … if that is taken. */
 async function openPath(path: string) {
-  const items = await invoke<Item[]>("open_asc", { path });
-  if (!NETLIST.test(path)) return loadDoc(items, path);
-  const base = path.replace(NETLIST, "");
+  const [items, netlist] = await invoke<[Item[], boolean]>("open_asc", { path });
+  unwritten = null;
+  if (!netlist) return loadDoc(items, path);
+  const base = path.replace(/\.[^./\\]*$/, "");
   let asc = `${base}.asc`;
   for (let k = 2; await invoke<boolean>("path_exists", { path: asc }); k++) asc = `${base}-${k}.asc`;
   await loadDoc(items, asc);
   useS.setState({ dirty: true });
+  unwritten = asc; // (its first save asks where, offering this name: a file made there since is not overwritten unasked)
 }
+/** A path the document has but no file yet (an opened netlist's .asc): saving asks first. */
+let unwritten: string | null = null;
 let saveQueue: Promise<unknown> = Promise.resolve();
 
 const MODEL_FILE = /\.(lib|sub|mod|inc|cir|sp|spi|bjt|dio|jft|mos)$/i;
 /** What dropping these files does (null: nothing). */
 const dropAction = (paths: string[]) =>
-  paths.some((p) => /\.asc$/i.test(p)) ? "Open schematic" : paths.some((p) => MODEL_FILE.test(p)) ? "Add as .include directive" : null;
+  paths.some((p) => /\.asc$/i.test(p)) ? "Open schematic"
+  : !useS.getState().items.length && paths.some((p) => NETLIST.test(p)) ? "Open netlist" // (an empty document: opened; onto a schematic: included)
+  : paths.some((p) => MODEL_FILE.test(p)) ? "Add as .include directive" : null;
 /** Dropped files: a schematic opens, model files become `.include` directives (relative to the
  *  schematic's folder when inside it, as LTspice writes them). */
 async function dropFiles(paths: string[]) {
   if (useS.getState().dialog) return;
-  const asc = paths.find((p) => /\.asc$/i.test(p));
+  const asc = paths.find((p) => /\.asc$/i.test(p)) ?? (!useS.getState().items.length ? paths.find((p) => NETLIST.test(p)) : undefined);
   if (asc) return openFile(asc);
   const models = paths.filter((p) => MODEL_FILE.test(p));
   if (models.length) newItem({ t: "text", x: 0, y: 0, directive: true, text: models.map((p) => `.include "${relToDoc(p)}"`).join("\n") });
@@ -152,7 +161,7 @@ async function dropFiles(paths: string[]) {
 async function saveFile(as = false): Promise<boolean> {
   const prev = useS.getState().path;
   let path = prev;
-  if (as || !path) path = await save({ filters: FILTERS, defaultPath: path ?? "untitled.asc" });
+  if (as || !path || path === unwritten) path = await save({ filters: FILTERS, defaultPath: path ?? "untitled.asc" });
   if (!path) return false;
   if (!/\.asc$/i.test(path)) {
     // GTK save dialogs do not add the filter's extension, and checked for overwrite without it
@@ -191,6 +200,7 @@ async function saveFile(as = false): Promise<boolean> {
     const tabs = Object.fromEntries(Object.entries(useS.getState().tabs).map(([k, t]) => [k, { ...t, stale: true }]));
     useS.setState({ path, dirty: useS.getState().items !== items, ...(moved && { tabs, ...(useS.getState().sim && { stale: true }) }) });
     if (moved) void loadSymbols(useS.getState().items).catch(() => {}).finally(refreshNets); // the new folder's symbols
+    unwritten = null; // (a file now: saved without asking from here on)
     refreshGit();
     return true;
   } catch (e) {
@@ -199,7 +209,7 @@ async function saveFile(as = false): Promise<boolean> {
   }
 }
 async function newFile() {
-  if (await discardOk()) await loadDoc([], null);
+  if (await discardOk()) (unwritten = null), await loadDoc([], null);
 }
 async function openExample(items: Item[]) {
   if (await discardOk()) await loadDoc(items, null);
