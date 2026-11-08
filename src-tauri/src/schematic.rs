@@ -89,13 +89,16 @@ pub struct SymbolDef {
     /// `SymbolType BLOCK` (LTspice's hierarchical block symbol)
     #[serde(skip)]
     pub block: bool,
+    /// a `ModelFile` attribute: a subcircuit symbol of a library file, never a block
+    #[serde(skip)]
+    pub model_file: bool,
 }
 
 impl SymbolDef {
     /// Whether a schematic of its name would be its subcircuit: a BLOCK, or a symbol calling a
-    /// subcircuit (Prefix X) without naming another one in its Value.
-    fn calls_sheet(&self) -> bool {
-        self.block || (matches!(self.prefix.trim(), "" | "X" | "x") && block_params(&self.value, &self.name).is_some())
+    /// subcircuit (Prefix X) without naming another one in its Value or a library file.
+    pub fn calls_sheet(&self) -> bool {
+        self.block || (matches!(self.prefix.trim(), "" | "X" | "x") && !self.model_file && block_params(&self.value, &self.name).is_some())
     }
 }
 
@@ -157,6 +160,7 @@ pub fn parse_asy(name: &str, src: &str) -> SymbolDef {
                     Some("Value") => d.value = v,
                     Some("SpiceLine") => d.spice_line = v,
                     Some("Description") => d.desc = v,
+                    Some("ModelFile") => d.model_file = !v.trim().is_empty(),
                     _ => {}
                 }
             }
@@ -202,26 +206,34 @@ pub struct Local {
     lent: HashSet<String>,
 }
 
-/// The schematic folder's own symbol files: (key, path) of each .asy (any case), not those of a
-/// built-in symbol (nomospice's win). Library::set_dir and Save As (carry them along) share it.
-pub fn folder_symbols(dir: &std::path::Path) -> Vec<(String, std::path::PathBuf)> {
-    let mut list: Vec<_> = std::fs::read_dir(dir).into_iter().flatten().flatten().map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("asy")))
+/// A folder's files.
+fn listing(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    std::fs::read_dir(dir).into_iter().flatten().flatten().map(|e| e.path()).collect()
+}
+
+/// (key, path) of the files of that extension (any case), sorted: of Foo.asy and foo.asy on a
+/// case-sensitive disk always the same one wins, the last.
+fn keyed(files: &[std::path::PathBuf], ext: &str) -> Vec<(String, std::path::PathBuf)> {
+    let mut list: Vec<_> = files.iter().filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case(ext)))
         .filter_map(|p| Some((sym_key(p.file_stem()?.to_str()?), p.clone())))
-        .filter(|(k, _)| !builtin_symbol(k))
         .collect();
-    list.sort(); // (Foo.asy and foo.asy on a case-sensitive disk: always the same one wins, the last)
+    list.sort();
     list
 }
 
+/// The schematic folder's own symbol files: (key, path) of each .asy, not those of a built-in
+/// symbol (nomospice's win). Library::set_dir and Save As (carry them along) share it.
+pub fn folder_symbols(dir: &std::path::Path) -> Vec<(String, std::path::PathBuf)> {
+    symbols_in(&listing(dir))
+}
+
+fn symbols_in(files: &[std::path::PathBuf]) -> Vec<(String, std::path::PathBuf)> {
+    keyed(files, "asy").into_iter().filter(|(k, _)| !builtin_symbol(k)).collect()
+}
+
 /// A folder's schematics by key (lowercase stem): the sheets of its block symbols.
-fn folder_sheets(dir: &std::path::Path) -> HashMap<String, std::path::PathBuf> {
-    let mut list: Vec<_> = std::fs::read_dir(dir).into_iter().flatten().flatten().map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("asc")))
-        .filter_map(|p| Some((sym_key(p.file_stem()?.to_str()?), p.clone())))
-        .collect();
-    list.sort(); // (Foo.asc and foo.asc: always the same one, the last)
-    list.into_iter().collect()
+pub fn folder_sheets(dir: &std::path::Path) -> HashMap<String, std::path::PathBuf> {
+    keyed(&listing(dir), "asc").into_iter().collect()
 }
 
 /// (count, a sum over names, modification times and sizes) of a folder's symbol files (the list
@@ -255,8 +267,9 @@ impl Library {
         if !moved && !rescan {
             return false; // netlisting: no disk access
         }
-        let list = dir.map(folder_symbols).unwrap_or_default(); // one listing for the stamp and the load
-        let sheets = dir.map(folder_sheets).unwrap_or_default();
+        let files = dir.map(listing).unwrap_or_default(); // one listing for the stamp and the load
+        let list = symbols_in(&files);
+        let sheets: HashMap<_, _> = keyed(&files, "asc").into_iter().collect();
         // (None: no such folder; a schematic added or removed beside a symbol makes it a block or not)
         let stamp = dir.and_then(|d| std::fs::metadata(d).ok()).map(|_| (asy_stamp(&list), sheets.keys().cloned().collect::<std::collections::BTreeSet<_>>()));
         if !moved && stamp == self.local.stamp {
@@ -612,7 +625,7 @@ pub fn block_asy(items: &[Item]) -> Result<String, String> {
     for it in items {
         let Item::Flag { name, extra, .. } = it else { continue };
         let Some(kind) = extra.iter().find_map(|l| port_kind(l)) else { continue };
-        if name == "0" || !seen.insert(name.trim().to_lowercase()) {
+        if name == "0" || name.trim().eq_ignore_ascii_case("gnd") || !seen.insert(name.trim().to_lowercase()) {
             continue;
         }
         if kind.eq_ignore_ascii_case("out") { right.push(name.trim()) } else { left.push(name.trim()) }
@@ -659,15 +672,19 @@ pub struct Netlist {
     #[serde(skip)]
     pub steps: Vec<String>,
     pub warnings: Vec<String>,
-    /// The subcircuits of its hierarchical blocks (theirs too, each once), written after the
-    /// directives (a sheet's own: its parent's netlist writes them, none nested)
-    #[serde(skip)]
-    pub blocks: Vec<Block>,
+}
+
+/// The hierarchical blocks of one netlisting: the sheets being netlisted (outermost first), and
+/// the subcircuits done, each once (the top schematic's netlist writes them all, none nested).
+#[derive(Default)]
+struct Hier {
+    stack: Vec<String>,
+    blocks: Vec<Block>,
 }
 
 /// A hierarchical block's sheet as a subcircuit.
 #[derive(Debug, Default)]
-pub struct Block {
+struct Block {
     /// the symbol's name, as SPICE takes it
     name: String,
     /// the sheet's nets of the symbol's pins (SpiceOrder)
@@ -676,7 +693,12 @@ pub struct Block {
     body: Vec<String>,
     /// parameters its instances pass (lowercase): declared on the .subckt line, so ngspice takes them
     params: std::collections::BTreeSet<String>,
+    /// the sheet's own .params (lowercase): their default where an instance passes none
+    own: std::collections::BTreeSet<String>,
 }
+
+/// Marks a block's instance line until the top netlist is done: `\x01name\x01passed params`.
+const BLOCK_TAG: char = '\x01';
 
 struct Dsu(Vec<usize>);
 impl Dsu {
@@ -1934,7 +1956,7 @@ fn jumper_root(parent: &mut HashMap<String, String>, net: &str) -> String {
 
 /// The netlist as the user writes it (shown in the UI).
 pub fn netlist(items: &[Item], lib: &mut Library) -> Netlist {
-    build_netlist(items, lib, false, &mut vec![])
+    build_netlist(items, lib, false, &mut Hier::default())
 }
 
 /// The netlist that is simulated: every probe-able device gets 0 V current sensors: two-pin parts
@@ -1943,7 +1965,7 @@ pub fn netlist(items: &[Item], lib: &mut Library) -> Netlist {
 /// in .ac (where ngspice, also with `.options savecurrents`, leaves @r[i]/@c[i]/@q[ie] empty and
 /// reports DC currents for D/Q/M), including ESR/parasitics, and following value changes.
 pub fn netlist_for_sim(items: &[Item], lib: &mut Library) -> Netlist {
-    build_netlist(items, lib, true, &mut vec![])
+    build_netlist(items, lib, true, &mut Hier::default())
 }
 
 /// Prefixes that get current sensors (see `netlist_for_sim`).
@@ -1954,10 +1976,10 @@ pub const SENSED: &str = "RCLDQMJX";
 /// schematic's business, as in LTspice.
 const SHEET_KEEPS: [&str; 9] = [".param", ".func", ".model", ".subckt", ".ends", ".include", ".inc", ".lib", ".endl"];
 
-/// `stack`: the blocks being netlisted, outermost first (empty: the top schematic; else a sheet's
+/// `h.stack`: the blocks being netlisted, outermost first (empty: the top schematic; else a sheet's
 /// body, a subcircuit's: no title, analyses or `.end`).
-fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, stack: &mut Vec<String>) -> Netlist {
-    let sub = !stack.is_empty();
+fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -> Netlist {
+    let sub = !h.stack.is_empty();
     let mut nl = Netlist { nets: vec![vec![]; items.len()], insts: vec![String::new(); items.len()], probes: vec![String::new(); items.len()], pin_currents: vec![vec![]; items.len()], ..Default::default() };
 
     // 1. connection points
@@ -2246,8 +2268,15 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, stack: &mut Vec
         let value = match &block {
             Some((path, params)) => {
                 let name = net_name(&def.name);
-                if !nl.blocks.iter().any(|b| b.name.eq_ignore_ascii_case(&name)) {
-                    sheet_subckt(&name, path, &def, lib, stack, &mut nl);
+                let done = |h: &Hier| h.blocks.iter().any(|b| b.name == name);
+                if !done(h) {
+                    sheet_subckt(&name, path, &def, lib, h, &mut nl.warnings);
+                }
+                if !done(h) {
+                    // (its sheet left out, said: a call of it would fail, or never end)
+                    lines.push(format!("* {inst}: block {name} left out"));
+                    nl.insts[i] = inst;
+                    continue;
                 }
                 one_line(&format!("{name} {params}"))
             }
@@ -2278,12 +2307,15 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, stack: &mut Vec
             .filter(|s| !s.is_empty()).map(|s| one_line(&s)).collect();
         // LTspice accepts Rser=... in Value too: value and extras go through one pass
         let (rest, parasitics) = lt_instance_params(prefix, &inst, &format!("{value} {}", extra.join(" ")), &mut nl.warnings);
-        if block.is_some() {
+        // (a block's: the parameters it passes, declared on the subcircuit; the others it gets from
+        // its caller where its sheet has none, filled in once all its instances are known)
+        let tag = block.as_ref().and_then(|_| {
             let low = rest.to_ascii_lowercase();
-            if let Some(b) = nl.blocks.iter_mut().find(|b| value.starts_with(&b.name) && value[b.name.len()..].starts_with(' ')) {
-                b.params.extend(param_defs(&rest, &low).into_iter().map(|(n, _)| n.to_ascii_lowercase()));
-            }
-        }
+            let passed: Vec<String> = param_defs(&rest, &low).into_iter().map(|(n, _)| n.to_ascii_lowercase()).collect();
+            let b = h.blocks.iter_mut().find(|b| value.starts_with(&b.name) && value[b.name.len()..].starts_with(' '))?;
+            b.params.extend(passed.iter().cloned());
+            Some(format!("{BLOCK_TAG}{}{BLOCK_TAG}{}", b.name, passed.join(" ")))
+        });
         nl.probes[i] = match prefix {
             'V' | 'E' | 'H' => format!("i({})", inst.to_lowercase()),
             _ => String::new(),
@@ -2386,7 +2418,7 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, stack: &mut Vec
             line += " AC 1";
             nl.warnings.push(format!("{inst} has no AC value; using AC 1 for .noise"));
         }
-        lines.push(line);
+        lines.push(match tag { Some(t) => line + &t, None => line });
         nl.insts[i] = inst;
     }
     let is = |d: &str, k: &str| spice_tokens(d).first().is_some_and(|t| t.eq_ignore_ascii_case(k));
@@ -2450,11 +2482,23 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, stack: &mut Vec
         }
     }
     if !sub {
-        // (a parameter an instance does not pass: the sheet's own .param of it, else 0)
-        for b in &nl.blocks {
+        // a block's instances pass what one of them passes: the sheet's own .param of it where they
+        // do not, else their caller's value of it (a .param above it), as LTspice has it
+        let fill = |l: &String| match l.split_once(BLOCK_TAG) {
+            None => l.clone(),
+            Some((head, tag)) => {
+                let (name, passed) = tag.split_once(BLOCK_TAG).unwrap_or((tag, ""));
+                let passed: Vec<&str> = passed.split_whitespace().collect();
+                let b = h.blocks.iter().find(|b| b.name == name);
+                let more: String = b.into_iter().flat_map(|b| b.params.iter().filter(|p| !b.own.contains(*p) && !passed.contains(&p.as_str()))).map(|p| format!(" {p}={{{p}}}")).collect();
+                format!("{head}{more}")
+            }
+        };
+        lines = lines.iter().map(fill).collect();
+        for b in &h.blocks {
             let params: String = b.params.iter().map(|p| format!(" {p}=0")).collect();
             lines.push(format!(".subckt {} {}{}", b.name, b.ports.join(" "), if params.is_empty() { String::new() } else { format!(" params:{params}") }));
-            lines.extend(b.body.iter().cloned());
+            lines.extend(b.body.iter().map(fill));
             lines.push(format!(".ends {}", b.name));
         }
         lines.push(".end".into());
@@ -2463,21 +2507,23 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, stack: &mut Vec
     nl
 }
 
-/// A block's sheet as a subcircuit, into `nl.blocks` after the blocks it has itself: its parts
-/// and definitions; its ports the nets of the labels named as the symbol's pins.
-fn sheet_subckt(name: &str, path: &str, def: &SymbolDef, lib: &mut Library, stack: &mut Vec<String>, nl: &mut Netlist) {
+/// A block's sheet as a subcircuit, into `h.blocks` after the blocks it has itself: its parts and
+/// definitions; its ports the nets of the labels named as the symbol's pins.
+// ponytail: each netlisting reads its sheets again (the live one on every edit); cache them by
+// path and mtime if sheets on slow disks make editing lag
+fn sheet_subckt(name: &str, path: &str, def: &SymbolDef, lib: &mut Library, h: &mut Hier, warnings: &mut Vec<String>) {
     let file = std::path::Path::new(path).file_name().map_or(path.into(), |f| f.to_string_lossy().into_owned());
-    let mut warn = |w: String| if !nl.warnings.contains(&w) { nl.warnings.push(w) };
-    if stack.iter().any(|n| n.eq_ignore_ascii_case(name)) {
+    let mut warn = |w: String| if !warnings.contains(&w) { warnings.push(w) };
+    if h.stack.iter().any(|n| n == name) {
         return warn(format!("{file} contains itself (through its blocks): left out"));
     }
     let items = match std::fs::read(path) {
         Ok(bytes) => parse_asc(&decode(&bytes)),
         Err(e) => return warn(format!("{file}: {e}")),
     };
-    stack.push(name.to_string());
-    let child = build_netlist(&items, lib, false, stack);
-    stack.pop();
+    h.stack.push(name.to_string());
+    let child = build_netlist(&items, lib, false, h);
+    h.stack.pop();
     let ports = def.pins.iter().map(|p| {
         let net = items.iter().zip(&child.nets).find_map(|(it, nets)| match it {
             Item::Flag { name, .. } if name.trim().eq_ignore_ascii_case(p.name.trim()) => nets.first().cloned(),
@@ -2491,13 +2537,9 @@ fn sheet_subckt(name: &str, path: &str, def: &SymbolDef, lib: &mut Library, stac
     for w in child.warnings {
         warn(format!("{file}: {w}"));
     }
-    for b in child.blocks {
-        match nl.blocks.iter_mut().find(|o| o.name.eq_ignore_ascii_case(&b.name)) {
-            Some(o) => o.params.extend(b.params),
-            None => nl.blocks.push(b),
-        }
-    }
-    nl.blocks.push(Block { name: name.into(), ports, body: child.text.lines().map(String::from).collect(), params: Default::default() });
+    let own = deck_lines(&child.text).iter().filter(|l| l.top && l.param())
+        .flat_map(|l| param_defs(l.line, &l.low).into_iter().map(|(n, _)| n.to_ascii_lowercase())).collect();
+    h.blocks.push(Block { name: name.into(), ports, body: child.text.lines().map(String::from).collect(), params: Default::default(), own });
 }
 
 #[cfg(test)]
@@ -2873,8 +2915,13 @@ TEXT 0 200 Left 2 !.param R=1k\\n.tran 1m\n";
         assert!(d.block && d.pins.iter().map(|p| (p.name.as_str(), p.x < 0, p.just.as_str())).eq([("in", true, "LEFT"), ("out", false, "RIGHT")]), "{asy}");
         assert!(d.pins.iter().all(|p| p.x % 16 == 0 && p.y % 16 == 0), "on the grid: {asy}");
         assert!(block_asy(&parse_asc("Version 4\nFLAG 0 0 a\n")).is_err(), "no ports: no symbol");
+        assert!(block_asy(&parse_asc("Version 4\nFLAG 0 0 GND\nIOPIN 0 0 BiDir\nFLAG 0 0 a\nIOPIN 0 0 In\n")).is_ok_and(|a| !a.contains("GND")), "ground is no pin");
+        assert!(!parse_asy("x", "SYMATTR Prefix X\nSYMATTR Value x\nSYMATTR ModelFile x.lib\n").calls_sheet(), "a library subcircuit's symbol");
         std::fs::write(dir.join("div.asy"), &asy).unwrap();
         std::fs::write(dir.join("Div.asc"), div).unwrap();
+        // a sheet of no .param of its own: an instance passing none gets its caller's
+        std::fs::write(dir.join("half.asy"), &asy).unwrap();
+        std::fs::write(dir.join("half.asc"), div.replace("!.param R=1k\\n", "!")).unwrap();
         // a block holding itself (through another): said, not looped
         std::fs::write(dir.join("ping.asy"), block(&["a"])).unwrap();
         std::fs::write(dir.join("ping.asc"), "Version 4\nSYMBOL pong 0 0 R0\nSYMATTR InstName U1\n").unwrap();
@@ -2882,7 +2929,9 @@ TEXT 0 200 Left 2 !.param R=1k\\n.tran 1m\n";
         std::fs::write(dir.join("pong.asc"), "Version 4\nSYMBOL ping 0 0 R0\nSYMATTR InstName U1\n").unwrap();
         let top = "Version 4\nSHEET 1 880 680\nFLAG 0 16 a\nFLAG 0 96 0\nSYMBOL voltage 0 0 R0\nSYMATTR InstName V1\nSYMATTR Value 1\n\
 SYMBOL div 200 100 R0\nSYMATTR InstName U1\nFLAG 152 100 a\nFLAG 248 100 b\n\
-SYMBOL div 400 100 R0\nSYMATTR InstName U2\nSYMATTR Value R=3k\nFLAG 352 100 a\nFLAG 448 100 c\nTEXT 0 300 Left 2 !.op\n";
+SYMBOL div 400 100 R0\nSYMATTR InstName U2\nSYMATTR Value R=3k\nFLAG 352 100 a\nFLAG 448 100 c\n\
+SYMBOL half 200 300 R0\nSYMATTR InstName U3\nFLAG 152 300 a\nFLAG 248 300 d\n\
+SYMBOL half 400 300 R0\nSYMATTR InstName U4\nSYMATTR Value R=3k\nFLAG 352 300 a\nFLAG 448 300 e\nTEXT 0 500 Left 2 !.op\\n.param R=1k\n";
         let mut lib = Library::builtin();
         lib.set_dir(Some(&dir), false);
         assert!(lib.get("div").is_some_and(|d| d.sheet.as_deref().is_some_and(|p| p.ends_with("Div.asc"))), "the block's sheet (any case)");
@@ -2895,8 +2944,10 @@ SYMBOL div 400 100 R0\nSYMATTR InstName U2\nSYMATTR Value R=3k\nFLAG 352 100 a\n
         let run = crate::ngspice::run(&prepare(t, Some(&dir), &mut vec![]).with_sensors(nl.sensors.clone())).unwrap_or_else(|l| panic!("{l:?}\n{t}"));
         let v = |n: &str| run.op.iter().find(|o| o.0 == n).unwrap_or_else(|| panic!("{n}: {:?}", run.op)).1;
         assert!((v("b") - 0.5).abs() < 1e-9 && (v("c") - 0.25).abs() < 1e-9, "the sheet's default, the passed R: {:?}", run.op);
+        assert!((v("d") - 0.5).abs() < 1e-9 && (v("e") - 0.25).abs() < 1e-9, "the caller's R, the passed R: {:?}", run.op);
         let nl = netlist(&parse_asc("Version 4\nSYMBOL ping 0 0 R0\nSYMATTR InstName U1\n"), &mut lib);
         assert!(nl.warnings.iter().any(|w| w.contains("ping.asc contains itself")), "{:?}", nl.warnings);
+        assert!(nl.text.contains("* XU1: block ping left out") && nl.text.matches("XU1 ").count() == 2, "no call of a sheet left out: {}", nl.text);
         assert!(nl.warnings.iter().any(|w| w.contains("no label a")), "a pin without its label: {:?}", nl.warnings);
         std::fs::remove_dir_all(dir).ok();
     }

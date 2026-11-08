@@ -178,7 +178,7 @@ async function saveFile(as = false): Promise<boolean> {
   // leaves no copies behind); custom buttons answer with their label
   let carry = false;
   if (own.length) {
-    const r = await message(`The schematic uses symbols from its old folder: ${own.join(", ")}. Copy them to the new folder?${differ}`, { title: "nomospice", buttons: { yes: "Copy", no: "Don't copy", cancel: "Cancel" } });
+    const r = await message(`The schematic uses ${own.some((f) => /\.asc$/i.test(f)) ? "symbols and block schematics" : "symbols"} from its old folder: ${own.join(", ")}. Copy them to the new folder?${differ}`, { title: "nomospice", buttons: { yes: "Copy", no: "Don't copy", cancel: "Cancel" } });
     if (r === "Cancel") return false;
     carry = r === "Copy" || r === "Yes";
   }
@@ -224,6 +224,8 @@ async function openSheet(path: string, up = false) {
 /** This schematic's block symbol (`name.asy` beside it): placed in another schematic of the folder,
  *  it stands for this one, its port labels the pins. */
 async function blockSymbol() {
+  // (saved first: a block runs the file, whose labels its pins must match)
+  if (useS.getState().dirty && !(await saveFile())) return;
   const { path, unwritten, items } = useS.getState();
   if (!path || path === unwritten) return void message("Save the schematic first: its symbol goes beside it.", { title: "nomospice" });
   const asy = path.replace(/\.asc$/i, "") + ".asy";

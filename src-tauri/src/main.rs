@@ -144,6 +144,10 @@ async fn save_asc(path: String, items: Vec<Item>) -> Result<(), String> {
 #[tauri::command]
 async fn block_symbol(path: String, items: Vec<Item>) -> Result<String, String> {
     let asy = std::path::Path::new(&path).with_extension("asy");
+    let stem = asy.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    if schematic::builtin_symbol(&schematic::sym_key(&stem)) {
+        return Err(format!("{stem} is the name of a built-in symbol, which a placed {stem} would be: save the schematic under another name first"));
+    }
     let data = schematic::encode(&schematic::block_asy(&items)?);
     tauri::async_runtime::spawn_blocking(move || write_atomic(&asy, &data).map(|_| asy.to_string_lossy().into_owned()))
         .await
@@ -306,13 +310,27 @@ async fn folder_symbols(from: String, to: String, names: Vec<String>, copy: bool
         // the library's own rule for which .asy files are a folder's symbols
         let old: std::collections::HashMap<_, _> = schematic::folder_symbols(std::path::Path::new(&from)).into_iter().collect();
         let new: std::collections::HashMap<_, _> = schematic::folder_symbols(std::path::Path::new(&to)).into_iter().collect();
+        let (old_sheets, new_sheets) = (schematic::folder_sheets(std::path::Path::new(&from)), schematic::folder_sheets(std::path::Path::new(&to)));
         let (mut out, mut failed): (Vec<(String, bool)>, Vec<String>) = (vec![], vec![]);
         let mut seen = std::collections::HashSet::new(); // (many parts share a symbol)
-        for n in names {
+        // (a block's schematic goes along with its symbol, and the symbols it uses with it)
+        let mut files: Vec<(std::path::PathBuf, Option<&std::path::PathBuf>)> = vec![];
+        let mut queue: std::collections::VecDeque<String> = names.into();
+        while let Some(n) = queue.pop_front() {
             let key = schematic::sym_key(&n);
             let Some(src) = old.get(&key).filter(|_| seen.insert(key.clone())) else { continue };
+            files.push((src.clone(), new.get(&key)));
+            let block = std::fs::read(src).is_ok_and(|b| schematic::parse_asy(&key, &schematic::decode(&b)).calls_sheet());
+            if let Some(sheet) = old_sheets.get(&key).filter(|_| block) {
+                files.push((sheet.clone(), new_sheets.get(&key)));
+                let items = std::fs::read(sheet).map(|b| schematic::parse_asc(&schematic::decode(&b))).unwrap_or_default();
+                queue.extend(items.into_iter().filter_map(|it| match it { Item::Sym { sym, .. } => Some(sym), _ => None }));
+            }
+        }
+        for (src, there) in files {
+            let src = &src;
             let file = src.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
-            match new.get(&key) {
+            match there {
                 Some(there) => {
                     // a different file of that name there: it would be used instead (an identical
                     // one is simply the same symbol: nothing to tell)
