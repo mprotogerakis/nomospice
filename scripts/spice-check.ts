@@ -1,6 +1,6 @@
 // Self-check of src/spice.ts (the form editors' SPICE parsing/formatting): node scripts/spice-check.ts
 import assert from "node:assert/strict";
-import { connectivity, dragPlan } from "../src/geom.ts";
+import { connectivity, dragPlan, graphicBox, graphicOf } from "../src/geom.ts";
 import {
   tokens, formatAnalysis, formatIc, formatInclude, formatMeas, formatModel, formatParams, formatSource, numInfo, parseAnalysis,
   parseIc, parseInclude, parseMeas, parseModel, parseParams, parseSource, sample, si, spiceNum, directiveKind, analysisRoundTrips, analysisEditable, analysisOptions, analysisLineIndex, at, integrate, stripAnalyses, portablePaths, sourceRoundTrips,
@@ -269,5 +269,12 @@ assert.equal(setParam("l= off", "l", "1u"), "l=1u off", "a flag is no value");
 assert.ok(paramValue("1u w=3u") && paramValue("{2*") && paramValue("w=3u") && !paramValue("{a * b}") && !paramValue("{a==b?1:2}") && !paramValue(""));
 assert.equal(getParam("l= Lmin w=1u", "l"), "Lmin", "a name after l=");
 assert.equal(setParam("l= Lmin w=1u", "l", "2u"), "l=2u w=1u");
+
+// a schematic's own drawings, kept raw, read as shapes
+assert.deepEqual(graphicOf({ t: "raw", line: "LINE Normal 0 16 64 16 2" }), ["line", [0, 16, 64, 16, 2]]);
+assert.deepEqual(graphicOf({ t: "raw", line: "ARC Normal 0 0 32 32 0 16 32 16" }), ["arc", [0, 0, 32, 32, 0, 16, 32, 16]]);
+assert.deepEqual(graphicBox({ t: "raw", line: "RECTANGLE Normal 64 80 -16 0" }), [-16, 0, 64, 80]);
+assert.equal(graphicOf({ t: "raw", line: "SHEET 1 880 680" }), null);
+assert.equal(graphicOf({ t: "raw", line: "LINE Normal 0 16" }), null);
 
 console.log("spice-check: ok");

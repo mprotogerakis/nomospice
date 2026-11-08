@@ -89,6 +89,21 @@ export function box(it: Item, lib: Lib, left?: Set<string>): Box | null {
   }
 }
 
+/** A schematic's own drawing, kept as its raw .asc line (`LINE Normal 0 0 64 0 2`), as a symbol's
+ *  shape is: [line | rect | circle | arc, its coordinates and then its line style]. */
+const GRAPHIC: Record<string, string> = { LINE: "line", RECTANGLE: "rect", CIRCLE: "circle", ARC: "arc" };
+export function graphicOf(it: Item): [string, number[]] | null {
+  if (it.t !== "raw") return null;
+  const t = it.line.trim().split(/\s+/), kind = GRAPHIC[t[0]?.toUpperCase() ?? ""];
+  const n = kind === "arc" ? 8 : 4, p = t.slice(2, 3 + n).map(Number);
+  return kind && p.length >= n && p.every(Number.isFinite) ? [kind, p] : null;
+}
+/** Its bounds (an arc: its ellipse's), for fitting the view. */
+export function graphicBox(it: Item): Box | null {
+  const p = graphicOf(it)?.[1];
+  return p ? [Math.min(p[0], p[2]), Math.min(p[1], p[3]), Math.max(p[0], p[2]), Math.max(p[1], p[3])] : null;
+}
+
 export const union = (all: (Box | null)[]): Box | null => {
   const bs = all.filter((b): b is Box => !!b);
   return bs.length ? [Math.min(...bs.map((b) => b[0])), Math.min(...bs.map((b) => b[1])), Math.max(...bs.map((b) => b[2])), Math.max(...bs.map((b) => b[3]))] : null;

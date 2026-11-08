@@ -5,7 +5,7 @@ import { useShallow } from "zustand/react/shallow";
 import { Maximize, Minus, Plus } from "lucide-react";
 import type { Item, Shape, SymbolDef } from "./types";
 import {
-  box, connectivity, defOf, dragPlan, mirror, pins, prefixOf, rotate, dropZeroWires, dropZeroWiresKeepSel, GRID, hit, isShape, labelRect, leftLabels, matrix, shifted, snap, symBox,
+  box, connectivity, defOf, dragPlan, graphicBox, graphicOf, mirror, pins, prefixOf, rotate, dropZeroWires, dropZeroWiresKeepSel, GRID, hit, isShape, labelRect, leftLabels, matrix, shifted, snap, symBox,
   textLines, union, xform, type Box, type Lib, type Pt,
 } from "./geom";
 import { canProbe, commit, currentNets, nextInst, partCurrent, powerMode, powerName, probe, probeMode, simulate, useS, useStatus } from "./store";
@@ -45,18 +45,28 @@ function arcPath([x1, y1, x2, y2, sx, sy, ex, ey]: number[]) {
 /** LTspice line styles after the coordinates: 1 dash, 2 dot, 3 dash-dot, 4 dash-dot-dot (screen px). */
 const DASH: Record<number, string> = { 1: "5 4", 2: "1 3", 3: "5 3 1 3", 4: "5 3 1 3 1 3" };
 
+/** A symbol's shape, or a schematic's own drawing (graphicOf): line, rect, circle or arc, then its style. */
+function shapeEl(k: string, p: number[], key: number | string) {
+  const s = { vectorEffect: "non-scaling-stroke", strokeDasharray: DASH[p[k === "arc" ? 8 : 4]] } as const;
+  return k === "line" ? <line key={key} {...s} x1={p[0]} y1={p[1]} x2={p[2]} y2={p[3]} />
+  : k === "rect" ? <rect key={key} {...s} x={Math.min(p[0], p[2])} y={Math.min(p[1], p[3])} width={Math.abs(p[2] - p[0])} height={Math.abs(p[3] - p[1])} />
+  : k === "circle" ? <ellipse key={key} {...s} cx={(p[0] + p[2]) / 2} cy={(p[1] + p[3]) / 2} rx={Math.abs(p[2] - p[0]) / 2} ry={Math.abs(p[3] - p[1]) / 2} />
+  : <path key={key} {...s} d={arcPath(p)} />;
+}
+
 function SymbolGraphics({ def }: { def: SymbolDef }) {
   return (
     <g id={`sym-${def.name}`} fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round">
-      {def.shapes.map(([k, p], i) => {
-        const s = { vectorEffect: "non-scaling-stroke", strokeDasharray: DASH[p[k === "arc" ? 8 : 4]] } as const;
-        return k === "line" ? <line key={i} {...s} x1={p[0]} y1={p[1]} x2={p[2]} y2={p[3]} />
-        : k === "rect" ? <rect key={i} {...s} x={Math.min(p[0], p[2])} y={Math.min(p[1], p[3])} width={Math.abs(p[2] - p[0])} height={Math.abs(p[3] - p[1])} />
-        : k === "circle" ? <ellipse key={i} {...s} cx={(p[0] + p[2]) / 2} cy={(p[1] + p[3]) / 2} rx={Math.abs(p[2] - p[0]) / 2} ry={Math.abs(p[3] - p[1]) / 2} />
-        : <path key={i} {...s} d={arcPath(p)} />;
-      })}
+      {def.shapes.map(([k, p], i) => shapeEl(k, p, i))}
     </g>
   );
+}
+
+/** The schematic's own lines, boxes, circles and arcs (kept as raw .asc lines: drawn, not edited).
+ *  ponytail: shown only; select, move and draw them if schematics come to need it */
+function Drawings({ items }: { items: Item[] }) {
+  const gs = items.flatMap((it, i) => ((g) => (g ? [[i, g] as const] : []))(graphicOf(it)));
+  return gs.length ? <g color="var(--text-secondary)" stroke="currentColor" strokeWidth={1.2} fill="none" strokeLinecap="round">{gs.map(([i, [k, p]]) => shapeEl(k, p, i))}</g> : null;
 }
 
 /** InstName/Value labels: window anchors for upright symbols, above/below for rotated ones. */
@@ -156,6 +166,7 @@ function ExportSvg({ items, lib }: { items: Item[]; lib: Record<string, SymbolDe
     <svg xmlns="http://www.w3.org/2000/svg">
       <defs>{defs.map((d) => <SymbolGraphics key={d.name} def={d} />)}</defs>
       <g data-content="" fill="none" strokeLinecap="round">
+        <Drawings items={items} />
         {items.map((it, i) => isShape(it) && (
           <g key={i} color={colorOf(it)} stroke="currentColor" strokeWidth={it.t === "wire" ? 2 : 1.6}>
             <ItemView it={it} lib={lib} leftward={it.t === "flag" && left.has(`${it.x},${it.y}`)} />
@@ -278,7 +289,7 @@ export const Schematic = memo(function Schematic() {
   /** `its` in the middle, at the zoom that fits them, at most `cap`; nothing to show: the origin. */
   const frame = (its: Item[], cap = FIT_MAX) => {
     const left = leftLabels(items);
-    const b = union(its.map((it) => box(it, lib, left)));
+    const b = union(its.map((it) => box(it, lib, left) ?? graphicBox(it))); // (the schematic's own drawings too)
     const { w, h } = size;
     if (!b) return setView({ x: w / 2, y: h / 2, k: 1.5 });
     const pad = Math.min(FIT_PADDING, w / 8, h / 8); // a low canvas (plot + panel open) must not shrink the circuit to nothing
@@ -659,6 +670,7 @@ export const Schematic = memo(function Schematic() {
         </defs>
         {gap > 4 && <rect width="100%" height="100%" fill="url(#grid)" />}
         <g transform={`translate(${view.x} ${view.y}) scale(${view.k})`} fill="none" strokeLinecap="round">
+          <Drawings items={shown} />
           {shown.map((it, i) => {
             if (!isShape(it)) return null;
             const selected = selSet.has(i);
