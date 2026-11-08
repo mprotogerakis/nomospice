@@ -469,7 +469,9 @@ export const Schematic = memo(function Schematic() {
     if (tool.k === "wire") {
       if (!wireStart) return setWireStart(g), setHFirst(null);
       const ends = g[0] !== wireStart[0] || g[1] !== wireStart[1];
-      const done = ends && conn.isConn(g);
+      // (a symbol's line ends on another's end or a pin: a closed outline is done)
+      const at = (x: number, y: number) => x === g[0] && y === g[1];
+      const done = ends && (symbolDoc ? items.some((it) => (it.t === "draw" && it.kind === "LINE" && (at(it.p[0], it.p[1]) || at(it.p[2], it.p[3]))) || (it.t === "flag" && at(it.x, it.y))) : conn.isConn(g));
       if (ends) commit([...items, ...wirePath(wireStart, g)]);
       setWireStart(done ? null : g);
       setHFirst(null);

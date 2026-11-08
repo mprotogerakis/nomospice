@@ -125,7 +125,7 @@ function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: 
           </Field>
           {/* (its PIN line: where the name shows on the placed part, and how far from the pin) */}
           <Field label="Name shown" hint="on the placed part, from the pin">
-            <select className={FIELD} value={pinJust(it.extra)} onChange={(e) => setIt({ ...it, extra: [`PIN ${it.x} ${it.y} ${e.target.value} ${pinLine(it.extra)?.off ?? 8}`, ...(it.extra ?? []).filter((l) => !l.startsWith("PIN "))] })}>
+            <select className={FIELD} value={pinJust(it.extra)} onChange={(e) => setIt({ ...it, extra: [`PIN ${it.x} ${it.y} ${e.target.value} ${pinOff(it.extra, e.target.value)}`, ...(it.extra ?? []).filter((l) => !l.startsWith("PIN "))] })}>
               <option value="NONE">not</option>
               <option value="LEFT">right of it (LEFT)</option>
               <option value="RIGHT">left of it (RIGHT)</option>
@@ -161,6 +161,8 @@ function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: 
 
 /** Where a pin's name shows (its PIN line's justification: NONE … ; `none` if it has no PIN line). */
 const pinJust = (extra?: string[]) => pinLine(extra)?.just ?? "NONE";
+/** How far from the pin its name shows once `just`: as it was (a hidden one's 0, LTspice's, made 8). */
+const pinOff = (extra: string[] | undefined, just: string) => ((p) => (p && (p.off || just === "NONE") ? p.off : 8))(pinLine(extra));
 
 /** A symbol's attributes (SYMATTR lines: Prefix, Value, Description, SpiceModel …) and its type:
  *  a part (CELL) or a hierarchical block (BLOCK, its schematic of the same name). */
@@ -645,7 +647,7 @@ export const Dialogs = memo(function Dialogs() {
       if (!it || it.t === "draw") return queueMicrotask(close), null; // (gone, or a drawing: nothing to edit; not left open, holding the hotkeys)
       // an alternative analysis (a comment of nothing but analyses: the tabs offer it) opens the form
       const lines = it.t === "text" ? it.text.split("\n") : [];
-      if (it.t === "text" && !it.directive && !dialog.raw && analysisOptions([it]).length && analysisEditableAt(lines, analysisLineIndex(lines, null, false))) return <SimDialog key={dialog.index} index={dialog.index} />;
+      if (it.t === "text" && !it.directive && !dialog.raw && !isSymbolDoc(useS.getState().path) && analysisOptions([it]).length && analysisEditableAt(lines, analysisLineIndex(lines, null, false))) return <SimDialog key={dialog.index} index={dialog.index} />;
       if (it.t === "text") return it.directive ? directive(dialog.index, dialog.raw, dialog.draft) : <DirectiveDialog key={dialog.index} item={dialog.draft === undefined ? it : { ...it, text: dialog.draft }} title="Comment" raw onDone={commitAt(dialog.index)} />;
       return <ItemForm key={dialog.index} item={it} title={it.t === "sym" ? `Edit ${it.attrs.InstName ?? it.sym}` : isSymbolDoc(useS.getState().path) ? "Pin" : "Net Name"} onDone={commitAt(dialog.index)} />;
     }

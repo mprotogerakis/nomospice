@@ -588,6 +588,7 @@ pub fn asy_items(src: &str) -> Vec<Item> {
             Some("Version") | None => {}
             // (found by its head: SymbolType, SYMATTR its name and value one space apart)
             Some("SYMATTR") if tok.len() >= 2 => items.push(Item::Raw { line: format!("SYMATTR {} {}", tok[1], rest(2)).trim_end().to_string() }),
+            Some("SymbolType") => items.push(Item::Raw { line: tok.join(" ") }),
             _ => items.push(Item::Raw { line: line.trim().to_string() }),
         }
     }
