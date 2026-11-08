@@ -2660,7 +2660,7 @@ mod tests {
         let run = crate::ngspice::run(&nl.prepared(None, &mut vec![])).unwrap();
         let bytes = crate::ngspice::export_raw(run.id).unwrap();
         let text = String::from_utf8_lossy(&bytes);
-        assert_eq!(text.matches("Plotname:").count(), 3, "one plot per step");
+        assert!(text.matches("Plotname:").count() == 3 && text.contains("Plotname: AC Analysis (C=47n)") && text.contains("Command: ngspice"), "one plot per step, named by it");
         assert!(text.contains("\tv(out+)\t") && text.contains("\tI(R1)\tcurrent") && !text.contains("vsense"), "{}", &text[..text.find("Binary:").unwrap_or(400).min(text.len())]);
         // the columns kept are the right ones: the first step's last v(out+), as traced (complex: .ac)
         let head_end = bytes.windows(8).position(|w| w == b"Binary:\n").unwrap() + 8;

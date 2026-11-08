@@ -53,8 +53,10 @@ static RUNS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0)
 /// The latest run: its id, its current sensors (trace expressions name part currents, `I(R1)`,
 /// `Ib(Q1)`) and, for a `.step` run, each step's plot.
 static SENSORS: Mutex<(u64, Option<std::sync::Arc<[crate::schematic::Sensor]>>, Option<std::sync::Arc<[String]>>)> = Mutex::new((0, None, None));
-/// The latest run's id, how many `.meas par()` helpers it has and its steps' labels (export_raw).
-static RUN_INFO: Mutex<(u64, usize, Vec<String>)> = Mutex::new((0, 0, vec![]));
+/// For export_raw, of the latest run: its id, the engine load it ran in (a reload since: the
+/// results are gone), how many `.meas par()` helpers it has, and per step its label and the plot
+/// ngspice ended it in (a .noise run's totals, beside its spectrum).
+static RUN_INFO: Mutex<(u64, usize, usize, Vec<(String, String)>)> = Mutex::new((0, 0, 0, vec![]));
 /// Counts Halt presses. An operation (a simulation, a root locus) notes the count when it begins
 /// (`begin`) and is halted once the count moves on (`halted_since`): a Halt stops what was running
 /// when it was pressed, never something started afterwards, and no later start can undo it. Only
@@ -455,7 +457,7 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
     let pars = if !crate::schematic::contains_ci(text, "par(") { 0 } else {
         crate::schematic::statements(text, &crate::schematic::PAR_STATEMENTS).iter().map(|l| crate::schematic::par_calls(l)).sum()
     };
-    *RUN_INFO.lock().unwrap_or_else(|e| e.into_inner()) = (id, pars, done.iter().map(|d| d.0.clone()).collect());
+    *RUN_INFO.lock().unwrap_or_else(|e| e.into_inner()) = (id, LOADS.load(Ordering::SeqCst), pars, done.iter().map(|d| (d.0.clone(), d.1.clone())).collect());
     api.command(&format!("setplot {plot0}"));
     let (_, mut scale) = plot_vectors(api, plot0, sensors, pars);
     // one frequency (`.ac lin 1 50 50`): phasors, shown as a table like .op instead of a 1-point plot
@@ -588,6 +590,26 @@ fn all_vectors(api: &Api, plot: &str) -> Vec<String> {
     out
 }
 
+/// Now as a .raw file's Date line has it: `Sun Nov  8 04:30:06 2026` (UTC).
+fn raw_date() -> String {
+    raw_date_at(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs()) as i64)
+}
+fn raw_date_at(t: i64) -> String {
+    let (days, secs) = (t.div_euclid(86_400), t.rem_euclid(86_400));
+    // (civil from days, H. Hinnant)
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let (d, m) = (doy - (153 * mp + 2) / 5 + 1, if mp < 10 { mp + 3 } else { mp - 9 });
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    const WD: [&str; 7] = ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"];
+    const MO: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    format!("{} {} {d:2} {:02}:{:02}:{:02} {y}", WD[days.rem_euclid(7) as usize], MO[(m - 1) as usize], secs / 3600, secs / 60 % 60, secs % 60)
+}
+
 /// What a .raw file calls ngspice's plot (`tran1`: its analysis, as ngspice and LTspice write it).
 fn raw_plotname(plot: &str) -> &'static str {
     match plot.trim_end_matches(|c: char| c.is_ascii_digit()) {
@@ -611,7 +633,7 @@ fn raw_plotname(plot: &str) -> &'static str {
 pub fn export_raw(run: u64) -> Result<Vec<u8>, String> {
     const GONE: &str = "the results were replaced by a later run (a root locus or another simulation): run the simulation again";
     let (of, sensors, steps) = SENSORS.lock().unwrap_or_else(|e| e.into_inner()).clone();
-    let (info_of, pars, labels) = RUN_INFO.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let (info_of, load, pars, ended) = RUN_INFO.lock().unwrap_or_else(|e| e.into_inner()).clone();
     if of != run || info_of != run {
         return Err(GONE.into());
     }
@@ -619,32 +641,44 @@ pub fn export_raw(run: u64) -> Result<Vec<u8>, String> {
     let named: std::collections::HashMap<String, &str> = sensors.iter().map(|s| (format!("{}#branch", s.source), s.label.as_str())).collect();
     let g = engine().map_err(|e| e.join("\n"))?;
     let api = g.as_ref().unwrap();
-    // (the plot the results are read from; `const` alone: ngspice was reloaded, the results are gone)
-    let current = cstr(unsafe { (api.cur_plot)() });
-    if RUNS.load(Ordering::SeqCst) != run || (steps.is_none() && current == "const") {
+    // (ngspice reloaded since the run: a fresh one, without its results)
+    if RUNS.load(Ordering::SeqCst) != run || LOADS.load(Ordering::SeqCst) != load {
         return Err(GONE.into());
     }
-    let plots: Vec<String> = match &steps { Some(s) if !s.is_empty() => s.to_vec(), _ => vec![current.clone()] };
+    // (the plot the results are read from now, put back afterwards; per step the one shown and,
+    // for .noise, the totals ngspice ended it in)
+    let current = cstr(unsafe { (api.cur_plot)() });
+    let shown: Vec<String> = match &steps { Some(s) if !s.is_empty() => s.to_vec(), _ => vec![current.clone()] };
+    let stepped = shown.len() > 1 || steps.as_ref().is_some_and(|s| !s.is_empty());
+    let plots: Vec<(String, String)> = shown.iter().enumerate().flat_map(|(k, p)| {
+        let (label, end) = ended.get(k).cloned().unwrap_or_default();
+        let label = if stepped { format!(" ({label})") } else { String::new() };
+        std::iter::once((p.clone(), label.clone())).chain((!end.is_empty() && end != *p && p.starts_with("noise")).then(|| (end, label)))
+    }).collect();
     let mut out = vec![];
-    for (k, p) in plots.iter().enumerate() {
+    let date = raw_date();
+    for (p, step) in &plots {
         api.command(&format!("setplot {p}"));
         let (vectors, scale) = plot_vectors(api, p, &sensors, pars);
         // the scale first; the app's own scratch vector (nmsp_trace) not a result
-        let order = std::iter::once(scale.clone()).filter(|s| !s.is_empty()).chain(vectors.into_iter().filter(|v| *v != scale && !v.starts_with("nmsp_")));
+        let order = std::iter::once(scale.clone()).filter(|s| !s.is_empty()).chain(vectors.into_iter().filter(|v| *v != scale && v != "nmsp_trace"));
         let cols: Vec<(String, Trace)> = order.filter_map(|v| read(api, &v).map(|t| (v, t))).collect();
         // (a column of another length than the scale's: not this plot's data)
         let n = cols.first().map_or(0, |c| c.1.re.len());
         let cols: Vec<(String, Trace)> = cols.into_iter().filter(|c| c.1.re.len() == n).collect();
         let complex = cols.iter().any(|c| c.1.im.is_some());
-        let step = steps.as_ref().filter(|s| !s.is_empty()).and_then(|_| labels.get(k)).map_or(String::new(), |l| format!(" ({l})"));
-        out.extend(format!("Title: nomospice\nPlotname: {}{step}\nFlags: {}\nNo. Variables: {}\nNo. Points: {n}\nVariables:\n", raw_plotname(p), if complex { "complex" } else { "real" }, cols.len()).bytes());
+        // (Command: ngspice: readers take ngspice's layout by it, all values doubles)
+        out.extend(format!("Title: nomospice\nDate: {date}\nCommand: ngspice (nomospice)\nPlotname: {}{step}\nFlags: {}\nNo. Variables: {}\nNo. Points: {n}\nVariables:\n", raw_plotname(p), if complex { "complex" } else { "real" }, cols.len()).bytes());
+        // (v(…) only for the nodes of an analysis over time, frequency or a sweep, or .op: ngspice
+        // types .tf, .sens and .pz values as voltages too)
+        let nodes = matches!(p.trim_end_matches(|c: char| c.is_ascii_digit()), "tran" | "ac" | "dc" | "op");
         for (j, (v, t)) in cols.iter().enumerate() {
             // (ngspice's names: a node v(out), a branch i(v1); a part current by its own, I(R1))
             let name = match (named.get(v), v.strip_suffix("#branch")) {
                 (Some(l), _) => l.to_string(),
                 (None, Some(b)) => format!("i({b})"),
                 (None, None) if *v == scale => v.clone(),
-                (None, None) if t.typ == 3 => format!("v({v})"), // (a voltage by ngspice's own type: not onoise_spectrum)
+                (None, None) if nodes && t.typ == 3 && !v.contains(['(', '#', '@', '[']) => format!("v({v})"),
                 _ => v.clone(),
             };
             let kind = match t.typ { 1 => "time", 2 => "frequency", 3 => "voltage", 4 => "current", _ => "notype" };
@@ -724,8 +758,8 @@ pub fn trace(expr: &str, scale: &str, run: u64) -> Result<Trace, String> {
                 *im = vec![im[0]; n];
             }
         }
+        api.command("unlet nmsp_trace"); // (read: not left in the plot, among the results, a .raw export)
         if !steps.is_empty() {
-            api.command("unlet nmsp_trace"); // (not a copy left in every step's plot)
             // each step thinned as it is read (its own samples, evenly): steps × points stays bounded
             let cap = 4 * (STEP_VALUES / steps.len()).clamp(200, 200_000);
             let sweep = t.x.windows(2).all(|w| w[1] >= w[0]) || t.x.windows(2).all(|w| w[1] <= w[0]); // (not a nested .dc)
@@ -913,6 +947,13 @@ mod tests {
         for e in ["tdelay", "ratio*2", "vdd/2", "mean(v(in))", "v(out)[25]", "2*pi", "sqrt(2)"] {
             assert!(!numbers_only(e), "{e}");
         }
+    }
+
+    #[test]
+    fn raw_dates() {
+        assert_eq!(raw_date_at(0), "Thu Jan  1 00:00:00 1970");
+        assert_eq!(raw_date_at(1794112206), "Sun Nov  8 04:30:06 2026");
+        assert_eq!(raw_date_at(951868799), "Tue Feb 29 23:59:59 2000");
     }
 
     #[test]
