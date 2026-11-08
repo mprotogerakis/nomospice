@@ -332,7 +332,8 @@ async fn folder_symbols(from: String, to: String, names: Vec<String>, copy: bool
             // (not where the new folder has its own symbol of that name, which it would turn into a
             // block; not the document itself, a test bench of its own block, which is saved anyway)
             let block = new.get(&key).is_none() && std::fs::read(src).is_ok_and(|b| schematic::parse_asy(&key, &schematic::decode(&b)).calls_sheet());
-            let own = |p: &std::path::PathBuf| doc.as_deref().is_some_and(|d| std::path::Path::new(d) == p.as_path());
+            // (case-insensitive disks: another spelling of the same file)
+            let own = |p: &std::path::PathBuf| doc.as_deref().is_some_and(|d| if cfg!(any(target_os = "macos", windows)) { d.to_lowercase() == p.to_string_lossy().to_lowercase() } else { std::path::Path::new(d) == p.as_path() });
             if let Some(sheet) = old_sheets.get(&key).filter(|p| block && !own(p)) {
                 files.push((sheet.clone(), new_sheets.get(&key)));
                 let items = std::fs::read(sheet).map(|b| schematic::parse_asc(&schematic::decode(&b))).unwrap_or_default();
