@@ -1,16 +1,15 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
-import { open } from "@tauri-apps/plugin-dialog";
+import { message, open } from "@tauri-apps/plugin-dialog";
 import type { Item, LibEntry, LibSource } from "./types";
-import { addTrace, analysisItem, commit, currentTab, fileName, isSymbolDoc, loadSymbols, placePart, placeSymbol, refreshLibrarySymbols, setYAxis, useS } from "./store";
+import { addTrace, analysisItem, commit, currentTab, fileName, forDoc, isSymbolDoc, loadSymbols, placePart, placeSymbol, refreshLibrarySymbols, setYAxis, useS } from "./store";
 import { defOf, pinLine, portOf, prefixOf, vexpr } from "./geom";
 import { Button } from "./ui/button";
 import { closeDialog as close, Field, FIELD, Modal, numHelp, NumField, Rows, TextField } from "./ui/dialog";
 import { SourceEditor } from "./SourceEditor";
 import { SimDialog } from "./SimDialog";
 import { DirectiveDialog } from "./DirectiveDialog";
-import { forDoc } from "./actions";
 import { analysisEditable, analysisEditableAt, analysisLine, analysisLineIndex, analysisOptions, balanced, exprUnit, getParam, paramValue, setParam, spiceNum, tokens, xUnitOf } from "./spice";
 import { cn, keys as shortcut } from "@/lib/utils";
 import thirdParty from "./third-party.json";
@@ -247,6 +246,7 @@ function PartsDialog({ replace, kind0, libraries }: { replace?: number; kind0?: 
   }, [cur]);
   const pick = async (e = cur) => {
     if (!e || !e.symbol) return; // nothing, or a model type without a symbol (switch, core ...): stay open
+    if (isSymbolDoc(useS.getState().path) && replace == null) return void message("A symbol holds no parts: open a schematic to place one.", { title: "nomospice" });
     close();
     const { items } = useS.getState();
     const target = replace != null ? items[replace] : undefined;

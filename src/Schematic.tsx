@@ -660,7 +660,7 @@ export const Schematic = memo(function Schematic() {
       case "text":
         return [
           { label: "Edit…", run: edit },
-          { label: it.directive ? "Turn into comment" : "Turn into SPICE directive", run: () => commit(items.map((x) => (x === it ? { ...it, directive: !it.directive } : x))) },
+          ...(symbolDoc ? [] : [{ label: it.directive ? "Turn into comment" : "Turn into SPICE directive", run: () => commit(items.map((x) => (x === it ? { ...it, directive: !it.directive } : x))) }]),
           "-", ...clip, del,
         ];
       default:

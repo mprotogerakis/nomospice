@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import type { GitStatus, Item, Netlist, Shape, Sim, SymbolDef, Trace, TraceData } from "./types";
-import { defOf, prefixOf, symKey, vexpr, type Lib } from "./geom";
+import { defOf, pinLine, prefixOf, symKey, vexpr, type Lib } from "./geom";
 import { ANALYSIS, ANY_ANALYSIS, analysisLineIndex, analysisOptions, continuation, parseAnalysis, stripAnalyses, type Analysis } from "./spice";
 
 export type Tool =
@@ -149,8 +149,38 @@ export function refreshNets() {
   }, 120);
 }
 
+/** An item as this document takes it: in a symbol a label is a pin (where its name shows, its
+ *  number of its own when saved), a wire a line, and there are no parts or directives; in a
+ *  schematic a label is a net label (its port kind, a name of one word). `copy`: a copy of a pin
+ *  still there, which gets a number of its own (a cut pin pasted keeps its place). */
+export function forDoc(it: Item, copy = false): Item | null {
+  const symbol = isSymbolDoc(get().path);
+  if (symbol && (it.t === "sym" || (it.t === "text" && it.directive))) return null;
+  if (symbol && it.t === "wire") return { t: "draw", kind: "LINE", width: "Normal", p: [it.x1, it.y1, it.x2, it.y2] };
+  if (it.t !== "flag") return it;
+  const extra = (it.extra ?? []).map((l) => l.trimStart())
+    .filter((l) => (symbol ? l.startsWith("PIN ") || (l.startsWith("PINATTR ") && !(copy && l.startsWith("PINATTR SpiceOrder "))) : l.startsWith("IOPIN ")));
+  if (symbol) return { ...it, extra: pinLine(extra) ? extra : [`PIN ${it.x} ${it.y} NONE 8`, ...extra] };
+  // (a pin into a schematic: a net label, named as one)
+  const name = it.name.trim().replace(/\s+/g, "_");
+  return name ? { ...it, name, extra } : null;
+}
+
+/** A symbol's items as it takes them (`forDoc`), whatever put them there: a directive a comment. */
+const symbolItems = (items: Item[]) =>
+  items.flatMap((it) => {
+    const x = forDoc(it.t === "text" && it.directive ? { ...it, directive: false } : it);
+    return !x ? [] : x.t === it.t && JSON.stringify(x) === JSON.stringify(it) ? [it] : [x];
+  });
+
 export function commit(items: Item[], sel?: number[]) {
   const { items: prev, past } = get();
+  if (isSymbolDoc(get().path)) {
+    // (one place for every way in: placed, pasted, converted, edited)
+    const own = symbolItems(items);
+    if (own.length !== items.length) sel = [];
+    items = own;
+  }
   set({ items, past: [...past.slice(-199), prev], future: [], dirty: true, stale: true, ...(sel && { sel }) });
   refreshNets();
 }

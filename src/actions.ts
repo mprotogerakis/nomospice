@@ -1,7 +1,7 @@
 // Editing actions shared by the toolbar, hotkeys and context menus.
 import type { Item, Shape } from "./types";
-import { commit, isSymbolDoc, loadSymbols, useS } from "./store";
-import { box, isShape, pinLine, rotateInPlace, shifted, snap } from "./geom";
+import { commit, forDoc, isSymbolDoc, loadSymbols, useS } from "./store";
+import { box, isShape, rotateInPlace, shifted, snap } from "./geom";
 
 export function deleteSelection() {
   const { items, sel } = useS.getState();
@@ -18,28 +18,11 @@ export function transform(f: (r: string) => string) {
   if (items.some((it, i) => s.has(i) && it.t === "sym")) commit(items.map((it, i) => (s.has(i) && it.t === "sym" ? rotateInPlace(it, lib, f) : it)));
 }
 
-/** A label as this document takes it: in a symbol a pin (where its name shows; a number of its
- *  own when saved), in a schematic a net label (its port kind). */
-// (its number goes along: a cut pin pasted keeps its place; a copy of one still there, after it,
-// gets the next free one when saved)
-export function forDoc(it: Item): Item | null {
-  const symbol = isSymbolDoc(useS.getState().path);
-  // (a symbol: no parts or directives; a schematic's wire a line of it)
-  if (symbol && (it.t === "sym" || (it.t === "text" && it.directive))) return null;
-  if (symbol && it.t === "wire") return { t: "draw", kind: "LINE", width: "Normal", p: [it.x1, it.y1, it.x2, it.y2] };
-  if (it.t !== "flag") return it;
-  const extra = (it.extra ?? []).map((l) => l.trimStart()).filter((l) => (symbol ? l.startsWith("PIN ") || l.startsWith("PINATTR ") : l.startsWith("IOPIN ")));
-  if (symbol) return { ...it, extra: pinLine(extra) ? extra : [`PIN ${it.x} ${it.y} NONE 8`, ...extra] };
-  // (a pin into a schematic: a net label, named as one)
-  const name = it.name.trim().replace(/\s+/g, "_");
-  return name ? { ...it, name, extra } : null;
-}
-
 export function duplicate() {
   const { items, sel } = useS.getState();
   const it = sel.length === 1 ? items[sel[0]] : null;
   if (!it || it.t === "wire" || it.t === "raw") return;
-  const copy = it.t === "sym" ? { ...it, attrs: Object.fromEntries(Object.entries(it.attrs).filter(([k]) => k !== "InstName")) } : forDoc({ ...it });
+  const copy = it.t === "sym" ? { ...it, attrs: Object.fromEntries(Object.entries(it.attrs).filter(([k]) => k !== "InstName")) } : forDoc({ ...it }, true);
   if (!copy) return;
   useS.setState({ tool: { k: "place", item: copy }, sel: [] });
 }
