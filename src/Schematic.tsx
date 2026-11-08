@@ -152,7 +152,7 @@ const ItemView = memo(function ItemView({ it, lib, leftward }: { it: Shape; lib:
   }
 });
 
-const COLOR: Record<Shape["t"], string> = { wire: "var(--sch-wire)", flag: "var(--sch-label)", sym: "var(--sch-symbol)", text: "var(--sch-comment)", draw: "var(--text-secondary)" };
+const COLOR: Record<Shape["t"], string> = { wire: "var(--sch-wire)", flag: "var(--sch-label)", sym: "var(--sch-symbol)", text: "var(--sch-comment)", draw: "var(--sch-drawing)" };
 /** The schematic as it would print: no grid, selection, hover or open-pin marks. */
 function ExportSvg({ items, lib }: { items: Item[]; lib: Record<string, SymbolDef> }) {
   const left = leftLabels(items);
@@ -360,7 +360,8 @@ export const Schematic = memo(function Schematic() {
   };
 
   const placed = (it: Item, [x, y]: Pt): Item => {
-    if (it.t === "wire" || it.t === "raw" || it.t === "draw") return it;
+    if (it.t === "wire" || it.t === "raw") return it;
+    if (it.t === "draw") return shifted(it, x - it.p[0], y - it.p[1]); // (its first point at the cursor: duplicated, it follows)
     if (it.t === "sym" && !it.attrs.InstName) {
       const def = defOf(lib, it);
       return { ...it, x, y, attrs: { InstName: nextInst(items, prefixOf(it, def) || "X"), ...it.attrs } };
@@ -507,7 +508,9 @@ export const Schematic = memo(function Schematic() {
       // and a shift-click that did not drag keeps it untouched
       if (r[2] - r[0] > 3 / view.k || r[3] - r[1] > 3 / view.k) {
         const left = leftLabels(items);
-        const hits = items.flatMap((it, i) => { const q = box(it, lib, left); return q && q[0] <= r[2] && q[2] >= r[0] && q[1] <= r[3] && q[3] >= r[1] ? [i] : []; });
+        // (a drawing only when wholly inside: a band around parts within a frame does not take the frame)
+        const within = (q: Box) => q[0] >= r[0] && q[2] <= r[2] && q[1] >= r[1] && q[3] <= r[3];
+        const hits = items.flatMap((it, i) => { const q = box(it, lib, left); return q && (it.t === "draw" ? within(q) : q[0] <= r[2] && q[2] >= r[0] && q[1] <= r[3] && q[3] >= r[1]) ? [i] : []; });
         useS.setState({ sel: [...new Set([...sel, ...hits])] });
       }
     }
@@ -583,6 +586,8 @@ export const Schematic = memo(function Schematic() {
         return [...plot, { label: "Net label here…", run: () => newItem({ t: "flag", x: 0, y: 0, name: "" }, g) }, { label: "Select net", disabled: !net, run: selectNet }, "-", ...clip, del];
       case "flag":
         return [{ label: it.name === "0" ? "Ground" : "Rename…", disabled: it.name === "0", run: edit }, ...plot, { label: "Select net", disabled: !net, run: selectNet }, "-", ...(it.name === "0" ? [] : [{ label: "Make ground", run: () => commit(items.map((x) => (x === it ? { ...it, name: "0" } : x))) }]), ...clip, del];
+      case "draw":
+        return [{ label: "Duplicate", hint: "⌘D", run: duplicate }, "-", ...clip, del]; // (not rotated: parts only)
       case "text":
         return [
           { label: "Edit…", run: edit },
@@ -598,7 +603,7 @@ export const Schematic = memo(function Schematic() {
   /** Open the edit dialog for the item under the pointer (wires have nothing to edit). */
   const editAt = (e: React.MouseEvent) => {
     const i = hit(items, lib, toWorld(e), 6 / view.k);
-    if (i >= 0 && items[i].t !== "wire") useS.setState({ sel: [i], dialog: { k: "edit", index: i } });
+    if (i >= 0 && items[i].t !== "wire" && items[i].t !== "draw") useS.setState({ sel: [i], dialog: { k: "edit", index: i } }); // (a drawing: nothing to edit)
   };
 
   const onDoubleClick = (e: React.MouseEvent) => {
@@ -761,6 +766,7 @@ const MiniMap = memo(function MiniMap({ items, lib, view, size, onCenter }: { it
     >
       {items.map((it, i) => {
         if (it.t === "wire") return <line key={i} x1={it.x1} y1={it.y1} x2={it.x2} y2={it.y2} stroke="var(--sch-wire)" strokeOpacity={0.5} strokeWidth={1} vectorEffect="non-scaling-stroke" />;
+        if (it.t === "draw") return <g key={i} stroke="var(--sch-drawing)" strokeOpacity={0.5} strokeWidth={1} fill="none">{shapeEl(...drawShape(it), 0)}</g>; // (a frame: an outline, not a block over the circuit)
         const b = boxes[i];
         return b && <rect key={i} x={b[0]} y={b[1]} width={Math.max(b[2] - b[0], 4)} height={Math.max(b[3] - b[1], 3)} rx={1} fill="var(--text-tertiary)" fillOpacity={0.5} />;
       })}

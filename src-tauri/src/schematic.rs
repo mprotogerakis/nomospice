@@ -413,18 +413,19 @@ pub fn parse_asc(src: &str) -> Vec<Item> {
                 items.push(Item::Text { x: num(1), y: num(2), text, directive, align });
             }
             // (all its numbers, or kept as written)
-            Some(k @ ("LINE" | "RECTANGLE" | "CIRCLE" | "ARC")) if {
-                let n = if k == "ARC" { 8 } else { 4 };
-                tok.len() >= 2 + n && tok.len() <= 3 + n && tok[2..].iter().all(|t| t.parse::<i32>().is_ok())
-            } => {
-                let n = if k == "ARC" { 8 } else { 4 };
-                items.push(Item::Draw { kind: k.to_string(), width: tok[1].to_string(), p: tok[2..2 + n].iter().map(|t| t.parse().unwrap_or(0)).collect(), style: tok.get(2 + n).and_then(|t| t.parse().ok()) });
-            }
+            Some("LINE" | "RECTANGLE" | "CIRCLE" | "ARC") => items.push(drawing(&tok).unwrap_or_else(|| Item::Raw { line: line.to_string() })),
             Some("Version") | None => {}
             _ => items.push(Item::Raw { line: line.to_string() }),
         }
     }
     items
+}
+
+/// A LINE/RECTANGLE/CIRCLE/ARC line as a drawing: its pen, all its points, an optional style.
+fn drawing(tok: &[&str]) -> Option<Item> {
+    let n = if tok[0] == "ARC" { 8 } else { 4 };
+    let nums: Vec<i32> = tok.get(2..)?.iter().map(|t| t.parse().ok()).collect::<Option<_>>()?;
+    (nums.len() == n || nums.len() == n + 1).then(|| Item::Draw { kind: tok[0].to_string(), width: tok[1].to_string(), p: nums[..n].to_vec(), style: nums.get(n).copied() })
 }
 
 pub fn write_asc(items: &[Item]) -> String {
@@ -454,16 +455,17 @@ pub fn write_asc(items: &[Item]) -> String {
                     let align = if align.is_empty() { "Left 2" } else { align };
                     out += &format!("TEXT {x} {y} {align} {mark}{}\n", escape(text));
                 }
+                // (drawings and the other kept lines in one pass: in their order in the file)
                 (4, Item::Draw { kind, width, p, style }) => {
                     let ps: Vec<String> = p.iter().map(|v| v.to_string()).collect();
                     out += &format!("{kind} {width} {}{}\n", ps.join(" "), style.map_or(String::new(), |s| format!(" {s}")));
                 }
-                (5, Item::Raw { line }) if !line.starts_with("SHEET ") => out += &format!("{line}\n"),
+                (4, Item::Raw { line }) if !line.starts_with("SHEET ") => out += &format!("{line}\n"),
                 _ => {}
             }
         }
     };
-    (0..6).for_each(&mut by_kind);
+    (0..5).for_each(&mut by_kind);
     out
 }
 
@@ -2650,7 +2652,7 @@ mod tests {
     #[test]
     fn drawings_roundtrip() {
         // the schematic's own drawings: read as items, written back as they were (an unreadable one: raw)
-        let src = "Version 4\nSHEET 1 880 680\nLINE Normal 0 16 64 16 2\nRECTANGLE Wide -16 0 64 80\nARC Normal 0 0 32 32 0 16 32 16\nLINE Normal 0 0\n";
+        let src = "Version 4\nSHEET 1 880 680\nLINE Normal 0 16 64 16 2\nRECTANGLE Wide -16 0 64 80\nARC Normal 0 0 32 32 0 16 32 16\nLINE Normal 0 0\nCIRCLE Normal 0 0 8 8\n";
         let items = parse_asc(src);
         assert!(matches!(&items[1], Item::Draw { kind, width, p, style: Some(2) } if kind == "LINE" && width == "Normal" && p == &vec![0, 16, 64, 16]), "{items:?}");
         assert!(matches!(&items[3], Item::Draw { kind, p, style: None, .. } if kind == "ARC" && p.len() == 8));

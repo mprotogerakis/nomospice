@@ -51,7 +51,7 @@ function shape(v: unknown): Shape | null {
   if (!it || typeof it !== "object") return null;
   if (it.t === "wire" && [it.x1, it.y1, it.x2, it.y2].every(num) && (it.x1 !== it.x2 || it.y1 !== it.y2)) return { t: "wire", x1: it.x1 as number, y1: it.y1 as number, x2: it.x2 as number, y2: it.y2 as number };
   // (a drawing: its kind, pen, all its points, a line style if any)
-  if (it.t === "draw" && typeof it.kind === "string" && /^(LINE|RECTANGLE|CIRCLE|ARC)$/i.test(it.kind) && word(it.width) && Array.isArray(it.p) && it.p.length === (/^arc$/i.test(it.kind) ? 8 : 4) && it.p.every(num) && (it.style == null || (num(it.style) && (it.style as number) >= 0 && (it.style as number) <= 4)))
+  if (it.t === "draw" && typeof it.kind === "string" && /^(LINE|RECTANGLE|CIRCLE|ARC)$/i.test(it.kind) && word(it.width) && Array.isArray(it.p) && it.p.length === (/^arc$/i.test(it.kind) ? 8 : 4) && it.p.every(num) && (it.style == null || num(it.style)))
     return { t: "draw", kind: it.kind.toUpperCase(), width: it.width as string, p: it.p as number[], ...(it.style != null ? { style: it.style as number } : {}) };
   if (!num(it.x) || !num(it.y)) return null;
   // (a label as read from a file may end in spaces: its name is the rest)

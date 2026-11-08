@@ -279,7 +279,10 @@ assert.equal(setParam("l= Lmin w=1u", "l", "2u"), "l=2u w=1u");
   assert.equal(hit([rect], {}, [24, 1], 4), 0, "its edge");
   assert.equal(hit([rect], {}, [24, 40], 4), -1, "not its inside: the circuit it frames");
   const arc = { t: "draw" as const, kind: "ARC", width: "Normal", p: [0, 0, 32, 32, 0, 16, 32, 16] };
-  assert.equal(hit([arc], {}, [16, 32], 3), 0);
+  assert.equal(hit([arc], {}, [16, 32], 3), 0, "its drawn half, below (counter-clockwise from the left)");
+  assert.equal(hit([arc], {}, [16, 0], 3), -1, "not the half it leaves out");
+  const flat = { t: "draw" as const, kind: "CIRCLE", width: "Normal", p: [-100, -10, 100, 10] };
+  assert.equal(hit([flat], {}, [150, 0], 6), -1, "a long ellipse: not from 50 past its end");
 }
 
 console.log("spice-check: ok");

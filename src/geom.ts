@@ -129,8 +129,22 @@ function onDrawing(it: Extract<Item, { t: "draw" }>, p: Pt, tol: number) {
   const [x1, y1, x2, y2] = it.p, k = it.kind.toUpperCase();
   if (k === "LINE") return distSeg(p, x1, y1, x2, y2) <= tol;
   if (k === "RECTANGLE") return [[x1, y1, x2, y1], [x2, y1, x2, y2], [x2, y2, x1, y2], [x1, y2, x1, y1]].some(([a, b, c, d]) => distSeg(p, a, b, c, d) <= tol);
+  // (a circle or an arc: along its curve, 64 segments of the ellipse, an arc's drawn part only:
+  // counter-clockwise on screen from its start to its end, as it is drawn)
   const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2, rx = Math.abs(x2 - x1) / 2 || 1, ry = Math.abs(y2 - y1) / 2 || 1;
-  return Math.abs(Math.hypot((p[0] - cx) / rx, (p[1] - cy) / ry) - 1) * Math.min(rx, ry) <= tol;
+  let [a0, span] = [0, 2 * Math.PI];
+  if (k === "ARC") {
+    const [sx, sy, ex, ey] = it.p.slice(4);
+    a0 = Math.atan2((sy - cy) / ry, (sx - cx) / rx);
+    span = a0 - Math.atan2((ey - cy) / ry, (ex - cx) / rx);
+    if (span <= 0) span += 2 * Math.PI;
+  }
+  const at = (j: number) => { const a = a0 - (span * j) / 64; return [cx + rx * Math.cos(a), cy + ry * Math.sin(a)]; };
+  for (let j = 0; j < 64; j++) {
+    const [ax, ay] = at(j), [bx, by] = at(j + 1);
+    if (distSeg(p, ax, ay, bx, by) <= tol) return true;
+  }
+  return false;
 }
 /** Topmost item under p; flags > texts > wires > symbols > drawings. */
 export function hit(items: Item[], lib: Lib, p: Pt, tol: number): number {
