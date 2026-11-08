@@ -602,8 +602,8 @@ export const Schematic = memo(function Schematic() {
       case "sym": {
         const prefix = prefixOf(it, defOf(lib, it)); // the part's own Prefix wins, as in the netlist
         const kind = ({ D: "D", Q: "NPN|PNP", M: "NMOS|PMOS|VDMOS", J: "NJF|PJF", X: "SUBCKT" } as Record<string, string>)[prefix];
-        // (a test bench placing its own part: that part's model, not this schematic again)
-        const sheet = ((s) => (s && s.toLowerCase() !== useS.getState().path?.toLowerCase() ? s : undefined))(sheetOf(it, defOf(lib, it)));
+        // (as the netlist takes it: a sheet that is none there, a test bench placing its own part, not)
+        const sheet = (nets ? nets.sheets?.[i] : sheetOf(it, defOf(lib, it))) || undefined;
         return [
           { label: "Edit…", hint: probing ? undefined : "dbl-click", run: edit },
           ...(sheet ? [{ label: "Open its schematic", run: () => window.dispatchEvent(new CustomEvent("nomospice:sheet", { detail: sheet })) }] : []),

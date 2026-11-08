@@ -71,6 +71,8 @@ export interface Netlist {
   /** per item, per pin: the name of the current into it where it has a sensor (I(R1), Ib(Q1),
    *  Ix(U1:OUT)), else ""; trace expressions take these names */
   pin_currents: string[][];
+  /** per item: a block's schematic (the sheet it runs as), else "" */
+  sheets: string[];
   warnings: string[];
 }
 

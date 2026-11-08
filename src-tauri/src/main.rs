@@ -315,7 +315,7 @@ async fn root_locus(items: Vec<Item>, dir: Option<String>, target: String, value
 /// use, as (file, clash): clash when the new folder has a different file of that name (it would be
 /// used instead, and is not overwritten). `copy`: copy the others there (else only list them).
 #[tauri::command]
-async fn folder_symbols(from: String, to: String, names: Vec<String>, copy: bool) -> Result<Vec<(String, bool)>, String> {
+async fn folder_symbols(from: String, to: String, names: Vec<String>, copy: bool, doc: Option<String>) -> Result<Vec<(String, bool)>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         // the library's own rule for which .asy files are a folder's symbols
         let (old, old_sheets) = schematic::folder_contents(std::path::Path::new(&from));
@@ -329,8 +329,11 @@ async fn folder_symbols(from: String, to: String, names: Vec<String>, copy: bool
             let key = schematic::sym_key(&n);
             let Some(src) = old.get(&key).filter(|_| seen.insert(key.clone())) else { continue };
             files.push((src.clone(), new.get(&key)));
-            let block = std::fs::read(src).is_ok_and(|b| schematic::parse_asy(&key, &schematic::decode(&b)).calls_sheet());
-            if let Some(sheet) = old_sheets.get(&key).filter(|_| block) {
+            // (not where the new folder has its own symbol of that name, which it would turn into a
+            // block; not the document itself, a test bench of its own block, which is saved anyway)
+            let block = new.get(&key).is_none() && std::fs::read(src).is_ok_and(|b| schematic::parse_asy(&key, &schematic::decode(&b)).calls_sheet());
+            let own = |p: &std::path::PathBuf| doc.as_deref().is_some_and(|d| std::path::Path::new(d) == p.as_path());
+            if let Some(sheet) = old_sheets.get(&key).filter(|p| block && !own(p)) {
                 files.push((sheet.clone(), new_sheets.get(&key)));
                 let items = std::fs::read(sheet).map(|b| schematic::parse_asc(&schematic::decode(&b))).unwrap_or_default();
                 queue.extend(items.into_iter().filter_map(|it| match it { Item::Sym { sym, .. } => Some(sym), _ => None }));

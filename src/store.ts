@@ -459,7 +459,7 @@ export async function simulate() {
     }
   } catch (e) {
     // stale cleared so live mode does not retry a hard failure every 350 ms
-    if (gen === docGen) set({ shown, sim: { netlist: get().nets ?? { text: "", nets: [], insts: [], probes: [], pin_currents: [], warnings: [] }, simulated: "", run: null, log: [String(e)], sweepable: [] }, panel: "log", stale: false });
+    if (gen === docGen) set({ shown, sim: { netlist: get().nets ?? { text: "", nets: [], insts: [], probes: [], pin_currents: [], sheets: [], warnings: [] }, simulated: "", run: null, log: [String(e)], sweepable: [] }, panel: "log", stale: false });
   } finally {
     set({ running: false });
   }

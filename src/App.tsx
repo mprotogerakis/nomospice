@@ -169,7 +169,7 @@ async function saveFile(as = false): Promise<boolean> {
   // them). Asked before the path changes, so no run (live mode) meanwhile looks in the new folder.
   const [from, to] = [dirOf(prev), dirOf(path)], names = items.flatMap((it) => (it.t === "sym" ? [it.sym] : []));
   const found = prev && from && to && from !== to
-    ? await invoke<[string, boolean][]>("folder_symbols", { from, to, names, copy: false }).catch(async (e) => (await fail("Cannot check the old folder's symbols")(e), []))
+    ? await invoke<[string, boolean][]>("folder_symbols", { from, to, names, copy: false, doc: prev }).catch(async (e) => (await fail("Cannot check the old folder's symbols")(e), []))
     : [];
   const [own, clash] = [found.filter(([, c]) => !c).map(([f]) => f), found.filter(([, c]) => c).map(([f]) => f)];
   // a different file of the same name over there: it would be used instead (and is not overwritten)
@@ -189,7 +189,7 @@ async function saveFile(as = false): Promise<boolean> {
     const write = (saveQueue = saveQueue.catch(() => {}).then(() => invoke("save_asc", { path, items })));
     await write;
     if (doc !== docId()) return false; // (written, but another document is open now: not the one asked about)
-    if (carry) await invoke("folder_symbols", { from, to, names, copy: true }).catch(fail("Cannot copy all symbols"));
+    if (carry) await invoke("folder_symbols", { from, to, names, copy: true, doc: prev }).catch(fail("Cannot copy all symbols"));
     const moved = path !== useS.getState().path; // relative .include paths now resolve elsewhere
     // another folder: includes and folder symbols resolve elsewhere, for every tab's results
     const tabs = Object.fromEntries(Object.entries(useS.getState().tabs).map(([k, t]) => [k, { ...t, stale: true }]));
