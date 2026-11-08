@@ -174,6 +174,9 @@ fn call(base: &Path, name: &str, args: &Value) -> Result<Value, String> {
         "write_schematic" => {
             let path = resolve(base, args["path"].as_str().ok_or("`path` missing")?);
             let asc = args["asc"].as_str().ok_or("`asc` missing")?;
+            if schematic::is_symbol(&path.to_string_lossy()) {
+                return Err(format!("{}: a symbol, not a schematic", path.display()));
+            }
             if path.exists() && !args["overwrite"].as_bool().unwrap_or(false) {
                 return Err(format!("{} exists; pass overwrite: true to replace it", path.display()));
             }

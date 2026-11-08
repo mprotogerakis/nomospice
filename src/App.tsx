@@ -388,7 +388,7 @@ export function App() {
         if (k === "s") return run(() => saveFile(e.shiftKey));
         if (k === "o") return run(openFile);
         if (k === "n") return run(newFile);
-        if (k === "k") return run(() => useS.setState({ dialog: { k: "parts" } }));
+        if (k === "k") return run(() => !isSymbolDoc(useS.getState().path) && useS.setState({ dialog: { k: "parts" } }));
         if (k === "f" && !e.shiftKey && !e.altKey) return run(() => useS.setState({ dialog: { k: "find" } }));
         if (k === ",") return run(openLibraries); // macOS: the app menu's item has it
         if (k === "w" && !MAC) return run(newFile); // Ctrl+W closes the document (macOS: File → Close takes ⌘W)
@@ -414,7 +414,8 @@ export function App() {
         f7: moveTool, m: moveTool, f8: () => useS.setState({ tool: { k: "select" } }),
         " ": () => window.dispatchEvent(new Event("nomospice:fit")),
       };
-      if (map[k]) run(map[k]);
+      // (a symbol holds no parts, directives or analyses)
+      if (map[k] && !(isSymbolDoc(useS.getState().path) && ["p", "f2", "s"].includes(k))) run(map[k]);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -461,7 +462,7 @@ export function App() {
         ) : (
           <ToolbarButton label="Run" hotkey="⌘↵" icon={<Play />} disabled={symbolDoc} onClick={simulate} className="text-status-success">Run</ToolbarButton>
         )}
-        <ToolbarButton label="Edit simulation command" icon={<SlidersHorizontal />} onClick={() => useS.setState({ dialog: { k: "sim" } })} />
+        <ToolbarButton label="Edit simulation command" disabled={symbolDoc} icon={<SlidersHorizontal />} onClick={() => useS.setState({ dialog: { k: "sim" } })} />
         <ToolbarButton label="Live: re-run on every edit" icon={<Zap />} pressable active={s.live} onClick={() => useS.setState({ live: !s.live })} />
         <ToolbarSeparator />
         <ToolbarButton label="Select (drag: wires follow)" hotkey="Esc / F8" icon={<MousePointer2 />} pressable active={tool.k === "select"} onClick={() => useS.setState({ tool: { k: "select" } })} />
@@ -477,7 +478,7 @@ export function App() {
         <ToolbarButton label="Component" disabled={symbolDoc} hotkey="P / F2 / ⌘K" icon={<Component />} onClick={() => useS.setState({ dialog: { k: "parts" } })} />
         <ToolbarSeparator />
         <ToolbarButton label="Comment" hotkey="T" icon={<Type />} onClick={() => newItem({ t: "text", x: 0, y: 0, text: "", directive: false })} />
-        <ToolbarButton label="SPICE directive" hotkey="S" icon={<Code />} onClick={() => newItem({ t: "text", x: 0, y: 0, text: "", directive: true })} />
+        <ToolbarButton label="SPICE directive" hotkey="S" disabled={symbolDoc} icon={<Code />} onClick={() => newItem({ t: "text", x: 0, y: 0, text: "", directive: true })} />
         <ToolbarSeparator />
         <ToolbarButton label="Rotate" hotkey="⌃R" icon={<RotateCw />} onClick={() => transform(rotate)} />
         <ToolbarButton label="Mirror" hotkey="⌃E" icon={<FlipHorizontal2 />} onClick={() => transform(mirror)} />

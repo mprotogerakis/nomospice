@@ -67,7 +67,9 @@ function shape(v: unknown): Shape | null {
     return { t: "draw", kind: it.kind.toUpperCase(), width: /^wide$/i.test(String(it.width)) ? "Wide" : "Normal", p: it.p as number[], ...(typeof it.style === "number" && it.style >= 0 && it.style <= 4 ? { style: it.style } : {}) }; // (another style: none, not a 0 that was not there)
   if (!num(it.x) || !num(it.y)) return null;
   // (a label as read from a file may end in spaces: its name is the rest)
-  if (it.t === "flag" && typeof it.name === "string" && word(it.name.trim())) return { t: "flag", x: it.x as number, y: it.y as number, name: it.name.trim(), ...extras(it.extra, "(IOPIN|PIN|PINATTR)") };
+  // (a symbol's pin, its PIN line with it, may have no name or one of words)
+  const pin = Array.isArray(it.extra) && it.extra.some((l) => str(l) && /^\s*PIN\s/.test(l as string));
+  if (it.t === "flag" && typeof it.name === "string" && (word(it.name.trim()) || (pin && !CONTROL.test(it.name)))) return { t: "flag", x: it.x as number, y: it.y as number, name: it.name.trim(), ...extras(it.extra, "(IOPIN|PIN|PINATTR)") };
   // (a text keeps its tabs and line breaks; its alignment is one of the .asc's words)
   if (it.t === "text" && typeof it.text === "string" && !CONTROL.test(it.text)) {
     // ("Left 2": the alignment and the font size)

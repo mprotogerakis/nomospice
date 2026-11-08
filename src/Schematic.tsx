@@ -554,7 +554,8 @@ export const Schematic = memo(function Schematic() {
         const left = leftLabels(items);
         // (a drawing only when wholly inside: a band around parts within a frame does not take the frame)
         const within = (q: Box) => q[0] >= r[0] && q[2] <= r[2] && q[1] >= r[1] && q[3] <= r[3];
-        const hits = items.flatMap((it, i) => { const q = box(it, lib, left); return q && (it.t === "draw" ? within(q) : q[0] <= r[2] && q[2] >= r[0] && q[1] <= r[3] && q[3] >= r[1]) ? [i] : []; });
+        // (a symbol's lines, at any angle, alike: their box is not where they are)
+        const hits = items.flatMap((it, i) => { const q = box(it, lib, left); return q && (it.t === "draw" || (symbolDoc && it.t === "wire") ? within(q) : q[0] <= r[2] && q[2] >= r[0] && q[1] <= r[3] && q[3] >= r[1]) ? [i] : []; });
         useS.setState({ sel: [...new Set([...sel, ...hits])] });
       }
     }
@@ -653,7 +654,7 @@ export const Schematic = memo(function Schematic() {
       case "wire":
         return [...plot, { label: "Net label here…", run: () => newItem({ t: "flag", x: 0, y: 0, name: "" }, g) }, { label: "Select net", disabled: !net, run: selectNet }, "-", ...clip, del];
       case "flag":
-        return [{ label: it.name === "0" ? "Ground" : "Rename…", disabled: it.name === "0", run: edit }, ...plot, { label: "Select net", disabled: !net, run: selectNet }, "-", ...(it.name === "0" || symbolDoc ? [] : [{ label: "Make ground", run: () => commit(items.map((x) => (x === it ? { ...it, name: "0" } : x))) }]), ...clip, del];
+        return [{ label: it.name === "0" && !symbolDoc ? "Ground" : "Rename…", disabled: it.name === "0" && !symbolDoc, run: edit }, ...plot, { label: "Select net", disabled: !net, run: selectNet }, "-", ...(it.name === "0" || symbolDoc ? [] : [{ label: "Make ground", run: () => commit(items.map((x) => (x === it ? { ...it, name: "0" } : x))) }]), ...clip, del];
       case "draw":
         return [{ label: "Duplicate", hint: "⌘D", run: duplicate }, "-", ...clip, del]; // (not rotated: parts only)
       case "text":

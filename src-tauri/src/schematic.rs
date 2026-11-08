@@ -583,10 +583,16 @@ pub fn asy_items(src: &str) -> Vec<Item> {
             }
             Some("TEXT") => items.push(Item::Text { x: num(1).unwrap_or(0), y: num(2).unwrap_or(0), text: unescape(&rest(5)), directive: false, align: format!("{} {}", tok.get(3).unwrap_or(&"Left"), tok.get(4).unwrap_or(&"2")) }),
             Some("Version") | None => {}
-            _ => items.push(Item::Raw { line: line.to_string() }),
+            _ => items.push(Item::Raw { line: line.trim().to_string() }), // (found by its head: SymbolType, SYMATTR)
         }
     }
     items
+}
+
+/// A drawing's line (LINE, RECTANGLE, CIRCLE, ARC: its pen, its points, its style if any).
+fn draw_line(kind: &str, width: &str, p: &[i32], style: &Option<i32>) -> String {
+    let ps: Vec<String> = p.iter().map(|v| v.to_string()).collect();
+    format!("{kind} {width} {}{}\n", ps.join(" "), style.map_or(String::new(), |s| format!(" {s}")))
 }
 
 /// A symbol file of `asy_items`' items: its pins where they are now, numbered on (SpiceOrder)
@@ -600,10 +606,7 @@ pub fn write_asy(items: &[Item]) -> String {
     for it in items {
         match it {
             Item::Wire { x1, y1, x2, y2 } => out += &format!("LINE Normal {x1} {y1} {x2} {y2}\n"),
-            Item::Draw { kind, width, p, style } => {
-                let ps: Vec<String> = p.iter().map(|v| v.to_string()).collect();
-                out += &format!("{kind} {width} {}{}\n", ps.join(" "), style.map_or(String::new(), |s| format!(" {s}")));
-            }
+            Item::Draw { kind, width, p, style } => out += &draw_line(kind, width, p, style),
             Item::Text { x, y, text, directive: false, align } => out += &format!("TEXT {x} {y} {} {}\n", if align.is_empty() { "Left 2" } else { align }, escape(text)),
             _ => {}
         }
@@ -729,10 +732,7 @@ pub fn write_asc(items: &[Item]) -> String {
                     out += &format!("TEXT {x} {y} {align} {mark}{}\n", escape(text));
                 }
                 // (drawings and the other kept lines in one pass: in their order in the file)
-                (4, Item::Draw { kind, width, p, style }) => {
-                    let ps: Vec<String> = p.iter().map(|v| v.to_string()).collect();
-                    out += &format!("{kind} {width} {}{}\n", ps.join(" "), style.map_or(String::new(), |s| format!(" {s}")));
-                }
+                (4, Item::Draw { kind, width, p, style }) => out += &draw_line(kind, width, p, style),
                 (4, Item::Raw { line }) if !line.starts_with("SHEET ") => out += &format!("{line}\n"),
                 _ => {}
             }
