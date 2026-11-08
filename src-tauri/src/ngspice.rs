@@ -52,11 +52,20 @@ static BG_DONE: AtomicBool = AtomicBool::new(true);
 static RUNS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// The latest run: its id, its current sensors (trace expressions name part currents, `I(R1)`,
 /// `Ib(Q1)`) and, for a `.step` run, each step's plot.
-static SENSORS: Mutex<(u64, Option<std::sync::Arc<[crate::schematic::Sensor]>>, Option<std::sync::Arc<[String]>>)> = Mutex::new((0, None, None));
-/// For export_raw, of the latest run: its id, the engine load it ran in (a reload since: the
-/// results are gone), how many `.meas par()` helpers it has, and per step its label and the plot
-/// ngspice ended it in (a .noise run's totals, beside its spectrum).
-static RUN_INFO: Mutex<(u64, usize, usize, Vec<(String, String)>)> = Mutex::new((0, 0, 0, vec![]));
+static LATEST: Mutex<Latest> = Mutex::new(Latest { id: 0, sensors: None, steps: None, pars: 0, shown: Vec::new(), ended: Vec::new() });
+/// The latest run, for its traces and its .raw export: its id, current sensors, a .step run's
+/// steps' plots, how many `.meas par()` helpers it has (their vectors are not results), the plots
+/// its results are shown from (one per step) and, per step, its label and the plot ngspice ended
+/// it in (a .noise run's totals, beside its spectrum).
+#[derive(Clone)]
+struct Latest {
+    id: u64,
+    sensors: Option<std::sync::Arc<[crate::schematic::Sensor]>>,
+    steps: Option<std::sync::Arc<[String]>>,
+    pars: usize,
+    shown: Vec<String>,
+    ended: Vec<(String, String)>,
+}
 /// Counts Halt presses. An operation (a simulation, a root locus) notes the count when it begins
 /// (`begin`) and is halted once the count moves on (`halted_since`): a Halt stops what was running
 /// when it was pressed, never something started afterwards, and no later start can undo it. Only
@@ -219,6 +228,9 @@ fn load() -> Result<Api, String> {
         }
         take_log(); // init chatter
         LOADS.fetch_add(1, Ordering::SeqCst);
+        if n > 0 {
+            RUNS.fetch_add(1, Ordering::SeqCst); // (a fresh engine holds no run's results: traces and exports of the last one say so)
+        }
         Ok(api)
     }
 }
@@ -447,17 +459,23 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
         Some(n) if n >= 2 && !has(&d.1, "frequency") => format!("noise{}", n - 1),
         _ => d.1.clone(),
     }).collect();
-    *SENSORS.lock().unwrap_or_else(|e| e.into_inner()) = (id, Some(sensors.clone()), steps.is_some().then(|| plots.clone().into()));
-    let plot0 = &done[0].1;
-    let sensors = &sensors[..];
-    // a sensor's current vector -> its name (`vsense_q1_2#branch` -> `Ib(Q1)`)
-    let named: std::collections::HashMap<String, &str> = sensors.iter().map(|s| (format!("{}#branch", s.source), s.label.as_str())).collect();
     // ngspice makes a helper source per par() in its output lines, named pa_00, pa_01 …
     // (cheap checks first, without a lowercase copy of the deck: most decks have neither)
     let pars = if !crate::schematic::contains_ci(text, "par(") { 0 } else {
         crate::schematic::statements(text, &crate::schematic::PAR_STATEMENTS).iter().map(|l| crate::schematic::par_calls(l)).sum()
     };
-    *RUN_INFO.lock().unwrap_or_else(|e| e.into_inner()) = (id, LOADS.load(Ordering::SeqCst), pars, done.iter().map(|d| (d.0.clone(), d.1.clone())).collect());
+    *LATEST.lock().unwrap_or_else(|e| e.into_inner()) = Latest {
+        id,
+        sensors: Some(sensors.clone()),
+        steps: steps.is_some().then(|| plots.clone().into()),
+        pars,
+        shown: plots.clone(),
+        ended: done.iter().map(|d| (d.0.clone(), d.1.clone())).collect(),
+    };
+    let plot0 = &done[0].1;
+    let sensors = &sensors[..];
+    // a sensor's current vector -> its name (`vsense_q1_2#branch` -> `Ib(Q1)`)
+    let named: std::collections::HashMap<String, &str> = sensors.iter().map(|s| (format!("{}#branch", s.source), s.label.as_str())).collect();
     api.command(&format!("setplot {plot0}"));
     let (_, mut scale) = plot_vectors(api, plot0, sensors, pars);
     // one frequency (`.ac lin 1 50 50`): phasors, shown as a table like .op instead of a 1-point plot
@@ -630,45 +648,56 @@ fn raw_plotname(plot: &str) -> &'static str {
 /// vectors the results list (`v(out)`, `i(v1)`), the part currents under their names (`I(R1)`,
 /// `Ib(Q1)`), a .step run's steps one plot each, in their order, named by their step. Written
 /// here from the vectors as read: ngspice's results, settings and current plot are not changed.
-pub fn export_raw(run: u64) -> Result<Vec<u8>, String> {
+pub fn export_raw(run: u64) -> Result<(Vec<u8>, Vec<String>), String> {
     const GONE: &str = "the results were replaced by a later run (a root locus or another simulation): run the simulation again";
-    let (of, sensors, steps) = SENSORS.lock().unwrap_or_else(|e| e.into_inner()).clone();
-    let (info_of, load, pars, ended) = RUN_INFO.lock().unwrap_or_else(|e| e.into_inner()).clone();
-    if of != run || info_of != run {
+    let latest = LATEST.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    if latest.id != run {
         return Err(GONE.into());
     }
-    let sensors = sensors.unwrap_or_else(|| std::sync::Arc::from([]));
+    let sensors = latest.sensors.clone().unwrap_or_else(|| std::sync::Arc::from([]));
     let named: std::collections::HashMap<String, &str> = sensors.iter().map(|s| (format!("{}#branch", s.source), s.label.as_str())).collect();
     let g = engine().map_err(|e| e.join("\n"))?;
     let api = g.as_ref().unwrap();
-    // (ngspice reloaded since the run: a fresh one, without its results)
-    if RUNS.load(Ordering::SeqCst) != run || LOADS.load(Ordering::SeqCst) != load {
-        return Err(GONE.into());
+    if RUNS.load(Ordering::SeqCst) != run {
+        return Err(GONE.into()); // (another run since, or ngspice reloaded: its results are gone)
     }
-    // (the plot the results are read from now, put back afterwards; per step the one shown and,
-    // for .noise, the totals ngspice ended it in)
+    // the run's plots, one per step as shown, and a .noise run's totals beside each spectrum;
+    // the plot ngspice reads from now put back afterwards
     let current = cstr(unsafe { (api.cur_plot)() });
-    let shown: Vec<String> = match &steps { Some(s) if !s.is_empty() => s.to_vec(), _ => vec![current.clone()] };
-    let stepped = shown.len() > 1 || steps.as_ref().is_some_and(|s| !s.is_empty());
-    let plots: Vec<(String, String)> = shown.iter().enumerate().flat_map(|(k, p)| {
-        let (label, end) = ended.get(k).cloned().unwrap_or_default();
+    let stepped = latest.steps.as_ref().is_some_and(|s| !s.is_empty());
+    let plots: Vec<(String, String)> = latest.shown.iter().enumerate().flat_map(|(k, p)| {
+        let (label, end) = latest.ended.get(k).cloned().unwrap_or_default();
         let label = if stepped { format!(" ({label})") } else { String::new() };
         std::iter::once((p.clone(), label.clone())).chain((!end.is_empty() && end != *p && p.starts_with("noise")).then(|| (end, label)))
     }).collect();
+    let pars = latest.pars;
+    let mut dropped = std::collections::BTreeSet::new();
     let mut out = vec![];
     let date = raw_date();
     for (p, step) in &plots {
         api.command(&format!("setplot {p}"));
         let (vectors, scale) = plot_vectors(api, p, &sensors, pars);
         // the scale first; the app's own scratch vector (nmsp_trace) not a result
-        let order = std::iter::once(scale.clone()).filter(|s| !s.is_empty()).chain(vectors.into_iter().filter(|v| *v != scale && v != "nmsp_trace"));
-        let cols: Vec<(String, Trace)> = order.filter_map(|v| read(api, &v).map(|t| (v, t))).collect();
-        // (a column of another length than the scale's: not this plot's data)
-        let n = cols.first().map_or(0, |c| c.1.re.len());
-        let cols: Vec<(String, Trace)> = cols.into_iter().filter(|c| c.1.re.len() == n).collect();
+        let order = std::iter::once(scale.clone()).filter(|s| !s.is_empty()).chain(vectors.into_iter().filter(|v| *v != scale));
+        let mut cols: Vec<(String, Trace)> = vec![];
+        for v in order {
+            match read(api, &v) {
+                Some(t) => cols.push((v, t)),
+                None => {
+                    dropped.insert(v);
+                }
+            }
+        }
+        // (a column of another length than the scale's, or than most, without one: not this plot's
+        // data, said)
+        let n = if scale.is_empty() { cols.iter().map(|c| c.1.re.len()).max().unwrap_or(0) } else { cols.first().map_or(0, |c| c.1.re.len()) };
+        let (cols, other): (Vec<(String, Trace)>, Vec<(String, Trace)>) = cols.into_iter().partition(|c| c.1.re.len() == n);
+        dropped.extend(other.into_iter().map(|c| c.0));
         let complex = cols.iter().any(|c| c.1.im.is_some());
         // (Command: ngspice: readers take ngspice's layout by it, all values doubles)
-        out.extend(format!("Title: nomospice\nDate: {date}\nCommand: ngspice (nomospice)\nPlotname: {}{step}\nFlags: {}\nNo. Variables: {}\nNo. Points: {n}\nVariables:\n", raw_plotname(p), if complex { "complex" } else { "real" }, cols.len()).bytes());
+        // (a .noise run's totals: integrated, no frequency scale)
+        let plotname = if p.starts_with("noise") && scale.is_empty() { "Integrated Noise" } else { raw_plotname(p) };
+        out.extend(format!("Title: nomospice\nDate: {date}\nCommand: ngspice (nomospice)\nPlotname: {plotname}{step}\nFlags: {}\nNo. Variables: {}\nNo. Points: {n}\nVariables:\n", if complex { "complex" } else { "real" }, cols.len()).bytes());
         // (v(…) only for the nodes of an analysis over time, frequency or a sweep, or .op: ngspice
         // types .tf, .sens and .pz values as voltages too)
         let nodes = matches!(p.trim_end_matches(|c: char| c.is_ascii_digit()), "tran" | "ac" | "dc" | "op");
@@ -681,7 +710,9 @@ pub fn export_raw(run: u64) -> Result<Vec<u8>, String> {
                 (None, None) if nodes && t.typ == 3 && !v.contains(['(', '#', '@', '[']) => format!("v({v})"),
                 _ => v.clone(),
             };
-            let kind = match t.typ { 1 => "time", 2 => "frequency", 3 => "voltage", 4 => "current", _ => "notype" };
+            // (ngspice's type names, as its own raw files have them)
+            const TYPES: [&str; 23] = ["notype", "time", "frequency", "voltage", "current", "voltage-density", "current-density", "sqr-voltage-density", "sqr-current-density", "sqr-voltage", "sqr-current", "pole", "zero", "s-param", "temp-sweep", "res-sweep", "impedance", "admittance", "power", "phase", "decibel", "capacitance", "charge"];
+            let kind = TYPES.get(t.typ as usize).copied().unwrap_or("notype");
             out.extend(format!("\t{j}\t{name}\t{kind}\n").bytes());
         }
         out.extend(b"Binary:\n");
@@ -695,7 +726,7 @@ pub fn export_raw(run: u64) -> Result<Vec<u8>, String> {
         }
     }
     api.command(&format!("setplot {current}"));
-    Ok(out)
+    Ok((out, dropped.into_iter().collect()))
 }
 
 /// Evaluate an ngspice expression (e.g. `v(out)`, `i(vsense_r1)`, `v(a)-v(b)`) in the results of
@@ -704,7 +735,7 @@ pub fn trace(expr: &str, scale: &str, run: u64) -> Result<Trace, String> {
     // part currents by name (`I(R1)-I(R2)`, `Ib(Q1)`): the latest run's sensors; messages show the
     // expression as written, ngspice's with the names (not the hidden sensor sources)
     // (the sensors of the run asked about; another run's: the results are gone anyway, see below)
-    let (of, sensors, steps) = SENSORS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let Latest { id: of, sensors, steps, .. } = LATEST.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let sensors = sensors.filter(|_| of == run).unwrap_or_else(|| std::sync::Arc::from([]));
     let steps: std::sync::Arc<[String]> = steps.filter(|_| of == run).unwrap_or_else(|| std::sync::Arc::from([])); // (another run's: gone, the RUNS check below says so)
     let (named, problem) = crate::schematic::sensor_currents(expr, &sensors);

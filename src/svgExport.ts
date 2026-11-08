@@ -63,7 +63,8 @@ export const saveSvg = (svg: string, suffix: string) => saveBeside("svg", "SVG i
 export async function saveRaw() {
   const run = useS.getState().sim?.run;
   if (!run) return;
-  await saveBeside("raw", "Simulation results (raw)", "", "export_raw", { run: run.id });
+  const left = await saveBeside<string[]>("raw", "Simulation results (raw)", "", "export_raw", { run: run.id });
+  if (left?.length) await message(`Written without ${left.join(", ")}: ngspice gives no data for them, or of another length than the rest.`, { title: "Export", kind: "warning" });
 }
 
 export const xmlEscape = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");

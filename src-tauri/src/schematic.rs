@@ -2658,7 +2658,8 @@ mod tests {
         let src = EXAMPLES.iter().find(|e| e.0 == "step_rc").unwrap().1.replace("FLAG 224 64 out", "FLAG 224 64 out+").replace("vdb(out)", "vdb(out+)");
         let nl = netlist_for_sim(&parse_asc(&src), &mut Library::builtin());
         let run = crate::ngspice::run(&nl.prepared(None, &mut vec![])).unwrap();
-        let bytes = crate::ngspice::export_raw(run.id).unwrap();
+        let (bytes, dropped) = crate::ngspice::export_raw(run.id).unwrap();
+        assert!(dropped.is_empty(), "{dropped:?}");
         let text = String::from_utf8_lossy(&bytes);
         assert!(text.matches("Plotname:").count() == 3 && text.contains("Plotname: AC Analysis (C=47n)") && text.contains("Command: ngspice"), "one plot per step, named by it");
         assert!(text.contains("\tv(out+)\t") && text.contains("\tI(R1)\tcurrent") && !text.contains("vsense"), "{}", &text[..text.find("Binary:").unwrap_or(400).min(text.len())]);

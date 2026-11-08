@@ -328,13 +328,15 @@ fn cancel_locus() {
 
 /// The results of run `run` as a .raw file.
 #[tauri::command]
-async fn export_raw(path: String, run: u64) -> Result<(), String> {
+/// Returns the vectors left out (none readable, another length: see ngspice::export_raw).
+async fn export_raw(path: String, run: u64) -> Result<Vec<String>, String> {
     if !path.to_lowercase().ends_with(".raw") {
         return Err(format!("{path}: not a .raw file"));
     }
     tauri::async_runtime::spawn_blocking(move || {
-        let bytes = ngspice::export_raw(run)?;
-        write_atomic(std::path::Path::new(&path), &bytes).map_err(|e| format!("{path}: {e}")) // (a failed write leaves the file as it was)
+        let (bytes, dropped) = ngspice::export_raw(run)?;
+        write_atomic(std::path::Path::new(&path), &bytes).map_err(|e| format!("{path}: {e}"))?; // (a failed write leaves the file as it was)
+        Ok(dropped)
     })
     .await
     .map_err(|e| e.to_string())?
