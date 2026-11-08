@@ -117,22 +117,34 @@ export function inside(p: Pt, w: Extract<Item, { t: "wire" }>) {
 }
 
 const RANK = { flag: 0, text: 1, wire: 2, sym: 3, draw: 4 } as const;
+/** An arc's start angle and its span, counter-clockwise on screen as GDI draws it (both rays
+ *  alike: the whole ellipse); one rule for symbols' arcs and the schematic's own. */
+export function arcSpan([x1, y1, x2, y2, sx, sy, ex, ey]: number[]): [number, number] {
+  const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2, rx = Math.abs(x2 - x1) / 2 || 1, ry = Math.abs(y2 - y1) / 2 || 1;
+  const a0 = Math.atan2((sy - cy) / ry, (sx - cx) / rx);
+  let span = a0 - Math.atan2((ey - cy) / ry, (ex - cx) / rx);
+  if (span <= 1e-9) span += 2 * Math.PI;
+  return [a0, span];
+}
+
 /** A drawing's outline as a polyline: a line, a rectangle's four sides, a circle's or an arc's
- *  curve in 64 segments (an arc's drawn part only: counter-clockwise on screen from its start
- *  ray to its end ray, as it is drawn; both rays alike: the whole ellipse, as LTspice does). */
+ *  drawn curve (arcSpan), in segments of a size that keeps a big one round. Kept per item. */
+const OUTLINES = new WeakMap<object, Pt[]>();
 export function outline(it: Extract<Item, { t: "draw" }>): Pt[] {
+  const got = OUTLINES.get(it);
+  if (got) return got;
   const [x1, y1, x2, y2] = it.p, k = it.kind;
-  if (k === "LINE") return [[x1, y1], [x2, y2]];
-  if (k === "RECTANGLE") return [[x1, y1], [x2, y1], [x2, y2], [x1, y2], [x1, y1]];
-  const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2, rx = Math.abs(x2 - x1) / 2, ry = Math.abs(y2 - y1) / 2;
-  let [a0, span] = [0, 2 * Math.PI];
-  if (k === "ARC") {
-    const [sx, sy, ex, ey] = it.p.slice(4);
-    a0 = Math.atan2((sy - cy) / (ry || 1), (sx - cx) / (rx || 1));
-    span = a0 - Math.atan2((ey - cy) / (ry || 1), (ex - cx) / (rx || 1));
-    if (span <= 1e-9) span += 2 * Math.PI;
+  let o: Pt[];
+  if (k === "LINE") o = [[x1, y1], [x2, y2]];
+  else if (k === "RECTANGLE") o = [[x1, y1], [x2, y1], [x2, y2], [x1, y2], [x1, y1]];
+  else {
+    const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2, rx = Math.abs(x2 - x1) / 2, ry = Math.abs(y2 - y1) / 2;
+    const [a0, span] = k === "ARC" ? arcSpan(it.p) : [0, 2 * Math.PI];
+    const n = Math.min(512, Math.max(32, Math.ceil(4 * Math.sqrt(Math.max(rx, ry))))); // (a 2000-unit radius: under half a unit off)
+    o = Array.from({ length: n + 1 }, (_, j) => { const a = a0 - (span * j) / n; return [cx + rx * Math.cos(a), cy + ry * Math.sin(a)] as Pt; });
   }
-  return Array.from({ length: 65 }, (_, j) => { const a = a0 - (span * j) / 64; return [cx + rx * Math.cos(a), cy + ry * Math.sin(a)] as Pt; });
+  OUTLINES.set(it, o);
+  return o;
 }
 const boxOf = (o: Pt[]): Box => [Math.min(...o.map((q) => q[0])), Math.min(...o.map((q) => q[1])), Math.max(...o.map((q) => q[0])), Math.max(...o.map((q) => q[1]))];
 const inBox = (b: Box, p: Pt, tol: number) => p[0] >= b[0] - tol && p[0] <= b[2] + tol && p[1] >= b[1] - tol && p[1] <= b[3] + tol;

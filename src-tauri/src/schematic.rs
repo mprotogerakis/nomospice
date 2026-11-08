@@ -424,6 +424,7 @@ pub fn parse_asc(src: &str) -> Vec<Item> {
 /// A LINE/RECTANGLE/CIRCLE/ARC line as a drawing: its pen, all its points, an optional style.
 fn drawing(tok: &[&str]) -> Option<Item> {
     let n = if tok[0] == "ARC" { 8 } else { 4 };
+    tok.get(1).filter(|w| w.parse::<i32>().is_err())?; // (its pen first: without one the numbers would shift)
     let nums: Vec<i32> = tok.get(2..)?.iter().map(|t| t.parse().ok()).collect::<Option<_>>()?;
     (nums.len() == n || nums.len() == n + 1).then(|| Item::Draw { kind: tok[0].to_string(), width: tok[1].to_string(), p: nums[..n].to_vec(), style: nums.get(n).copied() })
 }
@@ -2652,11 +2653,11 @@ mod tests {
     #[test]
     fn drawings_roundtrip() {
         // the schematic's own drawings: read as items, written back as they were (an unreadable one: raw)
-        let src = "Version 4\nSHEET 1 880 680\nLINE Normal 0 16 64 16 2\nRECTANGLE Wide -16 0 64 80\nARC Normal 0 0 32 32 0 16 32 16\nLINE Normal 0 0\nCIRCLE Normal 0 0 8 8\n";
+        let src = "Version 4\nSHEET 1 880 680\nLINE Normal 0 16 64 16 2\nRECTANGLE Wide -16 0 64 80\nARC Normal 0 0 32 32 0 16 32 16\nLINE Normal 0 0\nCIRCLE Normal 0 0 8 8\nLINE 0 16 64 16 2\n";
         let items = parse_asc(src);
         assert!(matches!(&items[1], Item::Draw { kind, width, p, style: Some(2) } if kind == "LINE" && width == "Normal" && p == &vec![0, 16, 64, 16]), "{items:?}");
         assert!(matches!(&items[3], Item::Draw { kind, p, style: None, .. } if kind == "ARC" && p.len() == 8));
-        assert!(matches!(&items[4], Item::Raw { .. }));
+        assert!(matches!(&items[4], Item::Raw { .. }) && matches!(&items[6], Item::Raw { .. }), "no pen: kept as written");
         assert_eq!(write_asc(&items), src);
     }
 

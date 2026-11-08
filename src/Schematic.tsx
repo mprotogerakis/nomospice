@@ -5,7 +5,7 @@ import { useShallow } from "zustand/react/shallow";
 import { Maximize, Minus, Plus } from "lucide-react";
 import type { Item, Shape, SymbolDef } from "./types";
 import {
-  box, connectivity, defOf, dragPlan, mirror, outline, pins, prefixOf, rotate, dropZeroWires, dropZeroWiresKeepSel, GRID, hit, isShape, labelRect, leftLabels, matrix, shifted, snap, symBox,
+  box, connectivity, defOf, arcSpan, dragPlan, mirror, outline, pins, prefixOf, rotate, dropZeroWires, dropZeroWiresKeepSel, GRID, hit, isShape, labelRect, leftLabels, matrix, shifted, snap, symBox,
   textLines, union, xform, type Box, type Lib, type Pt,
 } from "./geom";
 import { canProbe, commit, currentNets, nextInst, partCurrent, powerMode, powerName, probe, probeMode, simulate, useS, useStatus } from "./store";
@@ -31,15 +31,14 @@ const cursorSvg = (body: string) =>
 const PROBE_V = cursorSvg("<path d='M2 22 L9 15' stroke='%23e0573a' stroke-width='2'/><path d='M8 16 L18 6 L21 9 L11 19 Z' fill='%23e0573a' stroke='white' stroke-width='1'/>".replaceAll("%23", "#"));
 const PROBE_I = cursorSvg("<circle cx='13' cy='11' r='7' fill='none' stroke='%23d9a441' stroke-width='3'/><path d='M2 22 L8 16' stroke='%23d9a441' stroke-width='2'/><path d='M13 6 v10 M10 13 l3 3 l3 -3' stroke='white' fill='none' stroke-width='1.5'/>".replaceAll("%23", "#"));
 
-function arcPath([x1, y1, x2, y2, sx, sy, ex, ey]: number[]) {
+function arcPath(p: number[]) {
+  const [x1, y1, x2, y2] = p;
   const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2, rx = Math.abs(x2 - x1) / 2 || 1, ry = Math.abs(y2 - y1) / 2 || 1;
-  const a0 = Math.atan2((sy - cy) / ry, (sx - cx) / rx), a1 = Math.atan2((ey - cy) / ry, (ex - cx) / rx);
-  let d = a0 - a1; // LTspice/GDI arcs run counter-clockwise on screen
-  if (d <= 1e-9) d += 2 * Math.PI;
-  const p = (a: number) => `${cx + rx * Math.cos(a)} ${cy + ry * Math.sin(a)}`;
-  // (both rays alike: the whole ellipse, as GDI draws it; one SVG arc cannot end where it starts)
-  if (d > 2 * Math.PI - 1e-9) return `M${p(a0)} A${rx} ${ry} 0 1 0 ${p(a0 + Math.PI)} A${rx} ${ry} 0 1 0 ${p(a0)}`;
-  return `M${p(a0)} A${rx} ${ry} 0 ${d > Math.PI ? 1 : 0} 0 ${p(a1)}`;
+  const [a0, d] = arcSpan(p), a1 = a0 - d;
+  const at = (a: number) => `${cx + rx * Math.cos(a)} ${cy + ry * Math.sin(a)}`;
+  // (the whole ellipse: one SVG arc cannot end where it starts, so two halves)
+  if (d > 2 * Math.PI - 1e-9) return `M${at(a0)} A${rx} ${ry} 0 1 0 ${at(a0 + Math.PI)} A${rx} ${ry} 0 1 0 ${at(a0)}`;
+  return `M${at(a0)} A${rx} ${ry} 0 ${d > Math.PI ? 1 : 0} 0 ${at(a1)}`;
 }
 
 /** One <g> per library symbol in <defs>; instances are <use>. Attributes must sit on the

@@ -50,10 +50,9 @@ function shape(v: unknown): Shape | null {
   const it = v as Record<string, unknown>;
   if (!it || typeof it !== "object") return null;
   if (it.t === "wire" && [it.x1, it.y1, it.x2, it.y2].every(num) && (it.x1 !== it.x2 || it.y1 !== it.y2)) return { t: "wire", x1: it.x1 as number, y1: it.y1 as number, x2: it.x2 as number, y2: it.y2 as number };
-  // (a drawing: its kind, all its points; its pen as LTspice knows it, Normal or Wide; a style
-  // 0 … 4, another as solid)
+  // (a drawing: its kind, all its points; its pen as LTspice knows it, Normal or Wide; a style 0 … 4)
   if (it.t === "draw" && typeof it.kind === "string" && /^(LINE|RECTANGLE|CIRCLE|ARC)$/i.test(it.kind) && Array.isArray(it.p) && it.p.length === (/^arc$/i.test(it.kind) ? 8 : 4) && it.p.every(num) && (it.style == null || num(it.style)))
-    return { t: "draw", kind: it.kind.toUpperCase(), width: /^wide$/i.test(String(it.width)) ? "Wide" : "Normal", p: it.p as number[], ...(it.style != null ? { style: (it.style as number) >= 0 && (it.style as number) <= 4 ? (it.style as number) : 0 } : {}) };
+    return { t: "draw", kind: it.kind.toUpperCase(), width: /^wide$/i.test(String(it.width)) ? "Wide" : "Normal", p: it.p as number[], ...(typeof it.style === "number" && it.style >= 0 && it.style <= 4 ? { style: it.style } : {}) }; // (another style: none, not a 0 that was not there)
   if (!num(it.x) || !num(it.y)) return null;
   // (a label as read from a file may end in spaces: its name is the rest)
   if (it.t === "flag" && typeof it.name === "string" && word(it.name.trim())) return { t: "flag", x: it.x as number, y: it.y as number, name: it.name.trim(), ...extras(it.extra, "IOPIN") };

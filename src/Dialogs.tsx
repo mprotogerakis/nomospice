@@ -500,7 +500,7 @@ export const Dialogs = memo(function Dialogs() {
   switch (dialog.k) {
     case "edit": {
       const it = items[dialog.index];
-      if (!it || it.t === "draw") return null; // (a drawing has nothing to edit)
+      if (!it || it.t === "draw") return queueMicrotask(close), null; // (gone, or a drawing: nothing to edit; not left open, holding the hotkeys)
       // an alternative analysis (a comment of nothing but analyses: the tabs offer it) opens the form
       const lines = it.t === "text" ? it.text.split("\n") : [];
       if (it.t === "text" && !it.directive && !dialog.raw && analysisOptions([it]).length && analysisEditableAt(lines, analysisLineIndex(lines, null, false))) return <SimDialog key={dialog.index} index={dialog.index} />;
