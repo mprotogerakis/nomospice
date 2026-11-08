@@ -36,7 +36,8 @@ files — with a modern UI, ngspice as the engine, a Rust core and a React front
 - **Waveforms** (uPlot): one pane per unit (units from the expression: V·A = W, integrals in J), a
   right axis per pane for traces of other sizes, synced zoom, cursors A/B with Δ and 1/Δx, average,
   RMS and integral between them (shift-drag marks the range), expressions in ngspice syntax (a
-  constant draws a reference line), a part's power (right-click > Plot power), copy as CSV;
+  constant draws a reference line), a part's power (right-click > Plot power), copy as CSV, all
+  results as a `.raw` file;
   an **FFT** of a transient (of A–B or the shown range; Hann window, dB of the amplitude), a log
   or fixed y axis per pane, a trace moved into another unit's pane (on its right axis). A single-frequency `.ac` (`.ac lin 1 50 50`) gives a phasor table
   (magnitude ∠ phase) instead of a plot.

@@ -326,6 +326,15 @@ fn cancel_locus() {
     SWEEP_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 }
 
+/// The results of run `run` (its plot `plot`) as a .raw file.
+#[tauri::command]
+async fn export_raw(path: String, plot: String, run: u64) -> Result<(), String> {
+    if !path.to_lowercase().ends_with(".raw") {
+        return Err(format!("{path}: not a .raw file"));
+    }
+    tauri::async_runtime::spawn_blocking(move || ngspice::export_raw(&path, &plot, run)).await.map_err(|e| e.to_string())?
+}
+
 /// `run`: the id of the Run the trace is for (ngspice keeps only the latest run's results).
 #[tauri::command]
 async fn trace(expr: String, scale: String, run: u64) -> Result<ngspice::Trace, String> {
@@ -698,7 +707,7 @@ fn main() {
         // updates from the GitHub releases (latest.json, signed with the key in ~/.tauri; see scripts/publish-release.sh)
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .invoke_handler(tauri::generate_handler![symbols, examples, path_exists, open_asc, save_asc, export_svg, netlist, simulate, root_locus, cancel_locus, folder_symbols, trace, run_id, halt, cli_args, quit, recovery_save, recovery_take, recovery_resolve, recovery_clear,
+        .invoke_handler(tauri::generate_handler![symbols, examples, path_exists, open_asc, save_asc, export_svg, export_raw, netlist, simulate, root_locus, cancel_locus, folder_symbols, trace, run_id, halt, cli_args, quit, recovery_save, recovery_take, recovery_resolve, recovery_clear,
             library_sources, library_set_sources, library_search, library_text, library_fetch_microcap,
             git_status, git_log, git_show, git_commit, git_init])
         .setup(|app| {

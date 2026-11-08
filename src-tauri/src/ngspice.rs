@@ -579,6 +579,61 @@ fn plot_vectors(api: &Api, plot: &str, sensors: &[crate::schematic::Sensor], par
     (vectors, scale)
 }
 
+/// A part current's name in a .raw file: its sensor's branch copied to `r1#branch`, which ngspice
+/// writes as `i(r1)` (`Ib(Q1)` as `i(q1:b)`, `Ix(U1:OUT)` as `i(u1:out)`).
+fn raw_name(label: &str) -> Option<String> {
+    let (head, inner) = label.strip_suffix(')')?.split_once('(')?;
+    let pin = head.strip_prefix(['I', 'i'])?.to_ascii_lowercase();
+    let inner = inner.to_ascii_lowercase();
+    let name = if pin.is_empty() || inner.contains(':') { inner } else { format!("{inner}:{pin}") };
+    name.chars().all(|c| c.is_ascii_alphanumeric() || "_:.+-".contains(c)).then(|| format!("{name}#branch"))
+}
+
+/// Run `run`'s results as a .raw file (ngspice's binary raw format, which other tools read): the
+/// vectors the results list (not the current sensors' helpers), the part currents by name
+/// (`i(r1)`, `i(q1:b)`), a .step run's steps one plot each, in their order.
+pub fn export_raw(path: &str, plot: &str, run: u64) -> Result<(), String> {
+    // (quoted for ngspice's command line, which has no escape for a quote)
+    if path.contains(['\'', '\n', '\r']) {
+        return Err(format!("{path}: a file name with a quote or a line break cannot be written by ngspice"));
+    }
+    let (of, sensors, steps) = SENSORS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let sensors = sensors.filter(|_| of == run).unwrap_or_else(|| std::sync::Arc::from([]));
+    let steps = steps.filter(|_| of == run).unwrap_or_else(|| std::sync::Arc::from([]));
+    let g = engine().map_err(|e| e.join("\n"))?;
+    let api = g.as_ref().unwrap();
+    if RUNS.load(Ordering::SeqCst) != run {
+        return Err("the results were replaced by a later run (a root locus or another simulation): run the simulation again".into());
+    }
+    let _ = std::fs::remove_file(path); // (written afresh: the steps are appended to it)
+    let plots: Vec<String> = if steps.is_empty() { vec![plot.to_string()] } else { steps.to_vec() };
+    api.command("set filetype=binary");
+    for (k, p) in plots.iter().enumerate() {
+        api.command(&format!("setplot {p}"));
+        let (vectors, scale) = plot_vectors(api, p, &sensors, 0);
+        let branch = |s: &crate::schematic::Sensor| format!("{}#branch", s.source);
+        let mut names: Vec<String> = vectors.into_iter().filter(|v| *v != scale && !sensors.iter().any(|s| *v == branch(s))).collect();
+        let mut aliases = vec![];
+        for s in sensors.iter() {
+            if let Some(a) = raw_name(&s.label).filter(|a| !names.contains(a)) {
+                api.command(&format!("let {a} = {}", branch(s)));
+                aliases.push(a);
+            }
+        }
+        names.extend(aliases.iter().cloned());
+        api.command(if k == 0 { "unset appendwrite" } else { "set appendwrite" });
+        take_log();
+        api.command(&format!("write '{path}' {}", names.join(" ")));
+        aliases.iter().for_each(|a| { api.command(&format!("unlet {a}")); });
+    }
+    api.command("unset appendwrite");
+    let log = take_log();
+    match std::fs::metadata(path) {
+        Ok(m) if m.len() > 0 => Ok(()),
+        _ => Err(if log.is_empty() { format!("{path}: ngspice wrote nothing") } else { log.join("\n") }),
+    }
+}
+
 /// Evaluate an ngspice expression (e.g. `v(out)`, `i(vsense_r1)`, `v(a)-v(b)`) in the results of
 /// run `run` (an error once another run, such as a root locus step, replaced them).
 pub fn trace(expr: &str, scale: &str, run: u64) -> Result<Trace, String> {

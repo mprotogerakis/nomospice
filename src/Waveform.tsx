@@ -9,7 +9,7 @@ import { openMenu } from "./Menu";
 import { at, exprUnit, fftFreqs, fftSize, integrate, si, spectrum, unitTimes, xUnitOf } from "./spice";
 import { keys } from "./lib/utils";
 import type { Trace } from "./types";
-import { saveSvg, withLightTheme, xmlEscape } from "./svgExport";
+import { saveRaw, saveSvg, withLightTheme, xmlEscape } from "./svgExport";
 import { Polar, type Curve } from "./Nyquist";
 
 /** A plotted curve: of trace `t`, curve `k` of its `n` in the pane (a .step or nested .dc family);
@@ -476,6 +476,7 @@ export const Waveform = memo(function Waveform() {
           "-",
           { label: "Copy data as CSV", hint: polarOn ? "Bode plot only" : undefined, disabled: !panes.length || polarOn, run: () => navigator.clipboard.writeText(csv(xs, xUnit, panes, run?.steps ?? [])) },
           { label: "Export plot as SVG…", hint: polarOn ? "Bode plot only" : undefined, disabled: !panes.length || polarOn, run: () => void saveSvg(plotSvg(plots.current, panes, useS.getState().plot), "-plot") },
+          { label: "Export results as .raw…", hint: "all vectors", disabled: !run, run: () => void saveRaw() },
           { label: "Remove all traces", danger: true, disabled: !traces.length, run: () => useS.setState({ traces: [] }) },
         ]);
       }}>

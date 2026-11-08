@@ -2651,6 +2651,22 @@ mod tests {
     }
 
     #[test]
+    fn raw_export() {
+        // the results as a .raw file: the nodes, part currents by name, each step a plot
+        let _s = SIM.lock();
+        let src = EXAMPLES.iter().find(|e| e.0 == "step_rc").unwrap().1;
+        let nl = netlist_for_sim(&parse_asc(src), &mut Library::builtin());
+        let run = crate::ngspice::run(&nl.prepared(None, &mut vec![])).unwrap();
+        let path = std::env::temp_dir().join(format!("nomospice-test-{}.raw", std::process::id()));
+        crate::ngspice::export_raw(path.to_str().unwrap(), &run.plot, run.id).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        let text = String::from_utf8_lossy(&bytes);
+        assert_eq!(text.matches("Plotname:").count(), 3, "one plot per step");
+        assert!(text.contains("v(out)") && text.contains("i(r1)") && !text.contains("vsense"), "{}", &text[..text.find("Binary:").unwrap_or(400).min(text.len())]);
+    }
+
+    #[test]
     fn drawings_roundtrip() {
         // the schematic's own drawings: read as items, written back as they were (an unreadable one: raw)
         let src = "Version 4\nSHEET 1 880 680\nLINE Normal 0 16 64 16 2\nRECTANGLE Wide -16 0 64 80\nARC Normal 0 0 32 32 0 16 32 16\nLINE Normal 0 0\nCIRCLE Normal 0 0 8 8\nLINE 0 16 64 16 2\n";
