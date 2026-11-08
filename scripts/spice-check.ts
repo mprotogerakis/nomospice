@@ -1,6 +1,6 @@
 // Self-check of src/spice.ts (the form editors' SPICE parsing/formatting): node scripts/spice-check.ts
 import assert from "node:assert/strict";
-import { box, connectivity, dragPlan, drawShape, hit, shifted } from "../src/geom.ts";
+import { box, connectivity, dragPlan, hit, outline, shifted } from "../src/geom.ts";
 import {
   tokens, formatAnalysis, formatIc, formatInclude, formatMeas, formatModel, formatParams, formatSource, numInfo, parseAnalysis,
   parseIc, parseInclude, parseMeas, parseModel, parseParams, parseSource, sample, si, spiceNum, directiveKind, analysisRoundTrips, analysisEditable, analysisOptions, analysisLineIndex, at, integrate, stripAnalyses, portablePaths, sourceRoundTrips,
@@ -273,7 +273,7 @@ assert.equal(setParam("l= Lmin w=1u", "l", "2u"), "l=2u w=1u");
 // a schematic's own drawings: drawn as shapes, moved by all their points, picked by their outline
 {
   const rect = { t: "draw" as const, kind: "RECTANGLE", width: "Normal", p: [64, 80, -16, 0], style: 2 };
-  assert.deepEqual(drawShape(rect), ["rect", [64, 80, -16, 0, 2]]);
+  assert.equal(outline(rect).length, 5, "a rectangle: its four sides");
   assert.deepEqual(box(rect, {}), [-16, 0, 64, 80]);
   assert.deepEqual((shifted(rect, 16, -16) as typeof rect).p, [80, 64, 0, -16]);
   assert.equal(hit([rect], {}, [24, 1], 4), 0, "its edge");

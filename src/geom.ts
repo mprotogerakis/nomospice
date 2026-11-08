@@ -90,9 +90,6 @@ export function box(it: Item, lib: Lib, left?: Set<string>): Box | null {
   }
 }
 
-/** A drawing as a symbol's shape is drawn: [line | rect | circle | arc, its points, then its style]. */
-const SHAPE: Record<string, string> = { LINE: "line", RECTANGLE: "rect", CIRCLE: "circle", ARC: "arc" };
-export const drawShape = (it: Extract<Item, { t: "draw" }>): [string, number[]] => [SHAPE[it.kind.toUpperCase()] ?? "line", [...it.p, it.style ?? 0]];
 
 export const union = (all: (Box | null)[]): Box | null => {
   const bs = all.filter((b): b is Box => !!b);
@@ -123,8 +120,8 @@ const RANK = { flag: 0, text: 1, wire: 2, sym: 3, draw: 4 } as const;
 /** A drawing's outline as a polyline: a line, a rectangle's four sides, a circle's or an arc's
  *  curve in 64 segments (an arc's drawn part only: counter-clockwise on screen from its start
  *  ray to its end ray, as it is drawn; both rays alike: the whole ellipse, as LTspice does). */
-function outline(it: Extract<Item, { t: "draw" }>): Pt[] {
-  const [x1, y1, x2, y2] = it.p, k = it.kind.toUpperCase();
+export function outline(it: Extract<Item, { t: "draw" }>): Pt[] {
+  const [x1, y1, x2, y2] = it.p, k = it.kind;
   if (k === "LINE") return [[x1, y1], [x2, y2]];
   if (k === "RECTANGLE") return [[x1, y1], [x2, y1], [x2, y2], [x1, y2], [x1, y1]];
   const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2, rx = Math.abs(x2 - x1) / 2, ry = Math.abs(y2 - y1) / 2;
@@ -142,8 +139,11 @@ const inBox = (b: Box, p: Pt, tol: number) => p[0] >= b[0] - tol && p[0] <= b[2]
 /** Whether p is on a drawing's outline (within tol; its box first): a frame is picked by its edge,
  *  not its inside, so the circuit it frames stays clickable. */
 function onDrawing(it: Extract<Item, { t: "draw" }>, p: Pt, tol: number) {
+  // (the box of its first two points first, without any trigonometry: an arc lies within its ellipse's)
+  const [x1, y1, x2, y2] = it.p;
+  if (!inBox([Math.min(x1, x2), Math.min(y1, y2), Math.max(x1, x2), Math.max(y1, y2)], p, tol)) return false;
   const o = outline(it);
-  return inBox(boxOf(o), p, tol) && o.some((a, j) => j > 0 && distSeg(p, o[j - 1][0], o[j - 1][1], a[0], a[1]) <= tol);
+  return o.some((a, j) => j > 0 && distSeg(p, o[j - 1][0], o[j - 1][1], a[0], a[1]) <= tol);
 }
 /** Topmost item under p; flags > texts > wires > symbols > drawings (`drawings` false: none of
  *  them, while probing: no target there). */

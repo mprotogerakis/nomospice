@@ -50,8 +50,8 @@ function shape(v: unknown): Shape | null {
   const it = v as Record<string, unknown>;
   if (!it || typeof it !== "object") return null;
   if (it.t === "wire" && [it.x1, it.y1, it.x2, it.y2].every(num) && (it.x1 !== it.x2 || it.y1 !== it.y2)) return { t: "wire", x1: it.x1 as number, y1: it.y1 as number, x2: it.x2 as number, y2: it.y2 as number };
-  // (a drawing: its kind, pen, all its points, a line style if any)
-  // (the pen as LTspice knows it, Normal or Wide; a style 0 … 4, another as solid)
+  // (a drawing: its kind, all its points; its pen as LTspice knows it, Normal or Wide; a style
+  // 0 … 4, another as solid)
   if (it.t === "draw" && typeof it.kind === "string" && /^(LINE|RECTANGLE|CIRCLE|ARC)$/i.test(it.kind) && Array.isArray(it.p) && it.p.length === (/^arc$/i.test(it.kind) ? 8 : 4) && it.p.every(num) && (it.style == null || num(it.style)))
     return { t: "draw", kind: it.kind.toUpperCase(), width: /^wide$/i.test(String(it.width)) ? "Wide" : "Normal", p: it.p as number[], ...(it.style != null ? { style: (it.style as number) >= 0 && (it.style as number) <= 4 ? (it.style as number) : 0 } : {}) };
   if (!num(it.x) || !num(it.y)) return null;
@@ -111,8 +111,9 @@ function pasteText(text: string): boolean {
   const its = (Array.isArray(raw) ? raw : []).map(shape).filter((x): x is Shape => !!x);
   if (!its.length) return false;
   // (anchored by what is drawn: not an arc's rays, which may reach far out)
-  const bs = its.map((it) => (it.t === "wire" ? [it.x1, it.y1, it.x2, it.y2] : it.t === "draw" ? box(it, {})! : [it.x, it.y, it.x, it.y]));
-  const [x0, y0] = [snap(Math.min(...bs.map((b) => b[0]))), snap(Math.min(...bs.map((b) => b[1])))];
+  const bs = its.map((it) => (it.t === "wire" ? [Math.min(it.x1, it.x2), Math.min(it.y1, it.y2)] : it.t === "draw" ? box(it, {})! : [it.x, it.y]));
+  // (reduce, not Math.min(...): a whole big schematic would overflow the call's arguments)
+  const [x0, y0] = [snap(bs.reduce((m, b) => Math.min(m, b[0]), Infinity)), snap(bs.reduce((m, b) => Math.min(m, b[1]), Infinity))];
   // (a group wider than any schematic: placed anywhere it would leave the core's coordinates;
   // every coordinate, an arc's rays too)
   const coords = its.flatMap((it) => (it.t === "wire" ? [[it.x1, it.y1], [it.x2, it.y2]] : it.t === "draw" ? it.p.flatMap((v, k) => (k % 2 ? [] : [[v, it.p[k + 1]]])) : [[it.x, it.y]]));

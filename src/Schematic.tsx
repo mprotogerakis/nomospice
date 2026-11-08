@@ -5,7 +5,7 @@ import { useShallow } from "zustand/react/shallow";
 import { Maximize, Minus, Plus } from "lucide-react";
 import type { Item, Shape, SymbolDef } from "./types";
 import {
-  box, connectivity, defOf, dragPlan, drawShape, mirror, pins, prefixOf, rotate, dropZeroWires, dropZeroWiresKeepSel, GRID, hit, isShape, labelRect, leftLabels, matrix, shifted, snap, symBox,
+  box, connectivity, defOf, dragPlan, mirror, outline, pins, prefixOf, rotate, dropZeroWires, dropZeroWiresKeepSel, GRID, hit, isShape, labelRect, leftLabels, matrix, shifted, snap, symBox,
   textLines, union, xform, type Box, type Lib, type Pt,
 } from "./geom";
 import { canProbe, commit, currentNets, nextInst, partCurrent, powerMode, powerName, probe, probeMode, simulate, useS, useStatus } from "./store";
@@ -34,7 +34,6 @@ const PROBE_I = cursorSvg("<circle cx='13' cy='11' r='7' fill='none' stroke='%23
 function arcPath([x1, y1, x2, y2, sx, sy, ex, ey]: number[]) {
   const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2, rx = Math.abs(x2 - x1) / 2 || 1, ry = Math.abs(y2 - y1) / 2 || 1;
   const a0 = Math.atan2((sy - cy) / ry, (sx - cx) / rx), a1 = Math.atan2((ey - cy) / ry, (ex - cx) / rx);
-  if (x1 === x2 || y1 === y2) return `M${x1} ${y1}L${x2} ${y2}`; // (flat: a line, as it is picked)
   let d = a0 - a1; // LTspice/GDI arcs run counter-clockwise on screen
   if (d <= 1e-9) d += 2 * Math.PI;
   const p = (a: number) => `${cx + rx * Math.cos(a)} ${cy + ry * Math.sin(a)}`;
@@ -48,15 +47,20 @@ function arcPath([x1, y1, x2, y2, sx, sy, ex, ey]: number[]) {
 /** LTspice line styles after the coordinates: 1 dash, 2 dot, 3 dash-dot, 4 dash-dot-dot (screen px). */
 const DASH: Record<number, string> = { 1: "5 4", 2: "1 3", 3: "5 3 1 3", 4: "5 3 1 3 1 3" };
 
-/** A symbol's shape, or a schematic's own drawing (drawShape): line, rect, circle or arc, then its style. */
+/** A symbol's shape: line, rect, circle or arc, then its style. */
 function shapeEl(k: string, p: number[], key: number | string) {
   const s = { vectorEffect: "non-scaling-stroke", strokeDasharray: DASH[p[k === "arc" ? 8 : 4]] } as const;
   return k === "line" ? <line key={key} {...s} x1={p[0]} y1={p[1]} x2={p[2]} y2={p[3]} />
   : k === "rect" ? <rect key={key} {...s} x={Math.min(p[0], p[2])} y={Math.min(p[1], p[3])} width={Math.abs(p[2] - p[0])} height={Math.abs(p[3] - p[1])} />
-  // (a flat one, 0 wide or high: a line, as it is picked; SVG would not draw an ellipse of radius 0)
-  : k === "circle" ? (p[0] === p[2] || p[1] === p[3] ? <line key={key} {...s} x1={p[0]} y1={p[1]} x2={p[2]} y2={p[3]} /> : <ellipse key={key} {...s} cx={(p[0] + p[2]) / 2} cy={(p[1] + p[3]) / 2} rx={Math.abs(p[2] - p[0]) / 2} ry={Math.abs(p[3] - p[1]) / 2} />)
+  : k === "circle" ? <ellipse key={key} {...s} cx={(p[0] + p[2]) / 2} cy={(p[1] + p[3]) / 2} rx={Math.abs(p[2] - p[0]) / 2} ry={Math.abs(p[3] - p[1]) / 2} />
   : <path key={key} {...s} d={arcPath(p)} />;
 }
+
+/** A schematic's own drawing: the very outline it is picked and boxed by (geom's outline: a
+ *  polyline, a circle's or an arc's curve in 64 segments), so what is seen is what is hit. */
+const drawEl = (it: Extract<Item, { t: "draw" }>) => (
+  <polyline points={outline(it).map((q) => q.join(",")).join(" ")} vectorEffect="non-scaling-stroke" strokeDasharray={DASH[it.style ?? 0]} strokeLinejoin="round" />
+);
 
 function SymbolGraphics({ def }: { def: SymbolDef }) {
   return (
@@ -134,7 +138,7 @@ const ItemView = memo(function ItemView({ it, lib, leftward }: { it: Shape; lib:
   switch (it.t) {
     case "wire": return <line x1={it.x1} y1={it.y1} x2={it.x2} y2={it.y2} />;
     // (a Wide pen: heavier than the 1.6 of the group around it)
-    case "draw": return <g strokeWidth={/^wide$/i.test(it.width) ? 3 : undefined}>{shapeEl(...drawShape(it), 0)}</g>;
+    case "draw": return <g strokeWidth={/^wide$/i.test(it.width) ? 3 : undefined}>{drawEl(it)}</g>;
     case "flag": return <Flag it={it} leftward={!!leftward} />;
     case "text":
       return (
@@ -365,7 +369,7 @@ export const Schematic = memo(function Schematic() {
 
   const placed = (it: Item, [x, y]: Pt): Item => {
     if (it.t === "wire" || it.t === "raw") return it;
-    if (it.t === "draw") return ((b) => shifted(it, x - b[0], y - b[1]))(box(it, lib)!); // (what is drawn at the cursor, as a paste: duplicated, it follows)
+    if (it.t === "draw") return ((b) => shifted(it, x - snap(b[0]), y - snap(b[1])))(box(it, lib)!); // (what is drawn at the cursor, as a paste, by whole grid steps: the core keeps integers)
     if (it.t === "sym" && !it.attrs.InstName) {
       const def = defOf(lib, it);
       return { ...it, x, y, attrs: { InstName: nextInst(items, prefixOf(it, def) || "X"), ...it.attrs } };
@@ -444,7 +448,6 @@ export const Schematic = memo(function Schematic() {
       const i = hit(items, lib, p, 6 / view.k);
       if (i >= 0) commit(items.filter((_, j) => j !== i), []), setHover(-1);
     } else {
-      // (probing: a drawing is no target; a click on its edge plots or pans, as before it was one)
       const i = hit(items, lib, p, 6 / view.k, !probing); // (probing: a drawing is no target; its edge plots or pans)
       if (i >= 0) {
         let next = sel;
@@ -528,7 +531,7 @@ export const Schematic = memo(function Schematic() {
     if (tool.k === "wire" && wireStart) return setWireStart(null);
     if (!selecting) return useS.setState({ tool: { k: "select" } });
     const p = toWorld(e), g: Pt = [snap(p[0]), snap(p[1])];
-    const i = hit(items, lib, p, 6 / view.k);
+    const i = hit(items, lib, p, 6 / view.k, !probing); // (as hover and click: no drawing while probing)
     // right-click acts on what is under the pointer: it joins/sets the selection first
     if (i >= 0 && !selSet.has(i)) useS.setState({ sel: [i] });
     openMenu(e.clientX, e.clientY, menuFor(i, g, i >= 0 && selSet.has(i) ? sel.length : 1));
@@ -771,7 +774,7 @@ const MiniMap = memo(function MiniMap({ items, lib, view, size, onCenter }: { it
     >
       {items.map((it, i) => {
         if (it.t === "wire") return <line key={i} x1={it.x1} y1={it.y1} x2={it.x2} y2={it.y2} stroke="var(--sch-wire)" strokeOpacity={0.5} strokeWidth={1} vectorEffect="non-scaling-stroke" />;
-        if (it.t === "draw") return <g key={i} stroke="var(--sch-drawing)" strokeOpacity={0.5} strokeWidth={1} fill="none">{shapeEl(...drawShape(it), 0)}</g>; // (a frame: an outline, not a block over the circuit)
+        if (it.t === "draw") return <g key={i} stroke="var(--sch-drawing)" strokeOpacity={0.5} strokeWidth={1} fill="none">{drawEl(it)}</g>; // (a frame: an outline, not a block over the circuit)
         const b = boxes[i];
         return b && <rect key={i} x={b[0]} y={b[1]} width={Math.max(b[2] - b[0], 4)} height={Math.max(b[3] - b[1], 3)} rx={1} fill="var(--text-tertiary)" fillOpacity={0.5} />;
       })}
