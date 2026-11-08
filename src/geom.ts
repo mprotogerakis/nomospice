@@ -72,7 +72,7 @@ export function pinLine(extra?: string[]) {
   const l = extra?.find((x) => x.trimStart().startsWith("PIN "));
   if (!l) return null;
   const [, , , just = "NONE", off = ""] = l.trim().split(/\s+/);
-  return { just: just.toUpperCase(), off: +off || 8 };
+  return { just: just.toUpperCase(), off: off === "" || isNaN(+off) ? 8 : +off };
 }
 
 /** Label pill geometry (shared by drawing and hit-testing). */

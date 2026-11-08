@@ -570,7 +570,7 @@ pub fn asy_items(src: &str) -> Vec<Item> {
             Some("PINATTR") if matches!(items.last(), Some(Item::Flag { .. })) => {
                 if let Some(Item::Flag { name, extra, .. }) = items.last_mut() {
                     match tok.get(1) {
-                        Some(&"PinName") => *name = rest(2),
+                        Some(&"PinName") => *name = rest(2).trim().to_string(), // (as parse_asy reads it)
                         _ => extra.push(line.to_string()),
                     }
                 }

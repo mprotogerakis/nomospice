@@ -10,6 +10,7 @@ import { closeDialog as close, Field, FIELD, Modal, numHelp, NumField, Rows, Tex
 import { SourceEditor } from "./SourceEditor";
 import { SimDialog } from "./SimDialog";
 import { DirectiveDialog } from "./DirectiveDialog";
+import { forDoc } from "./actions";
 import { analysisEditable, analysisEditableAt, analysisLine, analysisLineIndex, analysisOptions, balanced, exprUnit, getParam, paramValue, setParam, spiceNum, tokens, xUnitOf } from "./spice";
 import { cn, keys as shortcut } from "@/lib/utils";
 import thirdParty from "./third-party.json";
@@ -36,7 +37,7 @@ function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: 
   const lib = useS((s) => s.lib);
   // (a label in a symbol is one of its pins: a PIN line always, where its name shows)
   const symbol = useS((s) => isSymbolDoc(s.path));
-  const [it, setIt] = useState(item.t === "flag" && symbol && !pinJust(item.extra, "") ? { ...item, extra: [`PIN ${item.x} ${item.y} NONE 8`, ...(item.extra ?? [])] } : item);
+  const [it, setIt] = useState(item.t === "flag" && symbol ? forDoc(item, false) : item);
   const attr = (k: string) => (it.t === "sym" ? it.attrs[k] ?? "" : "");
   const setAttr = (k: string, v: string) => it.t === "sym" && setIt({ ...it, attrs: { ...it.attrs, [k]: v } });
   const def = it.t === "sym" ? defOf(lib, it) : undefined;

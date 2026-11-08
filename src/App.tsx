@@ -133,8 +133,8 @@ async function openPath(path: string) {
   const base = path.replace(/\.[^./\\]*$/, "");
   let asc = `${base}.asc`;
   for (let k = 2; await invoke<boolean>("path_exists", { path: asc }); k++) asc = `${base}-${k}.asc`;
-  await loadDoc(items, asc);
-  useS.setState({ dirty: true, unwritten: asc }); // (its first save asks where, offering this name: a file made there since is not overwritten unasked)
+  await loadDoc(items, asc, true); // (its first save asks where, offering this name: a file made there since is not overwritten unasked)
+  useS.setState({ dirty: true });
 }
 let saveQueue: Promise<unknown> = Promise.resolve();
 
@@ -160,7 +160,12 @@ async function saveFile(as = false): Promise<boolean> {
   let path = prev;
   if (as || !path || path === useS.getState().unwritten) path = await save({ filters, defaultPath: path ?? `untitled.${ext}` });
   if (!path) return false;
-  if (!/\.as[cy]$/i.test(path)) { // (a name typed as a schematic or a symbol: as typed)
+  if (/\.as[cy]$/i.test(path) && isSymbolDoc(path) !== isSymbolDoc(prev ?? "")) {
+    // (a schematic is no symbol, nor the other way round: written as one, the other's lines are lost)
+    await message(`A ${isSymbolDoc(prev ?? "") ? "symbol saves as .asy" : "schematic saves as .asc"}.`, { title: "nomospice" });
+    return false;
+  }
+  if (!path.toLowerCase().endsWith(`.${ext}`)) {
     // GTK save dialogs do not add the filter's extension, and checked for overwrite without it
     path += `.${ext}`;
     if ((await invoke<boolean>("path_exists", { path })) && !(await ask(`${fileName(path)} already exists. Replace it?`, { title: "nomospice", kind: "warning" }))) return false;
@@ -221,9 +226,7 @@ async function newSymbol() {
   const dir = dirOf(useS.getState().path), base = `${dir ? `${dir}/` : ""}untitled`;
   let path = `${base}.asy`;
   for (let k = 2; dir && (await invoke<boolean>("path_exists", { path })); k++) path = `${base}-${k}.asy`;
-  await loadDoc([{ t: "raw", line: "SymbolType CELL" }, { t: "raw", line: "SYMATTR Prefix X" }], path);
-  useS.setState({ unwritten: path });
-  refreshGit();
+  await loadDoc([{ t: "raw", line: "SymbolType CELL" }, { t: "raw", line: "SYMATTR Prefix X" }], path, true);
 }
 
 /** A block's schematic in place of this one (`up`: the one above); the way back is kept. */
@@ -304,11 +307,11 @@ export function App() {
       const restore = Array.isArray(rec?.items) && (await ask(`Restore unsaved changes${rec.path ? ` to ${rec.path}` : ""} from the last session?`, { title: "nomospice", kind: "info" }));
       await invoke("recovery_resolve", { keep: restore }).catch(() => {}); // restore: becomes our recovery file
       if (restore) {
-        await loadDoc(rec!.items, rec!.path);
-        useS.setState({ dirty: true });
         // (a document never written, an opened netlist's .asc: its first save asks, as it would have;
         // as the snapshot says, else by whether its file is there)
-        if (rec!.path && (rec!.unwritten === rec!.path || !(await invoke<boolean>("path_exists", { path: rec!.path })))) useS.setState({ unwritten: rec!.path });
+        const unwritten = !!rec!.path && (rec!.unwritten === rec!.path || !(await invoke<boolean>("path_exists", { path: rec!.path })));
+        await loadDoc(rec!.items, rec!.path, unwritten);
+        useS.setState({ dirty: true });
         if (file) await message(`${file} was not opened because the previous session was restored.`, { title: "nomospice" });
         return;
       }

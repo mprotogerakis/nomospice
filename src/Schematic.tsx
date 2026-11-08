@@ -636,13 +636,13 @@ export const Schematic = memo(function Schematic() {
         const kind = ({ D: "D", Q: "NPN|PNP", M: "NMOS|PMOS|VDMOS", J: "NJF|PJF", X: "SUBCKT" } as Record<string, string>)[prefix];
         // its schematic opens (to fix one the netlist refuses, too), unless it is this one (a test
         // bench of its part); a model is chosen for a part the netlist runs as no block
-        const sheet = defOf(lib, it)?.sheet, here = sheet === useS.getState().path;
+        const { sheet, file } = defOf(lib, it) ?? {}, here = sheet === useS.getState().path;
         const block = nets ? !!nets.sheets?.[i] : !!sheet && !here;
         return [
           { label: "Edit…", hint: probing ? undefined : "dbl-click", run: edit },
           ...(sheet && !here ? [{ label: "Open its schematic", run: () => window.dispatchEvent(new CustomEvent("nomospice:sheet", { detail: sheet })) }] : []),
           // (a symbol of the schematic's folder: drawn there, edited there)
-          ...(defOf(lib, it)?.file ? [{ label: "Edit its symbol", run: () => window.dispatchEvent(new CustomEvent("nomospice:sheet", { detail: defOf(lib, it)!.file })) }] : []),
+          ...(file ? [{ label: "Edit its symbol", run: () => window.dispatchEvent(new CustomEvent("nomospice:sheet", { detail: file })) }] : []),
           ...(kind && !block ? [{ label: "Choose model from library…", run: () => set({ dialog: { k: "parts", replace: i, kind } }) }] : []),
           ...plot,
           "-", ...arrange,

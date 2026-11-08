@@ -212,11 +212,12 @@ export async function refreshLibrarySymbols() {
   await loadSymbols(get().items, dirOf(get().path), { force: true }); // the backend's set replaces ours
 }
 
-export async function loadDoc(items: Item[], path: string | null) {
+/** `unwritten`: the path is that of no file yet (its first save asks where). */
+export async function loadDoc(items: Item[], path: string | null, unwritten = false) {
   await loadSymbols(items, dirOf(path), { fresh: true, force: true }); // reopening reads edited symbols
   docGen++;
   autoPlotted = new Set();
-  set({ dialog: null, menu: null, tab: null, tabs: {}, shown: null, items, path, unwritten: null, parents: path && path === get().path ? get().parents : [], past: [], future: [], sel: [], dirty: false, sim: null, traces: [], stale: false, nets: null, netsItems: null, plot: NO_PLOT, panel: get().panel === "op" ? null : get().panel, diff: null, tool: { k: "select" }, fitToken: get().fitToken + 1 });
+  set({ dialog: null, menu: null, tab: null, tabs: {}, shown: null, items, path, unwritten: unwritten ? path : null, parents: path && path === get().path ? get().parents : [], past: [], future: [], sel: [], dirty: false, sim: null, traces: [], stale: false, nets: null, netsItems: null, plot: NO_PLOT, panel: get().panel === "op" ? null : get().panel, diff: null, tool: { k: "select" }, fitToken: get().fitToken + 1 });
   refreshNets();
   refreshGit();
 }
