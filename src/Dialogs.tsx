@@ -4,7 +4,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { open } from "@tauri-apps/plugin-dialog";
 import type { Item, LibEntry, LibSource } from "./types";
 import { addTrace, analysisItem, commit, currentTab, fileName, loadSymbols, placePart, placeSymbol, refreshLibrarySymbols, setYAxis, useS } from "./store";
-import { defOf, portOf, prefixOf, sheetOf, vexpr } from "./geom";
+import { defOf, portOf, prefixOf, vexpr } from "./geom";
 import { Button } from "./ui/button";
 import { closeDialog as close, Field, FIELD, Modal, numHelp, NumField, Rows, TextField } from "./ui/dialog";
 import { SourceEditor } from "./SourceEditor";
@@ -78,7 +78,7 @@ function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: 
           {source ? <SourceEditor attrs={it.attrs} setAttrs={(attrs) => setIt({ ...it, attrs })} current={prefix === "I"} spiceLine={def?.spice_line} /> : (
             <>
               <TextField label="Value" value={attr("Value")} set={(v) => setAttr("Value", v)} autofocus unit={unit}
-                {...(valueHelp ?? {})} hint={unit ? "e.g. 4.7k, 100n, 1Meg; LTspice extras like Rser=0.1 may follow" : it.t === "sym" && sheetOf(it, def) ? "parameters for its schematic, e.g. R=10k (a .param R there is the default)" : undefined} />
+                {...(valueHelp ?? {})} hint={unit ? "e.g. 4.7k, 100n, 1Meg; LTspice extras like Rser=0.1 may follow" : def?.sheet ? "parameters for its schematic, e.g. R=10k (a .param R there is the default)" : undefined} />
               {/* (D, Q, M: their common instance parameters as fields; Value2 holds them, as SPICE reads them) */}
               {/* (Value2 itself with an open brace or quote: its items cannot be told apart, edited there) */}
               {INSTANCE[prefix] && !balanced(attr("Value2")) && <div className="text-2xs text-status-warning">⚠ Value2 has an unclosed brace or quote: edit it there.</div>}

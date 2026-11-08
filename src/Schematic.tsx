@@ -5,7 +5,7 @@ import { useShallow } from "zustand/react/shallow";
 import { Maximize, Minus, Plus } from "lucide-react";
 import type { Item, Shape, SymbolDef } from "./types";
 import {
-  box, connectivity, defOf, portOf, sheetOf, arcSpan, dragPlan, mirror, outline, pins, prefixOf, rotate, dropZeroWires, dropZeroWiresKeepSel, GRID, hit, isShape, labelRect, leftLabels, matrix, shifted, snap, symBox,
+  box, connectivity, defOf, portOf, arcSpan, dragPlan, mirror, outline, pins, prefixOf, rotate, dropZeroWires, dropZeroWiresKeepSel, GRID, hit, isShape, labelRect, leftLabels, matrix, shifted, snap, symBox,
   textLines, union, xform, type Box, type Lib, type Pt,
 } from "./geom";
 import { canProbe, commit, currentNets, nextInst, partCurrent, powerMode, powerName, probe, probeMode, simulate, useS, useStatus } from "./store";
@@ -603,8 +603,7 @@ export const Schematic = memo(function Schematic() {
         const prefix = prefixOf(it, defOf(lib, it)); // the part's own Prefix wins, as in the netlist
         const kind = ({ D: "D", Q: "NPN|PNP", M: "NMOS|PMOS|VDMOS", J: "NJF|PJF", X: "SUBCKT" } as Record<string, string>)[prefix];
         // (as the netlist takes it: a sheet that is none there, a test bench placing its own part, not)
-        // (no netlist yet: as it would decide, not this schematic itself)
-        const sheet = (nets ? nets.sheets?.[i] : ((s) => (s?.toLowerCase() !== useS.getState().path?.toLowerCase() ? s : undefined))(sheetOf(it, defOf(lib, it)))) || undefined;
+        const sheet = nets?.sheets?.[i] || undefined;
         return [
           { label: "Edit…", hint: probing ? undefined : "dbl-click", run: edit },
           ...(sheet ? [{ label: "Open its schematic", run: () => window.dispatchEvent(new CustomEvent("nomospice:sheet", { detail: sheet })) }] : []),

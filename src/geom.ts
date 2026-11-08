@@ -322,14 +322,6 @@ export function rotateInPlace(it: Sym, lib: Lib, f: (r: string) => string): Sym 
  *  symbol's, as the netlister has it. */
 export const prefixOf = (it: Sym, def?: SymbolDef) => ((it.attrs.Prefix?.trim() || def?.prefix || "")[0] ?? "").toUpperCase();
 
-/** A placed block's schematic, as the netlist takes it: its symbol has one, the part calls a
- *  subcircuit, and its Value names no other one (parameters, or the block's own name). */
-export function sheetOf(it: Sym, def?: SymbolDef) {
-  if (!def?.sheet || !["", "X"].includes(prefixOf(it, def))) return undefined;
-  const w = (it.attrs.Value ?? def.value).trim().split(/\s+/)[0];
-  return !w || w.includes("=") || /^params:$/i.test(w) || w.toLowerCase() === def.name.toLowerCase() ? def.sheet : undefined;
-}
-
 /** A label's port kind (In, Out, BiDir; "" none): its IOPIN line. */
 export const portOf = (extra?: string[]) => extra?.find((l) => l.startsWith("IOPIN "))?.split(/\s+/)[3] ?? "";
 
