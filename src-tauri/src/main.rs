@@ -259,7 +259,11 @@ async fn simulate(items: Vec<Item>, dir: Option<String>, lib: tauri::State<'_, L
 async fn root_locus(items: Vec<Item>, dir: Option<String>, target: String, values: Vec<f64>, lib: tauri::State<'_, Lib>) -> Result<Vec<Option<Vec<(f64, f64)>>>, String> {
     let op = ngspice::begin();
     let gen = SWEEP_GEN.load(std::sync::atomic::Ordering::SeqCst); // at once: a cancel while netlisting counts
-    let sim = schematic::netlist_for_sim(&items, &mut lib_at(&lib, dir.as_deref()));
+    let sim = {
+        let mut lib = lib_at(&lib, dir.as_deref());
+        lib.reread_sheets(); // (a run reads the blocks' schematics again)
+        schematic::netlist_for_sim(&items, &mut lib)
+    };
     // Halt, a new simulation or the panel's Halt: also mid-step (bg_halt)
     let stop = move || ngspice::halted_since(op) || SWEEP_GEN.load(std::sync::atomic::Ordering::SeqCst) != gen;
     tauri::async_runtime::spawn_blocking(move || {

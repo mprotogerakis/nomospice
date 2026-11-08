@@ -252,8 +252,8 @@ pub fn folder_contents(dir: &std::path::Path) -> (HashMap<String, std::path::Pat
     (keyed(&files, "asy").into_iter().filter(|(k, _)| !builtin_symbol(k)).collect(), keyed(&files, "asc").into_iter().collect())
 }
 
-/// (count, a sum over names, modification times and sizes) of a folder's symbol files (the list
-/// `folder_symbols` gave).
+/// (count, a sum over names, modification times and sizes) of a folder's symbol files (as
+/// `folder_contents` lists them).
 fn asy_stamp(list: &[(String, std::path::PathBuf)]) -> (usize, u64) {
     use std::hash::{Hash, Hasher};
     let mut files: Vec<_> = list.iter().filter_map(|(_, p)| Some((p.file_name()?.to_os_string(), p.metadata().ok()?))).map(|(name, m)| (name, m.modified().ok(), m.len())).collect();
@@ -736,8 +736,8 @@ struct Hier {
     /// each block symbol's subcircuit name, unique (two symbols whose names read alike as SPICE
     /// names get two)
     names: HashMap<String, String>,
-    /// the library definitions the sheets need, each once: the top netlist's too (after the
-    /// hoisted includes, which win as in the top schematic itself), and the names they define
+    /// the library definitions the sheets need, each once: the top netlist's too (a sheet's own
+    /// includes, in its subcircuit, win there), and the names they define
     models: Vec<String>,
     emitted: HashSet<String>,
 
@@ -2061,7 +2061,7 @@ pub fn netlist_for_sim(items: &[Item], lib: &mut Library) -> Netlist {
 pub const SENSED: &str = "RCLDQMJX";
 
 /// Directives a block's sheet keeps (definitions); its analyses, .meas, .options … are the top
-/// schematic's business, as in LTspice.
+/// schematic's business, as in LTspice (in a sheet they are its own test bench).
 const SHEET_KEEPS: [&str; 13] = [".param", ".func", ".function", ".model", ".subckt", ".ends", ".include", ".inc", ".lib", ".endl", ".ic", ".nodeset", ".global"];
 
 /// `h.stack`: the blocks being netlisted, outermost first (empty: the top schematic; else a sheet's
@@ -2209,7 +2209,6 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
 
     // 4. directives (`.control` blocks are removed later by `prepare`, the single security filter)
     let mut directives = vec![];
-    let mut ignored: Vec<String> = vec![]; // a sheet's commands left out
     for it in items {
         if let Item::Text { text, directive: true, .. } = it {
             let mut skipped = false; // `+` continuation lines of a skipped directive go too
@@ -2225,10 +2224,8 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
                     if head.starts_with(['*', ';']) {
                         continue; // (a comment: no use in its subcircuit, and a dropped command's `+` lines still go)
                     }
+                    // (its analyses, .meas, .options …: the sheet's own test bench, unsaid)
                     if control || if more { skipped } else { head.starts_with('.') && !SHEET_KEEPS.contains(&head) } {
-                        if !more && head.starts_with('.') && head != ".end" && head != ".endc" && !ignored.iter().any(|h| h == head) {
-                            ignored.push(head.to_string());
-                        }
                         skipped = true;
                         continue;
                     }
@@ -2287,9 +2284,6 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
     }).collect();
 
     // 5. element lines
-    if !ignored.is_empty() {
-        nl.warnings.push(format!("{} not run: a block's sheet runs as a part of the top schematic, whose commands count", ignored.join(", ")));
-    }
 
     let mut lines = if sub { vec![] } else { vec!["* nomospice netlist".to_string()] };
     let mut used_models = vec![];
@@ -2694,6 +2688,8 @@ fn sheet_subckt(name: &str, path: &str, def: &SymbolDef, lib: &mut Library, h: &
     let label = |pin: &str| sheet_label(&items, pin);
     // (netlisted on trial: refused, what it added goes again, but for what it found refused and
     // the names it gave: true anyway, and not to be found again)
+    // ponytail: the whole state copied per sheet (blocks so far, models); undo by lengths if big
+    // hierarchies make editing lag
     let mut trial = h.clone();
     let keep = |trial: Hier, h: &mut Hier| (h.refused, h.names) = (trial.refused, trial.names);
     trial.stack.push((name.to_string(), said.clone()));
@@ -2725,8 +2721,12 @@ fn sheet_subckt(name: &str, path: &str, def: &SymbolDef, lib: &mut Library, h: &
     // (its .global lines: the top netlist's; not those inside a .subckt of its own)
     let mut body = vec![];
     for l in &lines {
-        if l.top && l.low.split_whitespace().next() == Some(".global") {
-            h.hoisted.push(l.line.to_string());
+        if l.top && l.head == ".global" {
+            // (with its `+` lines, as one: alike ones of two sheets are one)
+            match h.hoisted.last_mut().filter(|_| l.line.trim_start().starts_with('+')) {
+                Some(g) => (g.push('\n'), g.push_str(l.line)).1,
+                None => h.hoisted.push(l.line.to_string()),
+            }
         } else {
             body.push(l.line.to_string());
         }
@@ -3099,7 +3099,7 @@ mod tests {
         // a divider of R={R} (its own .param 1k) over 1k; its .tran is not run (the top's .op is)
         let div = "Version 4\nSHEET 1 880 680\nFLAG 16 16 in\nIOPIN 0 0 In\nFLAG 16 96 out\nIOPIN 16 96 Out\nFLAG 160 16 OUT\nIOPIN 160 16 Out\nFLAG 160 96 0\n\
 SYMBOL res 0 0 R0\nSYMATTR InstName R1\nSYMATTR Value {R}\nSYMBOL res 144 0 R0\nSYMATTR InstName R2\nSYMATTR Value 1k\n\
-TEXT 0 200 Left 2 !.param R=1k\\n.tran 1m\\n.control\\nrun\\n.endc\\n.global vcc\\n.include m.lib\n";
+TEXT 0 200 Left 2 !.param R=1k\\n.tran 1m\\n.control\\nrun\\n.endc\\n.global vcc\\n+ vdd\\n.include m.lib\n";
         assert!(write_asc(&parse_asc(div)).contains("FLAG 16 16 in\nIOPIN 16 16 In\n"), "a port's IOPIN where its label is");
         // its symbol from its ports: in left, out right (once), as pins of those names
         let asy = block_asy(&parse_asc(div)).unwrap();
@@ -3151,8 +3151,8 @@ SYMBOL half 400 300 R0\nSYMATTR InstName U4\nSYMATTR Value R=3k\nFLAG 352 300 a\
         assert_eq!(t.matches(".subckt sheet_div ").count(), 1, "one definition for both: {t}");
         assert!(t.contains(".subckt sheet_div in out params: r=0\n") && t.contains("\n.param R=1k\n") && !t.contains(".tran"), "{t}");
         assert!(t.lines().any(|l| l.starts_with("XU2 ") && l.ends_with(" sheet_div R = 3k")), "{t}");
-        assert!(nl.warnings.iter().any(|w| w.starts_with("Div.asc: .tran, .control not run")), "{:?}", nl.warnings);
-        assert!(!t.contains("\nrun\n") && t.matches(".global vcc").count() == 1 && t.find(".global vcc") < t.find(".subckt"), "no .control, one .global at the top: {t}");
+        assert!(!nl.warnings.iter().any(|w| w.starts_with("Div.asc")), "its own test bench unsaid: {:?}", nl.warnings);
+        assert!(!t.contains("\nrun\n") && t.matches(".global vcc\n+ vdd\n").count() == 1 && t.find(".global vcc") < t.find(".subckt"), "no .control, one .global at the top: {t}");
         assert!(t.matches(".include m.lib").count() == 2 && t.find(".include m.lib") > t.find(".subckt"), "a sheet's include in its subcircuit: {t}");
         assert!(t.matches(".model 1N4148").count() == 1 && t.find(".model 1N4148") < t.find(".subckt"), "a sheet's library model at the top (its include's, in its subcircuit, wins there): {t}");
         let prepared = prepare(t, Some(&dir), &mut vec![]);
