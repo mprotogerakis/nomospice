@@ -580,22 +580,40 @@ fn plot_vectors(api: &Api, plot: &str, sensors: &[crate::schematic::Sensor], par
 }
 
 /// A part current's name in a .raw file: its sensor's branch copied to `r1#branch`, which ngspice
-/// writes as `i(r1)` (`Ib(Q1)` as `i(q1:b)`, `Ix(U1:OUT)` as `i(u1:out)`).
+/// writes as `i(r1)` (`Ib(Q1)` as `i(q1:b)`, `Ix(U1:OUT)` as `i(u1:out)`); a character ngspice's
+/// `let` would read otherwise (`.` a plot, `+` an operator) as `_`.
 fn raw_name(label: &str) -> Option<String> {
     let (head, inner) = label.strip_suffix(')')?.split_once('(')?;
     let pin = head.strip_prefix(['I', 'i'])?.to_ascii_lowercase();
     let inner = inner.to_ascii_lowercase();
     let name = if pin.is_empty() || inner.contains(':') { inner } else { format!("{inner}:{pin}") };
-    name.chars().all(|c| c.is_ascii_alphanumeric() || "_:.+-".contains(c)).then(|| format!("{name}#branch"))
+    let name: String = name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == ':' { c } else { '_' }).collect();
+    (!name.is_empty()).then(|| format!("{name}#branch"))
 }
 
-/// Run `run`'s results as a .raw file (ngspice's binary raw format, which other tools read): the
-/// vectors the results list (not the current sensors' helpers), the part currents by name
-/// (`i(r1)`, `i(q1:b)`), a .step run's steps one plot each, in their order.
+/// Every vector of `plot`, as ngspice has them.
+fn all_vectors(api: &Api, plot: &str) -> Vec<String> {
+    let mut out = vec![];
+    let cplot = CString::new(plot).unwrap_or_default();
+    let mut p = unsafe { (api.all_vecs)(cplot.as_ptr()) };
+    while !p.is_null() && unsafe { !(*p).is_null() } {
+        out.push(cstr(unsafe { *p }));
+        p = unsafe { p.add(1) };
+    }
+    out
+}
+
+/// Run `run`'s results as a .raw file at `path` (ngspice's binary raw format, which other tools
+/// read): the vectors the results list (not the current sensors' helpers), the part currents by
+/// name (`i(r1)`, `i(q1:b)`), a .step run's steps one plot each, in their order. ngspice writes it
+/// in the app's own folder (a path of the user's never goes through its command line, which reads
+/// `$`, backquotes and braces), then it is copied there: a failed export leaves `path` as it was.
 pub fn export_raw(path: &str, plot: &str, run: u64) -> Result<(), String> {
-    // (quoted for ngspice's command line, which has no escape for a quote)
-    if path.contains(['\'', '\n', '\r']) {
-        return Err(format!("{path}: a file name with a quote or a line break cannot be written by ngspice"));
+    let dir = SCRATCH.get().cloned().unwrap_or_else(std::env::temp_dir);
+    let tmp = dir.join(format!("nomospice-export-{}.raw", std::process::id()));
+    let shown = tmp.to_string_lossy().replace('\\', "/");
+    if !shown.chars().all(|c| c.is_ascii_alphanumeric() || " /._-:~".contains(c)) {
+        return Err(format!("the app's folder {shown} has characters ngspice's command line would read: cannot write there"));
     }
     let (of, sensors, steps) = SENSORS.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let sensors = sensors.filter(|_| of == run).unwrap_or_else(|| std::sync::Arc::from([]));
@@ -605,33 +623,62 @@ pub fn export_raw(path: &str, plot: &str, run: u64) -> Result<(), String> {
     if RUNS.load(Ordering::SeqCst) != run {
         return Err("the results were replaced by a later run (a root locus or another simulation): run the simulation again".into());
     }
-    let _ = std::fs::remove_file(path); // (written afresh: the steps are appended to it)
+    let _ = std::fs::remove_file(&tmp);
     let plots: Vec<String> = if steps.is_empty() { vec![plot.to_string()] } else { steps.to_vec() };
+    let branches: std::collections::HashSet<String> = sensors.iter().map(|s| format!("{}#branch", s.source)).collect();
+    // (plainwrite: the names as they are, `vout+` a node, not a sum)
     api.command("set filetype=binary");
+    api.command("set plainwrite");
+    let mut failed = None;
     for (k, p) in plots.iter().enumerate() {
         api.command(&format!("setplot {p}"));
-        let (vectors, scale) = plot_vectors(api, p, &sensors, 0);
-        let branch = |s: &crate::schematic::Sensor| format!("{}#branch", s.source);
-        let mut names: Vec<String> = vectors.into_iter().filter(|v| *v != scale && !sensors.iter().any(|s| *v == branch(s))).collect();
+        let (vectors, scale) = plot_vectors(api, p, &sensors, 99); // (99: every .meas par() helper left out)
+        let mut names: Vec<String> = vectors.into_iter().filter(|v| *v != scale && !branches.contains(v)).collect();
+        // the part currents under their names; one that is a vector already (an inductor's own
+        // branch, l1#branch): kept aside meanwhile and put back, the results unchanged
+        let had: std::collections::HashSet<String> = all_vectors(api, p).into_iter().collect();
         let mut aliases = vec![];
-        for s in sensors.iter() {
-            if let Some(a) = raw_name(&s.label).filter(|a| !names.contains(a)) {
-                api.command(&format!("let {a} = {}", branch(s)));
-                aliases.push(a);
+        for (n, s) in sensors.iter().enumerate() {
+            let Some(a) = raw_name(&s.label).filter(|a| !names.contains(a) && !aliases.iter().any(|(b, _)| b == a)) else { continue };
+            let keep = had.contains(&a).then(|| format!("nmsp_keep{n}"));
+            if let Some(kp) = &keep {
+                api.command(&format!("let {kp} = {a}"));
             }
+            api.command(&format!("let {a} = {}#branch", s.source));
+            aliases.push((a, keep));
         }
-        names.extend(aliases.iter().cloned());
+        names.extend(aliases.iter().map(|(a, _)| a.clone()));
         api.command(if k == 0 { "unset appendwrite" } else { "set appendwrite" });
         take_log();
-        api.command(&format!("write '{path}' {}", names.join(" ")));
-        aliases.iter().for_each(|a| { api.command(&format!("unlet {a}")); });
+        api.command(&format!("write '{shown}' {}", names.join(" ")));
+        let log = take_log();
+        if failed.is_none() && log.iter().any(|l| l.to_ascii_lowercase().contains("error")) {
+            failed = Some(format!("step {} ({p}): {}", k + 1, log.join("\n")));
+        }
+        for (a, keep) in &aliases {
+            match keep {
+                Some(kp) => {
+                    api.command(&format!("let {a} = {kp}"));
+                    api.command(&format!("unlet {kp}"));
+                }
+                None => {
+                    api.command(&format!("unlet {a}"));
+                }
+            }
+        }
     }
     api.command("unset appendwrite");
-    let log = take_log();
-    match std::fs::metadata(path) {
-        Ok(m) if m.len() > 0 => Ok(()),
-        _ => Err(if log.is_empty() { format!("{path}: ngspice wrote nothing") } else { log.join("\n") }),
-    }
+    api.command("unset plainwrite");
+    drop(g);
+    let done = match failed {
+        Some(why) => Err(why),
+        None => match std::fs::metadata(&tmp) {
+            Ok(m) if m.len() > 0 => std::fs::copy(&tmp, path).map(|_| ()).map_err(|e| format!("{path}: {e}")),
+            _ => Err("ngspice wrote nothing".into()),
+        },
+    };
+    let _ = std::fs::remove_file(&tmp);
+    done
 }
 
 /// Evaluate an ngspice expression (e.g. `v(out)`, `i(vsense_r1)`, `v(a)-v(b)`) in the results of

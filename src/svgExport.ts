@@ -45,27 +45,24 @@ export function inlineStyles(svg: SVGSVGElement) {
 }
 
 /** Ask for a file name next to the document and write the SVG. */
-export async function saveSvg(svg: string, suffix: string) {
+/** Ask where to save a `.ext` file beside the schematic (named after it, plus `suffix`), then let
+ *  the core write it with `command` (its error shown). */
+async function saveBeside(ext: string, filter: string, suffix: string, command: string, args: Record<string, unknown>) {
   const { path } = useS.getState();
-  const base = fileName(path).replace(/\.asc$/i, "");
-  const dir = path ? dirOf(path) : undefined;
-  const name = `${base}${suffix}.svg`;
-  const target = await save({ defaultPath: dir ? `${dir}/${name}` : name, filters: [{ name: "SVG image", extensions: ["svg"] }] });
+  const base = fileName(path).replace(/\.asc$/i, ""), dir = path ? dirOf(path) : undefined;
+  const name = `${base}${suffix}.${ext}`;
+  const target = await save({ defaultPath: dir ? `${dir}/${name}` : name, filters: [{ name: filter, extensions: [ext] }] });
   if (!target) return;
-  const file = /\.svg$/i.test(target) ? target : `${target}.svg`;
-  await invoke("export_svg", { path: file, svg }).catch((e) => message(String(e), { title: "Export failed", kind: "error" }));
+  const file = target.toLowerCase().endsWith(`.${ext}`) ? target : `${target}.${ext}`;
+  await invoke(command, { path: file, ...args }).catch((e) => message(String(e), { title: "Export failed", kind: "error" }));
 }
 
-/** The shown run's results as a .raw file (ngspice's binary raw format): asked where, beside the schematic. */
-export async function saveRaw() {
-  const { path, sim } = useS.getState();
-  const run = sim?.run;
-  if (!run) return;
-  const base = fileName(path).replace(/\.asc$/i, ""), dir = path ? dirOf(path) : undefined;
-  const target = await save({ defaultPath: dir ? `${dir}/${base}.raw` : `${base}.raw`, filters: [{ name: "Simulation results (raw)", extensions: ["raw"] }] });
-  if (!target) return;
-  const file = /\.raw$/i.test(target) ? target : `${target}.raw`;
-  await invoke("export_raw", { path: file, plot: run.plot, run: run.id }).catch((e) => message(String(e), { title: "Export failed", kind: "error" }));
+export const saveSvg = (svg: string, suffix: string) => saveBeside("svg", "SVG image", suffix, "export_svg", { svg });
+
+/** The shown run's results as a .raw file (ngspice's binary raw format). */
+export function saveRaw() {
+  const run = useS.getState().sim?.run;
+  return run ? saveBeside("raw", "Simulation results (raw)", "", "export_raw", { plot: run.plot, run: run.id }) : Promise.resolve();
 }
 
 export const xmlEscape = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");

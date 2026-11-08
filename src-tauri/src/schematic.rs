@@ -2654,8 +2654,9 @@ mod tests {
     fn raw_export() {
         // the results as a .raw file: the nodes, part currents by name, each step a plot
         let _s = SIM.lock();
-        let src = EXAMPLES.iter().find(|e| e.0 == "step_rc").unwrap().1;
-        let nl = netlist_for_sim(&parse_asc(src), &mut Library::builtin());
+        // (a net named out+: written as a name, not read as a sum)
+        let src = EXAMPLES.iter().find(|e| e.0 == "step_rc").unwrap().1.replace("FLAG 224 64 out", "FLAG 224 64 out+").replace("vdb(out)", "vdb(out+)");
+        let nl = netlist_for_sim(&parse_asc(&src), &mut Library::builtin());
         let run = crate::ngspice::run(&nl.prepared(None, &mut vec![])).unwrap();
         let path = std::env::temp_dir().join(format!("nomospice-test-{}.raw", std::process::id()));
         crate::ngspice::export_raw(path.to_str().unwrap(), &run.plot, run.id).unwrap();
@@ -2663,7 +2664,7 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         let text = String::from_utf8_lossy(&bytes);
         assert_eq!(text.matches("Plotname:").count(), 3, "one plot per step");
-        assert!(text.contains("v(out)") && text.contains("i(r1)") && !text.contains("vsense"), "{}", &text[..text.find("Binary:").unwrap_or(400).min(text.len())]);
+        assert!(text.contains("v(out+)") && text.contains("i(r1)") && !text.contains("vsense"), "{}", &text[..text.find("Binary:").unwrap_or(400).min(text.len())]);
     }
 
     #[test]
