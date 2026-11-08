@@ -89,6 +89,9 @@ pub struct SymbolDef {
     /// `SymbolType BLOCK` (LTspice's hierarchical block symbol)
     #[serde(skip)]
     pub block: bool,
+    /// the file of a symbol of the schematic's folder (editable there)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
     /// a `ModelFile` or `SpiceModel` attribute: a subcircuit symbol of a library, never a block
     #[serde(skip)]
     pub model_file: bool,
@@ -305,6 +308,7 @@ impl Library {
                 Ok(bytes) => {
                     let mut def = parse_asy(&key, &decode(&bytes));
                     def.sheet = sheets.get(&key).filter(|_| def.calls_sheet()).map(|p| p.to_string_lossy().into_owned());
+                    def.file = Some(p.to_string_lossy().into_owned());
                     self.defs.insert(key.clone(), def);
                     self.misses.remove(&key);
                     self.local.lent.remove(&key); // the folder's own now, no longer lent
@@ -538,7 +542,87 @@ fn drawing(tok: &[&str]) -> Option<Item> {
 pub fn load(path: &str, bytes: &[u8]) -> (Vec<Item>, bool) {
     let text = decode(bytes);
     let netlist = is_netlist(path);
-    (if netlist { netlist_items(&text) } else { parse_asc(&text) }, netlist)
+    (if netlist { netlist_items(&text) } else if is_symbol(path) { asy_items(&text) } else { parse_asc(&text) }, netlist)
+}
+
+/// Whether `path` names a symbol (.asy): edited on the canvas as `asy_items`, saved by `write_asy`.
+pub fn is_symbol(path: &str) -> bool {
+    path.to_ascii_lowercase().ends_with(".asy")
+}
+
+/// A symbol as items to edit: its plain lines as wires (drawn and dragged like them), its other
+/// shapes as drawings, its pins as labels (named as the pin; `extra`: the PIN line, its other
+/// PINATTRs), its texts as comments; the rest (SymbolType, WINDOW, SYMATTR …) kept as it is.
+pub fn asy_items(src: &str) -> Vec<Item> {
+    let mut items = vec![];
+    for line in src.lines() {
+        let line = line.trim_end_matches('\r');
+        let tok: Vec<&str> = line.split_whitespace().collect();
+        let num = |i: usize| tok.get(i).and_then(|s| s.parse::<i32>().ok());
+        let rest = |n: usize| line.trim_start().splitn(n + 1, ' ').nth(n).unwrap_or("").to_string();
+        match tok.first().copied() {
+            Some("LINE") if tok.len() == 6 && tok[1] == "Normal" => match (num(2), num(3), num(4), num(5)) {
+                (Some(x1), Some(y1), Some(x2), Some(y2)) => items.push(Item::Wire { x1, y1, x2, y2 }),
+                _ => items.push(Item::Raw { line: line.to_string() }),
+            },
+            Some("LINE" | "RECTANGLE" | "CIRCLE" | "ARC") => items.push(drawing(&tok).unwrap_or_else(|| Item::Raw { line: line.to_string() })),
+            Some("PIN") => items.push(Item::Flag { x: num(1).unwrap_or(0), y: num(2).unwrap_or(0), name: String::new(), extra: vec![line.to_string()] }),
+            Some("PINATTR") if matches!(items.last(), Some(Item::Flag { .. })) => {
+                if let Some(Item::Flag { name, extra, .. }) = items.last_mut() {
+                    match tok.get(1) {
+                        Some(&"PinName") => *name = rest(2),
+                        _ => extra.push(line.to_string()),
+                    }
+                }
+            }
+            Some("TEXT") => items.push(Item::Text { x: num(1).unwrap_or(0), y: num(2).unwrap_or(0), text: unescape(&rest(5)), directive: false, align: format!("{} {}", tok.get(3).unwrap_or(&"Left"), tok.get(4).unwrap_or(&"2")) }),
+            Some("Version") | None => {}
+            _ => items.push(Item::Raw { line: line.to_string() }),
+        }
+    }
+    items
+}
+
+/// A symbol file of `asy_items`' items: its pins where they are now, numbered on (SpiceOrder)
+/// where new; parts and directives, which a symbol has none of, left out.
+pub fn write_asy(items: &[Item]) -> String {
+    let kind = items.iter().find_map(|it| match it {
+        Item::Raw { line } if line.starts_with("SymbolType ") => Some(line.as_str()),
+        _ => None,
+    });
+    let mut out = format!("Version 4\n{}\n", kind.unwrap_or("SymbolType CELL"));
+    for it in items {
+        match it {
+            Item::Wire { x1, y1, x2, y2 } => out += &format!("LINE Normal {x1} {y1} {x2} {y2}\n"),
+            Item::Draw { kind, width, p, style } => {
+                let ps: Vec<String> = p.iter().map(|v| v.to_string()).collect();
+                out += &format!("{kind} {width} {}{}\n", ps.join(" "), style.map_or(String::new(), |s| format!(" {s}")));
+            }
+            Item::Text { x, y, text, directive: false, align } => out += &format!("TEXT {x} {y} {} {}\n", if align.is_empty() { "Left 2" } else { align }, escape(text)),
+            _ => {}
+        }
+    }
+    for it in items {
+        if let Item::Raw { line } = it {
+            if !line.starts_with("SymbolType ") {
+                out += &format!("{line}\n");
+            }
+        }
+    }
+    let order = |extra: &[String]| extra.iter().find_map(|l| l.strip_prefix("PINATTR SpiceOrder ")?.trim().parse::<u32>().ok());
+    let mut next = items.iter().filter_map(|it| match it { Item::Flag { extra, .. } => order(extra), _ => None }).max().unwrap_or(0);
+    for it in items {
+        let Item::Flag { x, y, name, extra } = it else { continue };
+        // (where its name shows, as read; a new pin's not)
+        let pin = extra.iter().find(|l| l.starts_with("PIN ")).map(|l| l.split_whitespace().skip(3).collect::<Vec<_>>().join(" ")).filter(|j| !j.is_empty());
+        out += &format!("PIN {x} {y} {}\nPINATTR PinName {name}\n", pin.as_deref().unwrap_or("NONE 8"));
+        extra.iter().filter(|l| l.starts_with("PINATTR ")).for_each(|l| out += &format!("{l}\n"));
+        if order(extra).is_none() {
+            next += 1;
+            out += &format!("PINATTR SpiceOrder {next}\n");
+        }
+    }
+    out
 }
 
 /// Whether `path` names a SPICE netlist (opened as a schematic of it, see `netlist_items`).
@@ -3198,6 +3282,23 @@ SYMBOL half 400 300 R0\nSYMATTR InstName U4\nSYMATTR Value R=3k\nFLAG 352 300 a\
         let nl = netlist(&parse_asc("Version 4\nSYMBOL amp 0 0 R0\nSYMATTR InstName U1\n"), &mut lib);
         assert!(nl.text.lines().any(|l| l.starts_with("XU1 ") && l.ends_with(" Amp")), "{}", nl.text);
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn symbol_roundtrip() {
+        let key = |d: &SymbolDef| format!("{:?}", (&d.prefix, &d.value, &d.desc, &d.spice_line, &d.shapes, &d.windows, d.block, d.pins.iter().map(|p| (p.x, p.y, &p.name, &p.just, p.off)).collect::<Vec<_>>()));
+        for (name, src) in BUILTIN_SYMBOLS {
+            let again = write_asy(&asy_items(src));
+            assert_eq!(key(&parse_asy(name, &again)), key(&parse_asy(name, src)), "{name}:\n{again}");
+        }
+        // a pin moved, one added: where it is now, numbered on
+        let mut items = asy_items(BUILTIN_SYMBOLS[0].1);
+        if let Some(Item::Flag { x, .. }) = items.iter_mut().find(|it| matches!(it, Item::Flag { .. })) {
+            *x += 32;
+        }
+        items.push(Item::Flag { x: 0, y: 48, name: "C".into(), extra: vec![] });
+        let d = parse_asy("res", &write_asy(&items));
+        assert_eq!(d.pins.iter().map(|p| (p.x, p.name.as_str())).collect::<Vec<_>>(), [(48, "A"), (16, "B"), (0, "C")]);
     }
 
     #[test]

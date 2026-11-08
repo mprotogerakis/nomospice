@@ -16,7 +16,7 @@ import { PoleZero } from "./PoleZero";
 import { checkForUpdate, installUpdate, useUpdate } from "./updater";
 import { Dialogs } from "./Dialogs";
 import { Boundary } from "./Boundary";
-import { analysesOf, closeTab, currentTab, dirOf, fileName, docId, viewOf, loadDoc, loadSymbols, placeSymbol, plotKind, probeMode, redo, refreshGit, refreshNets, relToDoc, selectTab, simulate, undo, useS, useStatus } from "./store";
+import { analysesOf, closeTab, currentTab, dirOf, fileName, docId, isSymbolDoc, viewOf, loadDoc, loadSymbols, placeSymbol, plotKind, probeMode, redo, refreshGit, refreshNets, relToDoc, selectTab, simulate, undo, useS, useStatus } from "./store";
 import { History } from "./History";
 import { mirror, rotate } from "./geom";
 import { ANALYSES, si, tokens } from "./spice";
@@ -48,8 +48,9 @@ const G = {
 /** Netlists the app opens (as schematics of them); the core's is_netlist decides, this list offers. */
 const NETLIST_EXT = ["cir", "net", "sp", "spi", "ckt"];
 const NETLIST = new RegExp(`\\.(${NETLIST_EXT.join("|")})$`, "i");
-const OPEN_FILTERS = [{ name: "Schematic or netlist", extensions: ["asc", ...NETLIST_EXT] }, { name: "LTspice schematic", extensions: ["asc"] }, { name: "SPICE netlist", extensions: NETLIST_EXT }];
-const FILTERS = [{ name: "LTspice schematic", extensions: ["asc"] }];
+const OPEN_FILTERS = [{ name: "Schematic, netlist or symbol", extensions: ["asc", ...NETLIST_EXT, "asy"] }, { name: "LTspice schematic", extensions: ["asc"] }, { name: "SPICE netlist", extensions: NETLIST_EXT }, { name: "Symbol", extensions: ["asy"] }];
+/** What a document saves as: a symbol as a symbol, else a schematic. */
+const saveAs = (symbol: boolean) => (symbol ? { ext: "asy", filters: [{ name: "Symbol", extensions: ["asy"] }] } : { ext: "asc", filters: [{ name: "LTspice schematic", extensions: ["asc"] }] });
 /** Typing into a text field (a focused checkbox or button must not swallow the hotkeys). */
 const typing = (e: KeyboardEvent) =>
   e.target instanceof HTMLElement && e.target.closest("input:not([type=checkbox]):not([type=radio]):not([type=button]),textarea,select,dialog") !== null;
@@ -140,13 +141,13 @@ let saveQueue: Promise<unknown> = Promise.resolve();
 const MODEL_FILE = /\.(lib|sub|mod|inc|cir|sp|spi|bjt|dio|jft|mos)$/i; // (not .net: a whole circuit, LTspice's netlist of a schematic)
 /** What dropping these files does (null: nothing). */
 const dropAction = (paths: string[]) =>
-  paths.some((p) => /\.asc$/i.test(p)) ? "Open schematic" : paths.some((p) => MODEL_FILE.test(p)) ? "Add as .include directive" : null;
+  paths.some((p) => /\.asc$/i.test(p)) ? "Open schematic" : paths.some((p) => /\.asy$/i.test(p)) ? "Open symbol" : paths.some((p) => MODEL_FILE.test(p)) ? "Add as .include directive" : null;
 /** Dropped files: a schematic opens, model files become `.include` directives (relative to the
  *  schematic's folder when inside it, as LTspice writes them). */
 async function dropFiles(paths: string[]) {
   if (useS.getState().dialog) return;
   // (a dropped .cir is a model to include, mostly: a netlist opens by File → Open)
-  const asc = paths.find((p) => /\.asc$/i.test(p));
+  const asc = paths.find((p) => /\.asc$/i.test(p)) ?? paths.find((p) => /\.asy$/i.test(p));
   if (asc) return openFile(asc);
   const models = paths.filter((p) => MODEL_FILE.test(p));
   if (models.length) newItem({ t: "text", x: 0, y: 0, directive: true, text: models.map((p) => `.include "${relToDoc(p)}"`).join("\n") });
@@ -155,12 +156,13 @@ async function dropFiles(paths: string[]) {
 /** Save (as): true once the file is written. */
 async function saveFile(as = false): Promise<boolean> {
   const prev = useS.getState().path;
+  const { ext, filters } = saveAs(isSymbolDoc(prev));
   let path = prev;
-  if (as || !path || path === useS.getState().unwritten) path = await save({ filters: FILTERS, defaultPath: path ?? "untitled.asc" });
+  if (as || !path || path === useS.getState().unwritten) path = await save({ filters, defaultPath: path ?? `untitled.${ext}` });
   if (!path) return false;
-  if (!/\.asc$/i.test(path)) {
+  if (!path.toLowerCase().endsWith(`.${ext}`)) {
     // GTK save dialogs do not add the filter's extension, and checked for overwrite without it
-    path += ".asc";
+    path += `.${ext}`;
     if ((await invoke<boolean>("path_exists", { path })) && !(await ask(`${fileName(path)} already exists. Replace it?`, { title: "nomospice", kind: "warning" }))) return false;
   }
   const items = useS.getState().items;
@@ -208,6 +210,14 @@ async function newFile() {
 }
 async function openExample(items: Item[]) {
   if (await discardOk()) await loadDoc(items, null);
+}
+/** A new symbol to draw: its first save asks where (beside the schematics that place it). */
+async function newSymbol() {
+  if (!(await discardOk())) return;
+  const dir = dirOf(useS.getState().path);
+  const path = `${dir ? `${dir}/` : ""}untitled.asy`;
+  await loadDoc([{ t: "raw", line: "SymbolType CELL" }, { t: "raw", line: "SYMATTR Prefix X" }], path);
+  useS.setState({ unwritten: path });
 }
 
 /** A block's schematic in place of this one (`up`: the one above); the way back is kept. */
@@ -282,7 +292,7 @@ export function App() {
       await loadSymbols();
       setExamples(await invoke<[string, Item[]][]>("examples"));
       const args = await invoke<string[]>("cli_args");
-      const file = args.find((a) => /\.asc$/i.test(a) || NETLIST.test(a));
+      const file = args.find((a) => /\.as[cy]$/i.test(a) || NETLIST.test(a));
       const rec = await invoke<{ path: string | null; items: Item[]; unwritten?: string | null } | null>("recovery_take");
       // an empty document is a valid snapshot too (the user deleted everything)
       const restore = Array.isArray(rec?.items) && (await ask(`Restore unsaved changes${rec.path ? ` to ${rec.path}` : ""} from the last session?`, { title: "nomospice", kind: "info" }));
@@ -310,10 +320,12 @@ export function App() {
     const sheet = (e: Event) => void openSheet((e as CustomEvent<string>).detail);
     const up = () => void (useS.getState().parents.length && openSheet(useS.getState().parents.at(-1)!, true));
     const sym = () => void blockSymbol();
+    const newSym = () => void newSymbol();
+    window.addEventListener("nomospice:new-symbol", newSym);
     window.addEventListener("nomospice:sheet", sheet);
     window.addEventListener("nomospice:up", up);
     window.addEventListener("nomospice:block-symbol", sym);
-    return () => (window.removeEventListener("nomospice:sheet", sheet), window.removeEventListener("nomospice:up", up), window.removeEventListener("nomospice:block-symbol", sym));
+    return () => (window.removeEventListener("nomospice:new-symbol", newSym), window.removeEventListener("nomospice:sheet", sheet), window.removeEventListener("nomospice:up", up), window.removeEventListener("nomospice:block-symbol", sym));
   }, []);
 
   useEffect(() => {
@@ -435,7 +447,7 @@ export function App() {
         {s.running ? (
           <ToolbarButton label="Halt" icon={<Square />} onClick={() => invoke("halt")} className="text-status-danger">Halt</ToolbarButton>
         ) : (
-          <ToolbarButton label="Run" hotkey="⌘↵" icon={<Play />} onClick={simulate} className="text-status-success">Run</ToolbarButton>
+          <ToolbarButton label="Run" hotkey="⌘↵" icon={<Play />} disabled={isSymbolDoc(s.path)} onClick={simulate} className="text-status-success">Run</ToolbarButton>
         )}
         <ToolbarButton label="Edit simulation command" icon={<SlidersHorizontal />} onClick={() => useS.setState({ dialog: { k: "sim" } })} />
         <ToolbarButton label="Live: re-run on every edit" icon={<Zap />} pressable active={s.live} onClick={() => useS.setState({ live: !s.live })} />

@@ -29,7 +29,9 @@ export type Dialog =
   | { k: "yrange"; pane: string; unit: string; log: boolean }
   | { k: "about" }
   /** the quick reference: drawing, simulating, plotting, files */
-  | { k: "help" };
+  | { k: "help" }
+  /** a symbol's attributes (Prefix, Value …) and type */
+  | { k: "symattrs" };
 
 interface State {
   items: Item[];
@@ -407,8 +409,11 @@ useS.subscribe((s, prev) => {
   set({ tab: keep ? s.tab : null, ...swapTo(s, cur) });
 });
 
+/** A symbol (.asy) is open: drawn on the canvas, nothing to simulate. */
+export const isSymbolDoc = (path: string | null) => !!path && /\.asy$/i.test(path);
+
 export async function simulate() {
-  if (get().running) return;
+  if (get().running || isSymbolDoc(get().path)) return;
   const { items, path, tab } = get();
   const opts = analysesOf(items), deck = simDeck(items, tab, opts), shown = currentTab(get(), opts); // the tab these results are for
   const gen = docGen;

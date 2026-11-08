@@ -28,6 +28,8 @@ export interface SymbolDef {
   pin_labels: boolean;
   /** a hierarchical block: the schematic it stands for (its subcircuit) */
   sheet?: string;
+  /** its file, if it is one of the schematic's folder (editable there) */
+  file?: string;
 }
 
 /** A model or subcircuit in the indexed libraries (library.rs). */

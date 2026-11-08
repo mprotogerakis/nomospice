@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { open } from "@tauri-apps/plugin-dialog";
 import type { Item, LibEntry, LibSource } from "./types";
-import { addTrace, analysisItem, commit, currentTab, fileName, loadSymbols, placePart, placeSymbol, refreshLibrarySymbols, setYAxis, useS } from "./store";
+import { addTrace, analysisItem, commit, currentTab, fileName, isSymbolDoc, loadSymbols, placePart, placeSymbol, refreshLibrarySymbols, setYAxis, useS } from "./store";
 import { defOf, portOf, prefixOf, vexpr } from "./geom";
 import { Button } from "./ui/button";
 import { closeDialog as close, Field, FIELD, Modal, numHelp, NumField, Rows, TextField } from "./ui/dialog";
@@ -34,7 +34,9 @@ const INSTANCE: Record<string, [string, string, string, string][]> = {
  *  Comments and directives use DirectiveDialog. */
 function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: (it: Item) => void }) {
   const lib = useS((s) => s.lib);
-  const [it, setIt] = useState(item);
+  // (a label in a symbol is one of its pins: a PIN line always, where its name shows)
+  const symbol = useS((s) => isSymbolDoc(s.path));
+  const [it, setIt] = useState(item.t === "flag" && symbol && !pinJust(item.extra, "") ? { ...item, extra: [`PIN ${item.x} ${item.y} NONE 8`, ...(item.extra ?? [])] } : item);
   const attr = (k: string) => (it.t === "sym" ? it.attrs[k] ?? "" : "");
   const setAttr = (k: string, v: string) => it.t === "sym" && setIt({ ...it, attrs: { ...it.attrs, [k]: v } });
   const def = it.t === "sym" ? defOf(lib, it) : undefined;
@@ -116,7 +118,24 @@ function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: 
           <datalist id="sym-attrs">{MORE.slice(0, 2).map((n) => <option key={n} value={n} />)}</datalist>
         </>
       )}
-      {it.t === "flag" && (
+      {it.t === "flag" && symbol && (
+        <>
+          <Field label="Pin name" hint="the name a schematic's netlist and its block's labels go by">
+            <input data-autofocus className={FIELD} value={it.name} onChange={(e) => setIt({ ...it, name: e.target.value.replace(/\s/g, "_") })} />
+          </Field>
+          {/* (its PIN line: where the name shows on the placed part, and how far from the pin) */}
+          <Field label="Name shown" hint="on the placed part, from the pin">
+            <select className={FIELD} value={pinJust(it.extra)} onChange={(e) => setIt({ ...it, extra: [`PIN ${it.x} ${it.y} ${e.target.value} 8`, ...(it.extra ?? []).filter((l) => !l.startsWith("PIN "))] })}>
+              <option value="NONE">not</option>
+              <option value="LEFT">right of it (LEFT)</option>
+              <option value="RIGHT">left of it (RIGHT)</option>
+              <option value="TOP">below it (TOP)</option>
+              <option value="BOTTOM">above it (BOTTOM)</option>
+            </select>
+          </Field>
+        </>
+      )}
+      {it.t === "flag" && !symbol && (
         <>
           <Field label="Net name" hint="0 = ground">
             <input data-autofocus className={FIELD} value={it.name} onChange={(e) => setIt({ ...it, name: e.target.value.replace(/\s/g, "_") })} />
@@ -132,6 +151,41 @@ function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: 
           </Field>
         </>
       )}
+    </Modal>
+  );
+}
+
+/** Where a pin's name shows (its PIN line's justification: NONE … ; `none` if it has no PIN line). */
+const pinJust = (extra?: string[], none = "NONE") => extra?.find((l) => l.startsWith("PIN "))?.split(/\s+/)[3]?.toUpperCase() ?? none;
+
+/** A symbol's attributes (SYMATTR lines: Prefix, Value, Description, SpiceModel …) and its type:
+ *  a part (CELL) or a hierarchical block (BLOCK, its schematic of the same name). */
+function SymbolAttrs() {
+  const items = useS((s) => s.items);
+  const raw = (it: Item) => (it.t === "raw" ? it.line : "");
+  const [kind, setKind] = useState(() => items.map(raw).find((l) => l.startsWith("SymbolType "))?.slice(11).trim().toUpperCase() || "CELL");
+  const [rows, setRows] = useState<string[][]>(() => items.map(raw).filter((l) => l.startsWith("SYMATTR ")).map((l) => {
+    const [, k = "", ...v] = l.split(" ");
+    return [k, v.join(" ")];
+  }));
+  const done = () => {
+    const keep = items.filter((it) => !(it.t === "raw" && (it.line.startsWith("SYMATTR ") || it.line.startsWith("SymbolType "))));
+    const attrs = rows.filter(([k, v]) => k.trim() && v.trim()).map(([k, v]): Item => ({ t: "raw", line: `SYMATTR ${k.trim().replace(/\s+/g, "")} ${v.trim()}` }));
+    commit([{ t: "raw", line: `SymbolType ${kind}` }, ...keep, ...attrs]);
+    close();
+  };
+  return (
+    <Modal title="Symbol attributes" onSubmit={done}>
+      <Field label="Type" hint="a block stands for the schematic of its name beside it">
+        <select className={FIELD} value={kind} onChange={(e) => setKind(e.target.value)}>
+          <option value="CELL">part (CELL)</option>
+          <option value="BLOCK">hierarchical block (BLOCK)</option>
+        </select>
+      </Field>
+      <Field label="Attributes" hint="Prefix (R, C, X …), Value, Description, SpiceModel, ModelFile …: a placed part takes them">
+        <Rows rows={rows} set={setRows} a="attribute" b="value" list="sym-attr-names" add="Add attribute" />
+      </Field>
+      <datalist id="sym-attr-names">{["Prefix", "Value", "Description", "SpiceModel", "ModelFile", "SpiceLine", "Value2"].map((n) => <option key={n} value={n} />)}</datalist>
     </Modal>
   );
 }
@@ -488,6 +542,7 @@ const HELP: [string, [string, string][]][] = [
     ["right-click the canvas", "Create block symbol: name.asy beside it, ports as pins; place it in a schematic of that folder"],
     ["right-click a block", "Open its schematic; the status bar's ↑ leads back up"],
     ["a block's Value", "parameters for its schematic: R=10k (its .param R=1k the default)"],
+    ["⌘O an .asy · right-click a part", "edit a symbol: W lines, N pins, the canvas menu's Symbol attributes · Edit its symbol"],
   ]],
 ];
 
@@ -586,13 +641,13 @@ export const Dialogs = memo(function Dialogs() {
       const lines = it.t === "text" ? it.text.split("\n") : [];
       if (it.t === "text" && !it.directive && !dialog.raw && analysisOptions([it]).length && analysisEditableAt(lines, analysisLineIndex(lines, null, false))) return <SimDialog key={dialog.index} index={dialog.index} />;
       if (it.t === "text") return it.directive ? directive(dialog.index, dialog.raw, dialog.draft) : <DirectiveDialog key={dialog.index} item={dialog.draft === undefined ? it : { ...it, text: dialog.draft }} title="Comment" raw onDone={commitAt(dialog.index)} />;
-      return <ItemForm key={dialog.index} item={it} title={it.t === "sym" ? `Edit ${it.attrs.InstName ?? it.sym}` : "Net Name"} onDone={commitAt(dialog.index)} />;
+      return <ItemForm key={dialog.index} item={it} title={it.t === "sym" ? `Edit ${it.attrs.InstName ?? it.sym}` : isSymbolDoc(useS.getState().path) ? "Pin" : "Net Name"} onDone={commitAt(dialog.index)} />;
     }
     case "new": {
       const at = dialog.at;
       const place = (it: Item) => (at && it.t !== "wire" && it.t !== "raw" && it.t !== "draw" /* (for the type: only texts and labels come here) */ ? (commit([...items, { ...it, x: at[0], y: at[1] }]), close()) : useS.setState({ dialog: null, tool: { k: "place", item: it } }));
       if (dialog.item.t === "text") return <DirectiveDialog item={dialog.item} title={dialog.item.directive ? "SPICE Directive" : "Comment"} raw={!dialog.item.directive} onDone={place} />;
-      return <ItemForm item={dialog.item} title="Net Name" onDone={place} />;
+      return <ItemForm item={dialog.item} title={isSymbolDoc(useS.getState().path) ? "Pin" : "Net Name"} onDone={place} />;
     }
     case "sim": { // the form also for an analysis it does not fully cover: it says so, and OK rewrites the line
       if (dialog.add) return <SimDialog kind0={dialog.add} />;
@@ -605,5 +660,6 @@ export const Dialogs = memo(function Dialogs() {
     case "yrange": return <YRangeDialog pane={dialog.pane} unit={dialog.unit} log={dialog.log} />;
     case "about": return <AboutDialog />;
     case "help": return <HelpDialog />;
+    case "symattrs": return <SymbolAttrs />;
   }
 });

@@ -8,7 +8,7 @@ import {
   box, connectivity, defOf, portOf, arcSpan, dragPlan, mirror, outline, pins, prefixOf, rotate, dropZeroWires, dropZeroWiresKeepSel, GRID, hit, isShape, labelRect, leftLabels, matrix, shifted, snap, symBox,
   textLines, union, xform, type Box, type Lib, type Pt,
 } from "./geom";
-import { canProbe, commit, currentNets, nextInst, partCurrent, powerMode, powerName, probe, probeMode, simulate, useS, useStatus } from "./store";
+import { canProbe, commit, currentNets, isSymbolDoc, nextInst, partCurrent, powerMode, powerName, probe, probeMode, simulate, useS, useStatus } from "./store";
 import { copySelection, deleteSelection, duplicate, newItem, pasteClipboard, transform } from "./actions";
 import { ANALYSIS, ANY_ANALYSIS, analysisOptions, continuation } from "./spice";
 import { openMenu, type MenuItem } from "./Menu";
@@ -135,7 +135,24 @@ function PinLabels({ it, def }: { it: Extract<Item, { t: "sym" }>; def: SymbolDe
   );
 }
 
+/** A symbol's pin (a label with its PIN line): a square, and its name where the placed part shows it
+ *  (faint where it does not). */
+function Pin({ it, line }: { it: Extract<Item, { t: "flag" }>; line: string }) {
+  const [, , , just = "NONE", off = "8"] = line.split(/\s+/);
+  const dir = JUST[just.toUpperCase()], o = +off || 8;
+  const [ux, uy] = dir ?? [1, -1];
+  return (
+    <g>
+      <rect x={it.x - 3} y={it.y - 3} width={6} height={6} fill="none" />
+      <text x={it.x + ux * o} y={it.y + uy * o} fill="currentColor" stroke="none" opacity={dir ? 1 : 0.55} className="font-mono text-[11px]"
+        dominantBaseline={uy > 0 ? "hanging" : uy < 0 ? "auto" : "central"} textAnchor={ux > 0 ? "start" : ux < 0 ? "end" : "middle"}>{it.name}</text>
+    </g>
+  );
+}
+
 function Flag({ it, leftward }: { it: Extract<Item, { t: "flag" }>; leftward: boolean }) {
+  const pin = it.extra?.find((l) => l.startsWith("PIN "));
+  if (pin) return <Pin it={it} line={pin} />;
   if (it.name === "0") return <path d={`M${it.x - 16} ${it.y} H${it.x + 16} L${it.x} ${it.y + 16} Z`} fill="none" />;
   const [x, , x2] = labelRect(it, leftward), w = x2 - x;
   return (
@@ -246,8 +263,8 @@ export function schematicSvg(items: Item[], lib: Record<string, SymbolDef>): str
 const colorOf = (it: Shape) => (it.t === "text" && it.directive ? "var(--sch-directive)" : COLOR[it.t]);
 
 export const Schematic = memo(function Schematic() {
-  const { items, lib, sel, tool, nets, sim, fitToken, stale, diff } = useS(
-    useShallow((s) => ({ items: s.items, lib: s.lib, sel: s.sel, tool: s.tool, nets: currentNets(s), sim: s.sim, fitToken: s.fitToken, stale: s.stale, diff: s.diff })),
+  const { items, lib, sel, tool, nets, sim, fitToken, stale, diff, symbolDoc } = useS(
+    useShallow((s) => ({ items: s.items, lib: s.lib, sel: s.sel, tool: s.tool, nets: currentNets(s), sim: s.sim, fitToken: s.fitToken, stale: s.stale, diff: s.diff, symbolDoc: isSymbolDoc(s.path) })),
   );
   // git comparison: items only in the old revision (removed) and only in the current one (added)
   const diffSets = useMemo(() => {
@@ -576,6 +593,19 @@ export const Schematic = memo(function Schematic() {
     ];
     const del: MenuItem = { label: count > 1 ? `Delete ${count} items` : "Delete", hint: "⌫", danger: true, run: deleteSelection };
     const clip: MenuItem[] = [{ label: "Copy", hint: "⌘C", run: () => copySelection() }, { label: "Cut", hint: "⌘X", run: () => copySelection(true) }];
+    const back: MenuItem[] = useS.getState().parents.length ? [{ label: "Back to the schematic above", run: () => window.dispatchEvent(new Event("nomospice:up")) }] : [];
+    if (!it && symbolDoc) return [
+      { label: "Line", hint: "W", run: () => set({ tool: { k: "wire" } }) },
+      { label: "Pin here…", hint: "N", run: () => newItem({ t: "flag", x: 0, y: 0, name: "" }, g) },
+      { label: "Text here…", hint: "T", run: () => newItem({ t: "text", x: 0, y: 0, text: "", directive: false }, g) },
+      "-",
+      { label: "Symbol attributes…", run: () => set({ dialog: { k: "symattrs" } }) },
+      "-",
+      { label: "Paste", hint: "⌘V", run: pasteClipboard },
+      { label: "Select all", hint: "⌘A", run: () => set({ sel: items.flatMap((x, j) => (x.t === "raw" ? [] : [j])) }) },
+      { label: "Fit view", hint: "Space", run: fit },
+      ...back,
+    ];
     if (!it) return [
       { label: "Place component…", hint: "P", run: () => set({ dialog: { k: "parts" } }) },
       { label: "Wire", hint: "W", run: () => set({ tool: { k: "wire" } }) },
@@ -595,7 +625,8 @@ export const Schematic = memo(function Schematic() {
       { label: "Export schematic as SVG…", disabled: !items.some(isShape), run: () => void saveSvg(schematicSvg(items, lib), "") },
       // (hierarchy: this schematic as a block of others in its folder; back to the one it was opened from)
       { label: "Create block symbol…", run: () => window.dispatchEvent(new Event("nomospice:block-symbol")) },
-      ...(useS.getState().parents.length ? [{ label: "Back to the schematic above", run: () => window.dispatchEvent(new Event("nomospice:up")) }] : []),
+      { label: "New symbol", run: () => window.dispatchEvent(new Event("nomospice:new-symbol")) },
+      ...back,
     ];
     if (count > 1) return [...arrange, "-", ...clip, del];
     switch (it.t) {
@@ -609,6 +640,8 @@ export const Schematic = memo(function Schematic() {
         return [
           { label: "Edit…", hint: probing ? undefined : "dbl-click", run: edit },
           ...(sheet && !here ? [{ label: "Open its schematic", run: () => window.dispatchEvent(new CustomEvent("nomospice:sheet", { detail: sheet })) }] : []),
+          // (a symbol of the schematic's folder: drawn there, edited there)
+          ...(defOf(lib, it)?.file ? [{ label: "Edit its symbol", run: () => window.dispatchEvent(new CustomEvent("nomospice:sheet", { detail: defOf(lib, it)!.file })) }] : []),
           ...(kind && !block ? [{ label: "Choose model from library…", run: () => set({ dialog: { k: "parts", replace: i, kind } }) }] : []),
           ...plot,
           "-", ...arrange,
@@ -711,9 +744,10 @@ export const Schematic = memo(function Schematic() {
             return (
               <g
                 key={i}
-                color={selected ? "var(--selection)" : diffSets?.added.has(i) ? "var(--series-3)" : colorOf(it)}
+                // (a symbol's lines and pins: drawn as a part's are)
+                color={selected ? "var(--selection)" : diffSets?.added.has(i) ? "var(--series-3)" : symbolDoc && (it.t === "wire" || it.t === "flag") ? "var(--sch-symbol)" : colorOf(it)}
                 stroke="currentColor"
-                strokeWidth={it.t === "wire" ? (netHi ? 4 : 2) : 1.6}
+                strokeWidth={it.t === "wire" && !symbolDoc ? (netHi ? 4 : 2) : 1.6}
                 style={{ vectorEffect: "non-scaling-stroke", opacity: i === hover && !selected ? 0.75 : 1 }}
                 className="[&_*]:[vector-effect:non-scaling-stroke]"
               >
@@ -726,7 +760,9 @@ export const Schematic = memo(function Schematic() {
               <ItemView it={it} lib={lib} />
             </g>
           ))}
-          {conn.dots.map(([x, y]) => <circle key={`d${x},${y}`} cx={x} cy={y} r={4} fill="var(--sch-wire)" />)}
+          {/* (a symbol's lines are drawing, no wires: no junctions; its origin is where it is placed) */}
+          {!symbolDoc && conn.dots.map(([x, y]) => <circle key={`d${x},${y}`} cx={x} cy={y} r={4} fill="var(--sch-wire)" />)}
+          {symbolDoc && <path d="M-12 0H12M0 -12V12" stroke="var(--text-tertiary)" strokeWidth={1} vectorEffect="non-scaling-stroke" />}
           {conn.open.map(([x, y]) => <rect key={`o${x},${y}`} x={x - 3} y={y - 3} width={6} height={6} stroke="var(--sch-pin)" strokeWidth={1} vectorEffect="non-scaling-stroke" />)}
           {!!ghosts.length && (
             <g color="var(--selection)" stroke="currentColor" strokeWidth={1.6} opacity={0.7} className="[&_*]:[vector-effect:non-scaling-stroke]">

@@ -52,6 +52,10 @@ files — with a modern UI, ngspice as the engine, a Rust core and a React front
   schematic of that folder it runs as a subcircuit of `name.asc` (parameters in the block's Value,
   `R=10k`; the sheet's `.param R=1k` is the default). Right-click a block to open its schematic; the
   status bar's ↑ leads back up. Block symbols made elsewhere (`SymbolType BLOCK`) work the same way.
+- **Symbols**: open an `.asy` (⌘O, or right-click a part > *Edit its symbol*) and edit it on the
+  canvas: lines with the wire tool, pins with the label tool (name, where it shows), its shapes moved
+  and deleted, *Symbol attributes* for Prefix, Value, Description, SpiceModel and the type (part or
+  block). Right-click the canvas > *New symbol* starts one.
 - **Netlists**: open a `.cir`/`.net`/`.sp` file and it becomes a schematic of one SPICE directive
   holding it: it runs, its nodes plot by name (Add trace), saving writes an `.asc` beside it.
 - **Git**: branch and file state in the status bar; History panel to commit, compare a revision

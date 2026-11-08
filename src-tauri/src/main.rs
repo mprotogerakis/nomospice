@@ -131,7 +131,8 @@ async fn path_exists(path: String) -> bool {
 
 #[tauri::command]
 async fn save_asc(path: String, items: Vec<Item>) -> Result<(), String> {
-    let data = schematic::encode(&schematic::write_asc(&items)); // Latin-1 like LTspice, UTF-16 if needed
+    // (a symbol as one; Latin-1 like LTspice, UTF-16 if needed)
+    let data = schematic::encode(&if schematic::is_symbol(&path) { schematic::write_asy(&items) } else { schematic::write_asc(&items) });
     tauri::async_runtime::spawn_blocking(move || write_atomic(std::path::Path::new(&path), &data))
         .await
         .map_err(|e| e.to_string())?
