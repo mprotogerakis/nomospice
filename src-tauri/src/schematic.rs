@@ -151,7 +151,7 @@ pub fn parse_asy(name: &str, src: &str) -> SymbolDef {
     for line in src.lines() {
         let tok: Vec<&str> = line.split_whitespace().collect();
         let num = |i: usize| tok.get(i).and_then(|s| s.parse::<i32>().ok()).unwrap_or(0);
-        let rest = |n: usize| line.splitn(n + 1, ' ').nth(n).unwrap_or("").trim().to_string();
+        let rest = |n: usize| after_words(line, n).trim().to_string();
         match tok.first().copied() {
             Some(k @ ("LINE" | "RECTANGLE" | "CIRCLE" | "ARC")) => {
                 let n = if k == "ARC" { 8 } else { 4 };
@@ -193,6 +193,15 @@ pub fn parse_asy(name: &str, src: &str) -> SymbolDef {
     pins.sort_by_key(|p| p.0);
     d.pins = pins.into_iter().map(|p| p.1).collect();
     d
+}
+
+/// What follows the first `n` words of a line, however they are spaced (tabs, two spaces).
+fn after_words(line: &str, n: usize) -> &str {
+    let mut s = line.trim_start();
+    for _ in 0..n {
+        s = s.trim_start_matches(|c: char| !c.is_whitespace()).trim_start();
+    }
+    s
 }
 
 /// `Opamps\opamp` -> `opamp`
@@ -558,14 +567,7 @@ pub fn asy_items(src: &str) -> Vec<Item> {
         let line = line.trim_end_matches('\r');
         let tok: Vec<&str> = line.split_whitespace().collect();
         let num = |i: usize| tok.get(i).and_then(|s| s.parse::<i32>().ok());
-        // (what follows the first n words, however they are spaced: tabs, two spaces)
-        let rest = |n: usize| {
-            let mut s = line.trim_start();
-            for _ in 0..n {
-                s = s.trim_start_matches(|c: char| !c.is_whitespace()).trim_start();
-            }
-            s.to_string()
-        };
+        let rest = |n: usize| after_words(line, n).to_string();
         match tok.first().copied() {
             Some("LINE" | "RECTANGLE" | "CIRCLE" | "ARC") => items.push(drawing(&tok).unwrap_or_else(|| Item::Raw { line: line.to_string() })),
             // (its lines as words with single spaces: written back as read, found by their heads; a

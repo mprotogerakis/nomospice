@@ -110,7 +110,11 @@ function pasteText(text: string): boolean {
   } catch {
     return false;
   }
-  const its = (Array.isArray(raw) ? raw : []).map(shape).filter((x): x is Shape => !!x).map((x) => forDoc(x)).filter((x): x is Shape => !!x && x.t !== "raw");
+  // (a pin whose number a pin here has is a copy: it gets one of its own; a cut one keeps its own)
+  const order = (e?: string[]) => e?.find((l) => l.trimStart().startsWith("PINATTR SpiceOrder "))?.trim();
+  const orders = new Set(useS.getState().items.flatMap((x) => (x.t === "flag" && order(x.extra) ? [order(x.extra)] : [])));
+  const its = (Array.isArray(raw) ? raw : []).map(shape).filter((x): x is Shape => !!x)
+    .map((x) => forDoc(x, x.t === "flag" && orders.has(order(x.extra)))).filter((x): x is Shape => !!x && x.t !== "raw");
   if (!its.length) return false;
   // (anchored by what is drawn: not an arc's rays, which may reach far out)
   const bs = its.map((it) => (it.t === "wire" ? [Math.min(it.x1, it.x2), Math.min(it.y1, it.y2)] : it.t === "draw" ? box(it, {})! : [it.x, it.y]));

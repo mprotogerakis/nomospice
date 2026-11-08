@@ -176,9 +176,6 @@ async function saveFile(as = false): Promise<boolean> {
     if ((await invoke<boolean>("path_exists", { path })) && !(await ask(`${fileName(path)} already exists. Replace it?`, { title: "nomospice", kind: "warning" }))) return false;
   }
   const items = useS.getState().items;
-  // (a symbol holds drawing, pins, texts: parts or directives placed on it have no place in its file)
-  const lost = isSymbolDoc(path) ? items.filter((it) => it.t === "sym" || (it.t === "text" && it.directive)).length : 0;
-  if (lost && !(await ask(`A symbol holds no parts or SPICE directives: ${lost} of them on it ${lost > 1 ? "are" : "is"} not saved. Save the rest?`, { title: "nomospice", kind: "warning" }))) return false;
   const doc = docId();
   // another folder: symbols from next to the old file go along on request (else its parts lose
   // them). Asked before the path changes, so no run (live mode) meanwhile looks in the new folder.
@@ -483,8 +480,8 @@ export function App() {
         <ToolbarButton label="Comment" hotkey="T" icon={<Type />} onClick={() => newItem({ t: "text", x: 0, y: 0, text: "", directive: false })} />
         <ToolbarButton label="SPICE directive" hotkey="S" disabled={symbolDoc} icon={<Code />} onClick={() => newItem({ t: "text", x: 0, y: 0, text: "", directive: true })} />
         <ToolbarSeparator />
-        <ToolbarButton label="Rotate" hotkey="⌃R" icon={<RotateCw />} onClick={() => transform(rotate)} />
-        <ToolbarButton label="Mirror" hotkey="⌃E" icon={<FlipHorizontal2 />} onClick={() => transform(mirror)} />
+        <ToolbarButton label="Rotate" hotkey="⌃R" icon={<RotateCw />} disabled={symbolDoc} onClick={() => transform(rotate)} />
+        <ToolbarButton label="Mirror" hotkey="⌃E" icon={<FlipHorizontal2 />} disabled={symbolDoc} onClick={() => transform(mirror)} />
         <ToolbarButton label="Duplicate" hotkey="⌘D / F6" icon={<Copy />} disabled={s.selCount !== 1} onClick={duplicate} />
         <ToolbarButton label="Delete" hotkey="Del / F5" icon={<Scissors />} pressable active={tool.k === "delete"} onClick={() => (s.selCount ? deleteSelection() : useS.setState({ tool: { k: "delete" } }))} />
         <ToolbarSpacer />

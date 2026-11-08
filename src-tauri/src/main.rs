@@ -132,8 +132,9 @@ async fn path_exists(path: String) -> bool {
 #[tauri::command]
 async fn save_asc(path: String, items: Vec<Item>) -> Result<(), String> {
     // (a symbol's name is how schematics place it: one word, not a built-in symbol's, which wins)
+    // (a file there already, opened and edited: written as asked)
     let symbol = schematic::is_symbol(&path);
-    if symbol {
+    if symbol && !std::path::Path::new(&path).exists() {
         let stem = std::path::Path::new(&path).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
         if stem.contains(char::is_whitespace) {
             return Err(format!("“{stem}”: a symbol's name has no spaces (a schematic places it by name)"));

@@ -57,7 +57,7 @@ function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: 
       const more = extra.map(([k, v]) => [canon(k.trim()), v] as [string, string]).filter(([k, v]) => k && v.trim());
       onDone({ ...it, attrs: Object.fromEntries([...new Map([...own, ...more])].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) });
     }
-    else if (it.t === "flag" && !it.name.trim()) close();
+    else if (it.t === "flag" && !it.name.trim() && !symbol) close(); // (a symbol's pin may have no name)
     else onDone(it);
   };
   // independent sources (V, I; not the controlled E/G/F/H) get the waveform form

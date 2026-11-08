@@ -630,7 +630,7 @@ export const Schematic = memo(function Schematic() {
       { label: "New symbol", run: () => window.dispatchEvent(new Event("nomospice:new-symbol")) },
       ...back,
     ];
-    if (count > 1) return [...arrange, "-", ...clip, del];
+    if (count > 1) return [...(symbolDoc ? [] : [...arrange, "-" as const]), ...clip, del]; // (a symbol's drawing is not rotated)
     switch (it.t) {
       case "sym": {
         const prefix = prefixOf(it, defOf(lib, it)); // the part's own Prefix wins, as in the netlist

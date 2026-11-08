@@ -155,7 +155,8 @@ export function refreshNets() {
  *  still there, which gets a number of its own (a cut pin pasted keeps its place). */
 export function forDoc(it: Item, copy = false): Item | null {
   const symbol = isSymbolDoc(get().path);
-  if (symbol && (it.t === "sym" || (it.t === "text" && it.directive))) return null;
+  if (symbol && it.t === "sym") return null;
+  if (symbol && it.t === "text" && it.directive) return { ...it, directive: false };
   if (symbol && it.t === "wire") return { t: "draw", kind: "LINE", width: "Normal", p: [it.x1, it.y1, it.x2, it.y2] };
   if (it.t !== "flag") return it;
   const extra = (it.extra ?? []).map((l) => l.trimStart())
@@ -166,11 +167,13 @@ export function forDoc(it: Item, copy = false): Item | null {
   return name ? { ...it, name, extra } : null;
 }
 
-/** A symbol's items as it takes them (`forDoc`), whatever put them there: a directive a comment. */
+/** A symbol's items as it takes them (`forDoc`), whatever put them there (the same objects where
+ *  nothing changes). */
 const symbolItems = (items: Item[]) =>
   items.flatMap((it) => {
-    const x = forDoc(it.t === "text" && it.directive ? { ...it, directive: false } : it);
-    return !x ? [] : x.t === it.t && JSON.stringify(x) === JSON.stringify(it) ? [it] : [x];
+    const x = forDoc(it);
+    const same = x === it || (x?.t === "flag" && it.t === "flag" && x.name === it.name && x.extra?.join("\n") === it.extra?.join("\n"));
+    return !x ? [] : same ? [it] : [x];
   });
 
 export function commit(items: Item[], sel?: number[]) {
