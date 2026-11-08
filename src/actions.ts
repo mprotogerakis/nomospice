@@ -1,6 +1,6 @@
 // Editing actions shared by the toolbar, hotkeys and context menus.
 import type { Item, Shape } from "./types";
-import { commit, loadSymbols, useS } from "./store";
+import { commit, isSymbolDoc, loadSymbols, useS } from "./store";
 import { box, isShape, rotateInPlace, shifted, snap } from "./geom";
 
 export function deleteSelection() {
@@ -18,11 +18,20 @@ export function transform(f: (r: string) => string) {
   if (items.some((it, i) => s.has(i) && it.t === "sym")) commit(items.map((it, i) => (s.has(i) && it.t === "sym" ? rotateInPlace(it, lib, f) : it)));
 }
 
+/** A label as this document takes it: in a symbol a pin (where its name shows; a number of its
+ *  own when saved), in a schematic a net label (its port kind). */
+function forDoc<T extends Item>(it: T): T {
+  if (it.t !== "flag") return it;
+  const symbol = isSymbolDoc(useS.getState().path);
+  const extra = (it.extra ?? []).filter((l) => (symbol ? l.startsWith("PIN ") || (l.startsWith("PINATTR ") && !l.startsWith("PINATTR SpiceOrder")) : l.startsWith("IOPIN ")));
+  return { ...it, extra };
+}
+
 export function duplicate() {
   const { items, sel } = useS.getState();
   const it = sel.length === 1 ? items[sel[0]] : null;
   if (!it || it.t === "wire" || it.t === "raw") return;
-  const copy: Item = it.t === "sym" ? { ...it, attrs: Object.fromEntries(Object.entries(it.attrs).filter(([k]) => k !== "InstName")) } : { ...it };
+  const copy: Item = it.t === "sym" ? { ...it, attrs: Object.fromEntries(Object.entries(it.attrs).filter(([k]) => k !== "InstName")) } : forDoc({ ...it });
   useS.setState({ tool: { k: "place", item: copy }, sel: [] });
 }
 
@@ -55,7 +64,7 @@ function shape(v: unknown): Shape | null {
     return { t: "draw", kind: it.kind.toUpperCase(), width: /^wide$/i.test(String(it.width)) ? "Wide" : "Normal", p: it.p as number[], ...(typeof it.style === "number" && it.style >= 0 && it.style <= 4 ? { style: it.style } : {}) }; // (another style: none, not a 0 that was not there)
   if (!num(it.x) || !num(it.y)) return null;
   // (a label as read from a file may end in spaces: its name is the rest)
-  if (it.t === "flag" && typeof it.name === "string" && word(it.name.trim())) return { t: "flag", x: it.x as number, y: it.y as number, name: it.name.trim(), ...extras(it.extra, "IOPIN") };
+  if (it.t === "flag" && typeof it.name === "string" && word(it.name.trim())) return { t: "flag", x: it.x as number, y: it.y as number, name: it.name.trim(), ...extras(it.extra, "(IOPIN|PIN|PINATTR)") };
   // (a text keeps its tabs and line breaks; its alignment is one of the .asc's words)
   if (it.t === "text" && typeof it.text === "string" && !CONTROL.test(it.text)) {
     // ("Left 2": the alignment and the font size)
@@ -107,7 +116,7 @@ function pasteText(text: string): boolean {
   } catch {
     return false;
   }
-  const its = (Array.isArray(raw) ? raw : []).map(shape).filter((x): x is Shape => !!x);
+  const its = (Array.isArray(raw) ? raw : []).map(shape).filter((x): x is Shape => !!x).map(forDoc);
   if (!its.length) return false;
   // (anchored by what is drawn: not an arc's rays, which may reach far out)
   const bs = its.map((it) => (it.t === "wire" ? [Math.min(it.x1, it.x2), Math.min(it.y1, it.y2)] : it.t === "draw" ? box(it, {})! : [it.x, it.y]));

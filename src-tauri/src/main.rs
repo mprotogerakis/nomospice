@@ -681,7 +681,7 @@ async fn git_log(path: String) -> Result<Vec<git::Commit>, String> {
 #[tauri::command]
 async fn git_show(path: String, hash: String) -> Result<Vec<Item>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        git::show(std::path::Path::new(&path), &hash).map(|b| schematic::parse_asc(&schematic::decode(&b)))
+        git::show(std::path::Path::new(&path), &hash).map(|b| schematic::load(&path, &b).0) // (a symbol's as one)
     })
     .await
     .map_err(|e| e.to_string())?

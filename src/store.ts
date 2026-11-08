@@ -121,6 +121,7 @@ export const fileName = (path: string | null | undefined) => path?.split(/[\\/]/
 export const dirOf = (path: string | null) => {
   if (!path) return null;
   const d = path.replace(/[\\/][^\\/]*$/, "");
+  if (d === path) return null; // (a bare file name, a new symbol's: no folder yet)
   // a file at a root: "/" and "C:\" (a bare "C:" would be the current directory on that drive)
   return d === "" ? path[0] : /^[a-z]:$/i.test(d) ? `${d}\\` : d;
 };

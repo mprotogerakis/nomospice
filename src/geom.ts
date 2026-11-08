@@ -79,6 +79,7 @@ export function box(it: Item, lib: Lib, left?: Set<string>): Box | null {
     case "wire": return [Math.min(it.x1, it.x2), Math.min(it.y1, it.y2), Math.max(it.x1, it.x2), Math.max(it.y1, it.y2)];
     case "flag": {
       if (it.name === "0") return [it.x - 16, it.y, it.x + 16, it.y + 16];
+      if (it.extra?.some((l) => l.startsWith("PIN "))) return [it.x - 6, it.y - 6, it.x + 6, it.y + 6]; // (a symbol's pin: its square)
       const r = labelRect(it, !!left?.has(key(it.x, it.y)));
       return [Math.min(r[0], it.x - 3), r[1], Math.max(r[2], it.x + 3), r[3]];
     }

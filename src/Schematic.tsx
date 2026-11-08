@@ -447,6 +447,7 @@ export const Schematic = memo(function Schematic() {
   // named once per paste (not per mouse move): the preview follows the cursor by shifting these
   const pasteNamed = useMemo(() => (tool.k === "paste" ? pasted(tool.items) : []), [tool, items, lib]); // eslint-disable-line react-hooks/exhaustive-deps
   const wirePath = (a: Pt, b: Pt): Item[] => {
+    if (symbolDoc) return dropZeroWires([{ t: "wire", x1: a[0], y1: a[1], x2: b[0], y2: b[1] }]); // (a symbol's line: straight, any angle)
     const corner: Pt = hFirst ?? true ? [b[0], a[1]] : [a[0], b[1]];
     return dropZeroWires([
       { t: "wire", x1: a[0], y1: a[1], x2: corner[0], y2: corner[1] },
@@ -493,7 +494,8 @@ export const Schematic = memo(function Schematic() {
         // the selection alone, its wires left where they are
         let built: ReturnType<typeof dragPlan> | null = null;
         const chosen = new Set(next);
-        const plan = tool.k === "move"
+        // (a symbol's lines are no wires: what is moved moves alone)
+        const plan = tool.k === "move" || symbolDoc
           ? (dx: number, dy: number) => items.map((it, j) => (chosen.has(j) && isShape(it) ? shifted(it, dx, dy) : it))
           : (dx: number, dy: number) => (built ??= dragPlan(items, lib, chosen))(dx, dy);
         drag.current = { k: "move", start: g, plan, moved: false, index: i, at: [0, 0], base: items, pin: probing ? pinAt(items[i], p) : undefined };

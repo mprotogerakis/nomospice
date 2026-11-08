@@ -141,13 +141,13 @@ let saveQueue: Promise<unknown> = Promise.resolve();
 const MODEL_FILE = /\.(lib|sub|mod|inc|cir|sp|spi|bjt|dio|jft|mos)$/i; // (not .net: a whole circuit, LTspice's netlist of a schematic)
 /** What dropping these files does (null: nothing). */
 const dropAction = (paths: string[]) =>
-  paths.some((p) => /\.asc$/i.test(p)) ? "Open schematic" : paths.some((p) => /\.asy$/i.test(p)) ? "Open symbol" : paths.some((p) => MODEL_FILE.test(p)) ? "Add as .include directive" : null;
+  paths.some((p) => /\.asc$/i.test(p)) ? "Open schematic" : paths.some(isSymbolDoc) ? "Open symbol" : paths.some((p) => MODEL_FILE.test(p)) ? "Add as .include directive" : null;
 /** Dropped files: a schematic opens, model files become `.include` directives (relative to the
  *  schematic's folder when inside it, as LTspice writes them). */
 async function dropFiles(paths: string[]) {
   if (useS.getState().dialog) return;
   // (a dropped .cir is a model to include, mostly: a netlist opens by File → Open)
-  const asc = paths.find((p) => /\.asc$/i.test(p)) ?? paths.find((p) => /\.asy$/i.test(p));
+  const asc = paths.find((p) => /\.asc$/i.test(p)) ?? paths.find(isSymbolDoc);
   if (asc) return openFile(asc);
   const models = paths.filter((p) => MODEL_FILE.test(p));
   if (models.length) newItem({ t: "text", x: 0, y: 0, directive: true, text: models.map((p) => `.include "${relToDoc(p)}"`).join("\n") });
@@ -166,6 +166,9 @@ async function saveFile(as = false): Promise<boolean> {
     if ((await invoke<boolean>("path_exists", { path })) && !(await ask(`${fileName(path)} already exists. Replace it?`, { title: "nomospice", kind: "warning" }))) return false;
   }
   const items = useS.getState().items;
+  // (a symbol holds drawing, pins, texts: parts or directives placed on it have no place in its file)
+  const lost = isSymbolDoc(path) ? items.filter((it) => it.t === "sym" || (it.t === "text" && it.directive)).length : 0;
+  if (lost && !(await ask(`A symbol holds no parts or SPICE directives: ${lost} of them on it ${lost > 1 ? "are" : "is"} not saved. Save the rest?`, { title: "nomospice", kind: "warning" }))) return false;
   const doc = docId();
   // another folder: symbols from next to the old file go along on request (else its parts lose
   // them). Asked before the path changes, so no run (live mode) meanwhile looks in the new folder.
@@ -292,7 +295,7 @@ export function App() {
       await loadSymbols();
       setExamples(await invoke<[string, Item[]][]>("examples"));
       const args = await invoke<string[]>("cli_args");
-      const file = args.find((a) => /\.as[cy]$/i.test(a) || NETLIST.test(a));
+      const file = args.find((a) => /\.asc$/i.test(a) || isSymbolDoc(a) || NETLIST.test(a));
       const rec = await invoke<{ path: string | null; items: Item[]; unwritten?: string | null } | null>("recovery_take");
       // an empty document is a valid snapshot too (the user deleted everything)
       const restore = Array.isArray(rec?.items) && (await ask(`Restore unsaved changes${rec.path ? ` to ${rec.path}` : ""} from the last session?`, { title: "nomospice", kind: "info" }));

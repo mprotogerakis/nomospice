@@ -125,7 +125,7 @@ function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: 
           </Field>
           {/* (its PIN line: where the name shows on the placed part, and how far from the pin) */}
           <Field label="Name shown" hint="on the placed part, from the pin">
-            <select className={FIELD} value={pinJust(it.extra)} onChange={(e) => setIt({ ...it, extra: [`PIN ${it.x} ${it.y} ${e.target.value} 8`, ...(it.extra ?? []).filter((l) => !l.startsWith("PIN "))] })}>
+            <select className={FIELD} value={pinJust(it.extra)} onChange={(e) => setIt({ ...it, extra: [`PIN ${it.x} ${it.y} ${e.target.value} ${pinOff(it.extra)}`, ...(it.extra ?? []).filter((l) => !l.startsWith("PIN "))] })}>
               <option value="NONE">not</option>
               <option value="LEFT">right of it (LEFT)</option>
               <option value="RIGHT">left of it (RIGHT)</option>
@@ -157,6 +157,8 @@ function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: 
 
 /** Where a pin's name shows (its PIN line's justification: NONE … ; `none` if it has no PIN line). */
 const pinJust = (extra?: string[], none = "NONE") => extra?.find((l) => l.startsWith("PIN "))?.split(/\s+/)[3]?.toUpperCase() ?? none;
+/** How far from the pin its name shows (its PIN line's offset, kept when where changes). */
+const pinOff = (extra?: string[]) => +(extra?.find((l) => l.startsWith("PIN "))?.split(/\s+/)[4] ?? "") || 8;
 
 /** A symbol's attributes (SYMATTR lines: Prefix, Value, Description, SpiceModel …) and its type:
  *  a part (CELL) or a hierarchical block (BLOCK, its schematic of the same name). */
@@ -171,7 +173,7 @@ function SymbolAttrs() {
   const done = () => {
     const keep = items.filter((it) => !(it.t === "raw" && (it.line.startsWith("SYMATTR ") || it.line.startsWith("SymbolType "))));
     const attrs = rows.filter(([k, v]) => k.trim() && v.trim()).map(([k, v]): Item => ({ t: "raw", line: `SYMATTR ${k.trim().replace(/\s+/g, "")} ${v.trim()}` }));
-    commit([{ t: "raw", line: `SymbolType ${kind}` }, ...keep, ...attrs]);
+    commit([{ t: "raw", line: `SymbolType ${kind}` }, ...keep, ...attrs], []); // (the items moved: nothing selected)
     close();
   };
   return (

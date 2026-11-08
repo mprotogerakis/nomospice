@@ -611,16 +611,20 @@ pub fn write_asy(items: &[Item]) -> String {
     }
     let order = |extra: &[String]| extra.iter().find_map(|l| l.strip_prefix("PINATTR SpiceOrder ")?.trim().parse::<u32>().ok());
     let mut next = items.iter().filter_map(|it| match it { Item::Flag { extra, .. } => order(extra), _ => None }).max().unwrap_or(0);
+    let mut taken = HashSet::new();
     for it in items {
         let Item::Flag { x, y, name, extra } = it else { continue };
         // (where its name shows, as read; a new pin's not)
         let pin = extra.iter().find(|l| l.starts_with("PIN ")).map(|l| l.split_whitespace().skip(3).collect::<Vec<_>>().join(" ")).filter(|j| !j.is_empty());
         out += &format!("PIN {x} {y} {}\nPINATTR PinName {name}\n", pin.as_deref().unwrap_or("NONE 8"));
-        extra.iter().filter(|l| l.starts_with("PINATTR ")).for_each(|l| out += &format!("{l}\n"));
-        if order(extra).is_none() {
+        extra.iter().filter(|l| l.starts_with("PINATTR ") && !l.starts_with("PINATTR SpiceOrder ")).for_each(|l| out += &format!("{l}\n"));
+        // (its number as read; a new pin's, or a copy's of another's, the next free one)
+        let n = order(extra).filter(|n| taken.insert(*n)).unwrap_or_else(|| {
             next += 1;
-            out += &format!("PINATTR SpiceOrder {next}\n");
-        }
+            taken.insert(next);
+            next
+        });
+        out += &format!("PINATTR SpiceOrder {n}\n");
     }
     out
 }
@@ -698,11 +702,9 @@ pub fn write_asc(items: &[Item]) -> String {
                 (0, Item::Wire { x1, y1, x2, y2 }) => out += &format!("WIRE {x1} {y1} {x2} {y2}\n"),
                 (1, Item::Flag { x, y, name, extra }) => {
                     out += &format!("FLAG {x} {y} {name}\n");
-                    // (a port's IOPIN where its label is now: moved since it was read)
-                    extra.iter().for_each(|l| out += &match port_kind(l) {
-                        Some(kind) => format!("IOPIN {x} {y} {kind}\n"),
-                        None => format!("{l}\n"),
-                    });
+                    // (a port's IOPIN where its label is now: moved since it was read; a symbol pin's
+                    // lines, pasted from one, are no schematic's)
+                    extra.iter().filter_map(|l| port_kind(l)).for_each(|kind| out += &format!("IOPIN {x} {y} {kind}\n"));
                 }
                 (2, Item::Sym { sym, x, y, rot, attrs, extra }) => {
                     out += &format!("SYMBOL {sym} {x} {y} {rot}\n");
@@ -3299,6 +3301,13 @@ SYMBOL half 400 300 R0\nSYMATTR InstName U4\nSYMATTR Value R=3k\nFLAG 352 300 a\
         items.push(Item::Flag { x: 0, y: 48, name: "C".into(), extra: vec![] });
         let d = parse_asy("res", &write_asy(&items));
         assert_eq!(d.pins.iter().map(|p| (p.x, p.name.as_str())).collect::<Vec<_>>(), [(48, "A"), (16, "B"), (0, "C")]);
+        // a copy of a pin, its number with it: the next free one
+        let a = items.iter().find(|it| matches!(it, Item::Flag { .. })).cloned().unwrap();
+        items.push(match a { Item::Flag { extra, .. } => Item::Flag { x: 0, y: 64, name: "D".into(), extra }, _ => unreachable!() });
+        let d = parse_asy("res", &write_asy(&items));
+        assert_eq!(d.pins.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["A", "B", "C", "D"]);
+        // a pin pasted into a schematic: a label there
+        assert!(!write_asc(&items).contains("PIN"), "{}", write_asc(&items));
     }
 
     #[test]
