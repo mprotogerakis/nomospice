@@ -602,12 +602,14 @@ export const Schematic = memo(function Schematic() {
       case "sym": {
         const prefix = prefixOf(it, defOf(lib, it)); // the part's own Prefix wins, as in the netlist
         const kind = ({ D: "D", Q: "NPN|PNP", M: "NMOS|PMOS|VDMOS", J: "NJF|PJF", X: "SUBCKT" } as Record<string, string>)[prefix];
-        // (as the netlist takes it: a sheet that is none there, a test bench placing its own part, not)
-        const sheet = nets?.sheets?.[i] || undefined;
+        // its schematic opens (to fix one the netlist refuses, too), unless it is this one (a test
+        // bench of its part); a model is chosen for a part the netlist runs as no block
+        const sheet = defOf(lib, it)?.sheet, here = sheet?.toLowerCase() === useS.getState().path?.toLowerCase();
+        const block = nets ? !!nets.sheets?.[i] : !!sheet && !here;
         return [
           { label: "Edit…", hint: probing ? undefined : "dbl-click", run: edit },
-          ...(sheet ? [{ label: "Open its schematic", run: () => window.dispatchEvent(new CustomEvent("nomospice:sheet", { detail: sheet })) }] : []),
-          ...(kind && !sheet ? [{ label: "Choose model from library…", run: () => set({ dialog: { k: "parts", replace: i, kind } }) }] : []),
+          ...(sheet && !here ? [{ label: "Open its schematic", run: () => window.dispatchEvent(new CustomEvent("nomospice:sheet", { detail: sheet })) }] : []),
+          ...(kind && !block ? [{ label: "Choose model from library…", run: () => set({ dialog: { k: "parts", replace: i, kind } }) }] : []),
           ...plot,
           "-", ...arrange,
           { label: "Duplicate", hint: "⌘D", run: duplicate },

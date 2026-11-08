@@ -720,19 +720,40 @@ struct Hier {
     /// symbols whose sheet is no subcircuit here (it places itself, it lacks a port), and why:
     /// their parts call a model of that name, as before there was a sheet
     refused: BTreeMap<String, String>,
-    /// the sheets' `.global`, `.include` and `.lib` lines: the top netlist's (an included file's
-    /// models for every block alike: the deck inlines each file once)
+    /// the sheets' `.global` lines and `.lib name … .endl` sections: the top netlist's (their
+    /// includes stay in their subcircuits, inlined there: what a file holds is that block's)
     hoisted: Vec<String>,
     /// some sheet has a source with an AC amplitude
     ac: bool,
     /// the top schematic's .model and .subckt names, whether it includes files: its sheets' too
     top_defs: HashSet<String>,
     top_includes: bool,
+    /// some sheet includes files (which may define what another missed)
+    included: bool,
+    /// names of refused BLOCK symbols' calls: their refusal is said, not a missing model
+    quiet: HashSet<String>,
+    /// each block symbol's subcircuit name, unique (two symbols whose names read alike as SPICE
+    /// names get two)
+    names: HashMap<String, String>,
     /// the library definitions the sheets need, each once: the top netlist's too (after the
     /// hoisted includes, which win as in the top schematic itself), and the names they define
     models: Vec<String>,
     emitted: HashSet<String>,
 
+}
+
+impl Hier {
+    /// A block symbol's subcircuit name: `sheet_<name>` (a sheet wrapping a library part of its
+    /// name calls that one, not itself), another for another symbol of the same SPICE name.
+    fn name(&mut self, sym: &str) -> String {
+        if let Some(n) = self.names.get(sym) {
+            return n.clone();
+        }
+        let base = format!("sheet_{}", net_name(sym));
+        let name = (1..).map(|k| if k == 1 { base.clone() } else { format!("{base}_{k}") }).find(|n| !self.names.values().any(|v| v.eq_ignore_ascii_case(n))).unwrap();
+        self.names.insert(sym.to_string(), name.clone());
+        name
+    }
 }
 
 /// A hierarchical block's sheet as a subcircuit.
@@ -1689,7 +1710,7 @@ fn pin_labels(prefix: char, inst: &str, pins: &[Pin]) -> Vec<String> {
 /// - `.control` blocks and `*#` lines are dropped everywhere (ngspice executes them on load,
 ///   including `shell`), in the schematic and in included files alike.
 pub fn prepare(text: &str, dir: Option<&std::path::Path>, warnings: &mut Vec<String>) -> Prepared {
-    let mut x = Expander { warnings, out: String::new(), seen: HashSet::new(), read: true, diode: None, behavioural: vec![] };
+    let mut x = Expander { warnings, out: String::new(), seen: HashSet::new(), scope: (None, 0), read: true, diode: None, behavioural: vec![] };
     x.expand(text, dir, None, 0);
     x.warn_behavioural();
     // (also in included files; Laplace first: a random call there is said by its own name)
@@ -1809,7 +1830,7 @@ fn random_calls(s: &str, all: bool, own: &[String], warnings: &mut Vec<String>) 
 /// The warnings `prepare` would give for the schematic's own lines, without reading any
 /// included file (cheap enough for every edit).
 pub fn prepare_warnings(text: &str, dir: Option<&std::path::Path>, warnings: &mut Vec<String>) {
-    let mut x = Expander { warnings, out: String::new(), seen: HashSet::new(), read: false, diode: None, behavioural: vec![] };
+    let mut x = Expander { warnings, out: String::new(), seen: HashSet::new(), scope: (None, 0), read: false, diode: None, behavioural: vec![] };
     x.expand(text, dir, None, 0);
     x.warn_behavioural();
     let expanded = crate::laplace::rewrite(&std::mem::take(&mut x.out), x.warnings);
@@ -1839,8 +1860,11 @@ fn resolve(file: &str, dir: Option<&std::path::Path>) -> Option<std::path::PathB
 struct Expander<'a> {
     warnings: &'a mut Vec<String>,
     out: String,
-    /// (file, section) already inlined: repeated includes and include cycles are skipped.
-    seen: HashSet<(std::path::PathBuf, Option<String>)>,
+    /// (subcircuit, file, section) already inlined: repeated includes and include cycles are
+    /// skipped; a block's subcircuit has its own (a file its sheet includes is inlined there)
+    seen: HashSet<(Option<String>, std::path::PathBuf, Option<String>)>,
+    /// the deck's own .subckt the lines are in (the outermost), and how deep
+    scope: (Option<String>, usize),
     /// false: only check that included files exist.
     read: bool,
     /// name of the D-type `.model` card being read (its `+` lines continue it)
@@ -1897,6 +1921,15 @@ impl Expander<'_> {
                 control &= !l.starts_with(".endc");
                 continue;
             }
+            if depth == 0 && tok.first().is_some_and(|w| w.eq_ignore_ascii_case(".subckt")) {
+                self.scope = (self.scope.0.take().or_else(|| tok.get(1).map(|s| s.to_lowercase())), self.scope.1 + 1);
+            }
+            if depth == 0 && tok.first().is_some_and(|w| w.eq_ignore_ascii_case(".ends")) {
+                self.scope.1 = self.scope.1.saturating_sub(1);
+                if self.scope.1 == 0 {
+                    self.scope.0 = None;
+                }
+            }
             if (l.starts_with(".inc") || l.starts_with(".lib")) && !(depth == 0 && n == 0) {
                 self.include(t, &l, tok.len(), dir, depth);
                 continue;
@@ -1937,7 +1970,7 @@ impl Expander<'_> {
         match resolve(&file, dir) {
             Some(_) if !self.read => {}
             Some(path) => {
-                let key = (path.canonicalize().unwrap_or(path.clone()), sec.map(str::to_lowercase));
+                let key = (self.scope.0.clone(), path.canonicalize().unwrap_or(path.clone()), sec.map(str::to_lowercase));
                 if !self.seen.insert(key) {
                     return; // already inlined (or an include cycle)
                 }
@@ -2332,14 +2365,13 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
         // passed; a sheet that is none here (said, or none at all): a subcircuit of that name
         let written = attrs.get("Value").unwrap_or(&def.value);
         let call = (prefix == 'X' && (def.sheet.is_some() || (def.block && !def.model_file))).then(|| block_params(written, &def.name)).flatten();
-        // (a name of its own: a sheet wrapping a library part of its name calls that one, not itself)
-        let name = format!("sheet_{}", net_name(&def.name));
+        let name = if call.is_some() { h.name(&def.name) } else { String::new() };
         if let (Some(_), Some(path)) = (&call, &def.sheet) {
             if !h.blocks.iter().any(|b| b.name == name) && !h.refused.contains_key(&name) {
                 sheet_subckt(&name, path, &def, lib, h, &mut nl.warnings);
             }
         }
-        let block = call.filter(|_| h.blocks.iter().any(|b| b.name == name)).map(|params| (name, params.to_string()));
+        let block = call.filter(|_| h.blocks.iter().any(|b| b.name == name)).map(|params| (name.clone(), params.to_string()));
         nl.sheets[i] = block.as_ref().and(def.sheet.clone()).unwrap_or_default();
         let value = match (&block, call) {
             (Some((name, params)), _) => one_line(&format!("{name} {params}")),
@@ -2364,11 +2396,14 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
         if prefix == 'M' && nodes.len() == 3 && !vdmos.contains(&model) && !lib_vdmos() {
             nodes.push(nodes[2].clone()); // bulk tied to source
         }
-        // (a BLOCK symbol whose sheet is none here, said: its name is no library's either)
-        let refused = def.block && h.refused.get(&format!("sheet_{}", net_name(&def.name))).is_some_and(|w| !w.is_empty());
+        // (a BLOCK symbol whose sheet is none here, said: a library may have its name, else the
+        // refusal is what is said, not a missing model)
+        if call.is_some() && def.block && block.is_none() && h.refused.get(&name).is_some_and(|w| !w.is_empty()) {
+            h.quiet.insert(model.clone());
+        }
         if "DQMXJSW".contains(prefix) && model.is_empty() {
             nl.warnings.push(format!("{inst}: no model or subcircuit named (its Value is empty)"));
-        } else if "DQMXJSW".contains(prefix) && block.is_none() && !refused && !defined(&model) && !used_models.contains(&model) {
+        } else if "DQMXJSW".contains(prefix) && block.is_none() && !defined(&model) && !used_models.contains(&model) {
             used_models.push(model);
         }
         let extra: Vec<String> = ["Value2", "SpiceLine", "SpiceLine2"].iter()
@@ -2536,7 +2571,8 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
     if !sub {
         lines.push(".param pi=3.141592653589793".into()); // LTspice built-in; a user .param pi comes later and wins
     }
-    let includes = directives.iter().any(include) || h.hoisted.iter().any(include) || h.top_includes; // (the sheets', the top's)
+    let includes = directives.iter().any(include) || h.top_includes || (!sub && h.included); // (the top's; at the top, any sheet's)
+    h.included |= includes && sub;
     lines.extend(directives);
     // after the user's directives (ngspice keeps the first definition, so .include/.lib models win):
     // the libraries (LTspice's stock models as LTspice loads them implicitly, Micro-Cap 12, user
@@ -2551,7 +2587,7 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
         let def = match (lib, builtin) {
             (Some(defs), _) => Some(defs.join("\n")),
             (None, Some(text)) => h.emitted.insert(m.clone()).then_some(text),
-            (None, None) if !includes && !h.emitted.contains(&m) => {
+            (None, None) if !includes && !h.emitted.contains(&m) && !h.quiet.contains(&m) => {
                 nl.warnings.push(format!("`{m}`{NO_MODEL}"));
                 None
             }
@@ -2688,14 +2724,14 @@ fn sheet_subckt(name: &str, path: &str, def: &SymbolDef, lib: &mut Library, h: &
     let lines = deck_lines(&child.text);
     let own = lines.iter().filter(|l| l.top && l.param())
         .flat_map(|l| param_defs(l.line, &l.low).into_iter().map(|(n, _)| n.to_ascii_lowercase())).collect();
-    // (its .global, .include and .lib lines, a `.lib name … .endl` section as one: the top netlist's;
-    // not those inside a .subckt of its own)
+    // (its .global lines and `.lib name … .endl` sections, each as one: the top netlist's; not those
+    // inside a .subckt of its own)
     let (mut body, mut section) = (vec![], None::<Vec<&str>>);
     for (k, l) in lines.iter().enumerate() {
         let w = l.low.split_whitespace().next().unwrap_or("");
         // (`.lib name` up to an `.endl` before the next `.lib`: a section; else a file to include)
-        let next = lines[k + 1..].iter().find_map(|m| m.low.split_whitespace().next().filter(|h| *h == ".lib" || *h == ".endl"));
-        if l.top && section.is_none() && w == ".lib" && l.low.split_whitespace().count() == 2 && next == Some(".endl") {
+        let next = || lines[k + 1..].iter().find_map(|m| m.low.split_whitespace().next().filter(|h| *h == ".lib" || *h == ".endl"));
+        if l.top && section.is_none() && w == ".lib" && l.low.split_whitespace().count() == 2 && next() == Some(".endl") {
             section = Some(vec![]);
         }
         match &mut section {
@@ -2706,7 +2742,7 @@ fn sheet_subckt(name: &str, path: &str, def: &SymbolDef, lib: &mut Library, h: &
                     section = None;
                 }
             }
-            None if l.top && [".global", ".include", ".inc", ".lib"].contains(&w) => h.hoisted.push(l.line.to_string()),
+            None if l.top && w == ".global" => h.hoisted.push(l.line.to_string()),
             None => body.push(l.line.to_string()),
         }
     }
@@ -3132,8 +3168,10 @@ SYMBOL half 400 300 R0\nSYMATTR InstName U4\nSYMATTR Value R=3k\nFLAG 352 300 a\
         assert!(t.lines().any(|l| l.starts_with("XU2 ") && l.ends_with(" sheet_div R = 3k")), "{t}");
         assert!(nl.warnings.iter().any(|w| w.starts_with("Div.asc: .tran, .control not run")), "{:?}", nl.warnings);
         assert!(!t.contains("\nrun\n") && t.matches(".global vcc").count() == 1 && t.find(".global vcc") < t.find(".subckt"), "no .control, one .global at the top: {t}");
-        assert!(t.matches(".include m.lib").count() == 1 && t.find(".include m.lib") < t.find(".subckt"), "a sheet's include for all blocks, at the top: {t}");
-        assert!(t.matches(".model 1N4148").count() == 1 && t.find(".include m.lib") < t.find(".model 1N4148") && t.find(".model 1N4148") < t.find(".subckt"), "a sheet's library model at the top, after its include: {t}");
+        assert!(t.matches(".include m.lib").count() == 2 && t.find(".include m.lib") > t.find(".subckt"), "a sheet's include in its subcircuit: {t}");
+        assert!(t.matches(".model 1N4148").count() == 1 && t.find(".model 1N4148") < t.find(".subckt"), "a sheet's library model at the top (its include's, in its subcircuit, wins there): {t}");
+        let prepared = prepare(t, Some(&dir), &mut vec![]);
+        assert_eq!(prepared.text().matches("IS=1e-9").count(), 2, "the file inlined in each block's subcircuit: {}", prepared.text());
         let run = crate::ngspice::run(&prepare(t, Some(&dir), &mut vec![]).with_sensors(nl.sensors.clone())).unwrap_or_else(|l| panic!("{l:?}\n{t}"));
         let v = |n: &str| run.op.iter().find(|o| o.0 == n).unwrap_or_else(|| panic!("{n}: {:?}", run.op)).1;
         assert!((v("b") - 0.5).abs() < 1e-9 && (v("c") - 0.25).abs() < 1e-9, "the sheet's default, the passed R: {:?}", run.op);
@@ -3153,7 +3191,7 @@ SYMBOL half 400 300 R0\nSYMATTR InstName U4\nSYMATTR Value R=3k\nFLAG 352 300 a\
         assert!(!nl.text.contains(".subckt sheet_bench") && nl.text.lines().any(|l| l.starts_with("XU1 ") && l.ends_with(" bench")) && !nl.warnings.iter().any(|w| w.contains("bench.asc")), "{:?}\n{}", nl.warnings, nl.text);
         let t = netlist(&parse_asc("Version 4\nSYMBOL secs 0 0 R0\nSYMATTR InstName U1\n"), &mut lib).text;
         let sub = t.find(".subckt sheet_secs").unwrap_or_else(|| panic!("{t}"));
-        assert!(t.find(".lib mysect\n.model DX D\n.endl") < Some(sub) && t.find(".lib m.lib") < Some(sub) && t.find("R1 in out 1k") > Some(sub), "{t}");
+        assert!(t.find(".lib mysect\n.model DX D\n.endl") < Some(sub) && t.find(".lib m.lib") > Some(sub) && t.find("R1 in out 1k") > Some(sub), "a section at the top, an included file and the parts in the block: {t}");
         let nl = netlist(&parse_asc("Version 4\nSYMBOL amp 0 0 R0\nSYMATTR InstName U1\n"), &mut lib);
         assert!(nl.text.lines().any(|l| l.starts_with("XU1 ") && l.ends_with(" Amp")), "{}", nl.text);
         std::fs::remove_dir_all(dir).ok();
