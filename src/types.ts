@@ -5,6 +5,9 @@ export type Item =
   | { t: "flag"; x: number; y: number; name: string; extra?: string[] }
   | { t: "sym"; sym: string; x: number; y: number; rot: string; attrs: Record<string, string>; extra?: string[] }
   | { t: "text"; x: number; y: number; text: string; directive: boolean; align?: string }
+  /** The schematic's own drawing: LINE, RECTANGLE, CIRCLE or ARC as written, its pen (Normal,
+   *  Wide), its points (x y pairs: two; an ARC four: box, start, end) and line style (1 dash … 4). */
+  | { t: "draw"; kind: string; width: string; p: number[]; style?: number }
   /** .asc lines nomospice does not interpret; kept so saving never loses them. Not drawn. */
   | { t: "raw"; line: string };
 

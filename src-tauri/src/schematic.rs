@@ -35,7 +35,17 @@ pub enum Item {
         #[serde(default, skip_serializing_if = "String::is_empty")]
         align: String,
     },
-    /// Any .asc line we do not interpret (SHEET, LINE/RECTANGLE/CIRCLE/ARC drawings, BUSTAP, ...).
+    /// The schematic's own drawing: `kind` LINE, RECTANGLE, CIRCLE or ARC as written, its pen
+    /// (`Normal`, `Wide`), its points (x y pairs: two; an ARC four: box, start, end) and, if the
+    /// file gives one, its line style (1 dash … 4 dash-dot-dot).
+    Draw {
+        kind: String,
+        width: String,
+        p: Vec<i32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        style: Option<i32>,
+    },
+    /// Any .asc line we do not interpret (SHEET, BUSTAP, ...).
     Raw { line: String },
 }
 
@@ -402,6 +412,14 @@ pub fn parse_asc(src: &str) -> Vec<Item> {
                 let align = format!("{} {}", tok.get(3).unwrap_or(&"Left"), tok.get(4).unwrap_or(&"2"));
                 items.push(Item::Text { x: num(1), y: num(2), text, directive, align });
             }
+            // (all its numbers, or kept as written)
+            Some(k @ ("LINE" | "RECTANGLE" | "CIRCLE" | "ARC")) if {
+                let n = if k == "ARC" { 8 } else { 4 };
+                tok.len() >= 2 + n && tok.len() <= 3 + n && tok[2..].iter().all(|t| t.parse::<i32>().is_ok())
+            } => {
+                let n = if k == "ARC" { 8 } else { 4 };
+                items.push(Item::Draw { kind: k.to_string(), width: tok[1].to_string(), p: tok[2..2 + n].iter().map(|t| t.parse().unwrap_or(0)).collect(), style: tok.get(2 + n).and_then(|t| t.parse().ok()) });
+            }
             Some("Version") | None => {}
             _ => items.push(Item::Raw { line: line.to_string() }),
         }
@@ -436,12 +454,16 @@ pub fn write_asc(items: &[Item]) -> String {
                     let align = if align.is_empty() { "Left 2" } else { align };
                     out += &format!("TEXT {x} {y} {align} {mark}{}\n", escape(text));
                 }
-                (4, Item::Raw { line }) if !line.starts_with("SHEET ") => out += &format!("{line}\n"),
+                (4, Item::Draw { kind, width, p, style }) => {
+                    let ps: Vec<String> = p.iter().map(|v| v.to_string()).collect();
+                    out += &format!("{kind} {width} {}{}\n", ps.join(" "), style.map_or(String::new(), |s| format!(" {s}")));
+                }
+                (5, Item::Raw { line }) if !line.starts_with("SHEET ") => out += &format!("{line}\n"),
                 _ => {}
             }
         }
     };
-    (0..5).for_each(&mut by_kind);
+    (0..6).for_each(&mut by_kind);
     out
 }
 
@@ -1774,7 +1796,7 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool) -> Netlist {
                     }
                 }
             },
-            Item::Text { .. } | Item::Raw { .. } => {}
+            Item::Text { .. } | Item::Draw { .. } | Item::Raw { .. } => {}
         }
     }
 
@@ -2623,6 +2645,17 @@ mod tests {
 
     fn lt_random_t(t: &str) -> std::borrow::Cow<'_, str> {
         lt_random(t, &mut vec![])
+    }
+
+    #[test]
+    fn drawings_roundtrip() {
+        // the schematic's own drawings: read as items, written back as they were (an unreadable one: raw)
+        let src = "Version 4\nSHEET 1 880 680\nLINE Normal 0 16 64 16 2\nRECTANGLE Wide -16 0 64 80\nARC Normal 0 0 32 32 0 16 32 16\nLINE Normal 0 0\n";
+        let items = parse_asc(src);
+        assert!(matches!(&items[1], Item::Draw { kind, width, p, style: Some(2) } if kind == "LINE" && width == "Normal" && p == &vec![0, 16, 64, 16]), "{items:?}");
+        assert!(matches!(&items[3], Item::Draw { kind, p, style: None, .. } if kind == "ARC" && p.len() == 8));
+        assert!(matches!(&items[4], Item::Raw { .. }));
+        assert_eq!(write_asc(&items), src);
     }
 
     #[test]

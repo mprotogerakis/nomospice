@@ -75,6 +75,10 @@ export function labelRect(it: Extract<Item, { t: "flag" }>, left: boolean): Box 
 export function box(it: Item, lib: Lib, left?: Set<string>): Box | null {
   switch (it.t) {
     case "raw": return null;
+    case "draw": { // (an arc: its ellipse's box, the first two points)
+      const [x1, y1, x2, y2] = it.p;
+      return [Math.min(x1, x2), Math.min(y1, y2), Math.max(x1, x2), Math.max(y1, y2)];
+    }
     case "wire": return [Math.min(it.x1, it.x2), Math.min(it.y1, it.y2), Math.max(it.x1, it.x2), Math.max(it.y1, it.y2)];
     case "flag": {
       if (it.name === "0") return [it.x - 16, it.y, it.x + 16, it.y + 16];
@@ -89,20 +93,9 @@ export function box(it: Item, lib: Lib, left?: Set<string>): Box | null {
   }
 }
 
-/** A schematic's own drawing, kept as its raw .asc line (`LINE Normal 0 0 64 0 2`), as a symbol's
- *  shape is: [line | rect | circle | arc, its coordinates and then its line style]. */
-const GRAPHIC: Record<string, string> = { LINE: "line", RECTANGLE: "rect", CIRCLE: "circle", ARC: "arc" };
-export function graphicOf(it: Item): [string, number[]] | null {
-  if (it.t !== "raw") return null;
-  const t = it.line.trim().split(/\s+/), kind = GRAPHIC[t[0]?.toUpperCase() ?? ""];
-  const n = kind === "arc" ? 8 : 4, p = t.slice(2, 3 + n).map(Number);
-  return kind && p.length >= n && p.every(Number.isFinite) ? [kind, p] : null;
-}
-/** Its bounds (an arc: its ellipse's), for fitting the view. */
-export function graphicBox(it: Item): Box | null {
-  const p = graphicOf(it)?.[1];
-  return p ? [Math.min(p[0], p[2]), Math.min(p[1], p[3]), Math.max(p[0], p[2]), Math.max(p[1], p[3])] : null;
-}
+/** A drawing as a symbol's shape is drawn: [line | rect | circle | arc, its points, then its style]. */
+const SHAPE: Record<string, string> = { LINE: "line", RECTANGLE: "rect", CIRCLE: "circle", ARC: "arc" };
+export const drawShape = (it: Extract<Item, { t: "draw" }>): [string, number[]] => [SHAPE[it.kind.toUpperCase()] ?? "line", [...it.p, it.style ?? 0]];
 
 export const union = (all: (Box | null)[]): Box | null => {
   const bs = all.filter((b): b is Box => !!b);
@@ -112,7 +105,9 @@ export const isShape = (it: Item): it is Shape => it.t !== "raw";
 
 /** `it` moved by (dx, dy). */
 export const shifted = (it: Shape, dx: number, dy: number): Shape =>
-  it.t === "wire" ? { ...it, x1: it.x1 + dx, y1: it.y1 + dy, x2: it.x2 + dx, y2: it.y2 + dy } : { ...it, x: it.x + dx, y: it.y + dy };
+  it.t === "wire" ? { ...it, x1: it.x1 + dx, y1: it.y1 + dy, x2: it.x2 + dx, y2: it.y2 + dy }
+  : it.t === "draw" ? { ...it, p: it.p.map((v, k) => v + (k % 2 ? dy : dx)) }
+  : { ...it, x: it.x + dx, y: it.y + dy };
 
 function distSeg(p: Pt, x1: number, y1: number, x2: number, y2: number) {
   const dx = x2 - x1, dy = y2 - y1;
@@ -127,16 +122,25 @@ export function inside(p: Pt, w: Extract<Item, { t: "wire" }>) {
   return cross === 0 && dot > 0 && dot < (w.x2 - w.x1) ** 2 + (w.y2 - w.y1) ** 2;
 }
 
-const RANK = { flag: 0, text: 1, wire: 2, sym: 3 } as const;
-/** Topmost item under p; flags > texts > wires > symbols. */
+const RANK = { flag: 0, text: 1, wire: 2, sym: 3, draw: 4 } as const;
+/** Whether p is on a drawing's outline (within tol): a frame is picked by its edge, not its inside,
+ *  so the circuit it frames stays clickable (a circle or an arc: by its ellipse). */
+function onDrawing(it: Extract<Item, { t: "draw" }>, p: Pt, tol: number) {
+  const [x1, y1, x2, y2] = it.p, k = it.kind.toUpperCase();
+  if (k === "LINE") return distSeg(p, x1, y1, x2, y2) <= tol;
+  if (k === "RECTANGLE") return [[x1, y1, x2, y1], [x2, y1, x2, y2], [x2, y2, x1, y2], [x1, y2, x1, y1]].some(([a, b, c, d]) => distSeg(p, a, b, c, d) <= tol);
+  const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2, rx = Math.abs(x2 - x1) / 2 || 1, ry = Math.abs(y2 - y1) / 2 || 1;
+  return Math.abs(Math.hypot((p[0] - cx) / rx, (p[1] - cy) / ry) - 1) * Math.min(rx, ry) <= tol;
+}
+/** Topmost item under p; flags > texts > wires > symbols > drawings. */
 export function hit(items: Item[], lib: Lib, p: Pt, tol: number): number {
   let best = -1, rank = 9;
   const left = leftLabels(items);
   items.forEach((it, i) => {
     if (it.t === "raw" || RANK[it.t] > rank) return; // equal rank: later = drawn on top wins
     const b = box(it, lib, left)!;
-    const ok = it.t === "wire"
-      ? distSeg(p, it.x1, it.y1, it.x2, it.y2) <= tol
+    const ok = it.t === "wire" ? distSeg(p, it.x1, it.y1, it.x2, it.y2) <= tol
+      : it.t === "draw" ? onDrawing(it, p, tol)
       : p[0] >= b[0] - tol && p[0] <= b[2] + tol && p[1] >= b[1] - tol && p[1] <= b[3] + tol;
     if (ok) (best = i), (rank = RANK[it.t]);
   });

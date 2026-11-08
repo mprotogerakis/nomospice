@@ -1,6 +1,6 @@
 // Self-check of src/spice.ts (the form editors' SPICE parsing/formatting): node scripts/spice-check.ts
 import assert from "node:assert/strict";
-import { connectivity, dragPlan, graphicBox, graphicOf } from "../src/geom.ts";
+import { box, connectivity, dragPlan, drawShape, hit, shifted } from "../src/geom.ts";
 import {
   tokens, formatAnalysis, formatIc, formatInclude, formatMeas, formatModel, formatParams, formatSource, numInfo, parseAnalysis,
   parseIc, parseInclude, parseMeas, parseModel, parseParams, parseSource, sample, si, spiceNum, directiveKind, analysisRoundTrips, analysisEditable, analysisOptions, analysisLineIndex, at, integrate, stripAnalyses, portablePaths, sourceRoundTrips,
@@ -270,11 +270,16 @@ assert.ok(paramValue("1u w=3u") && paramValue("{2*") && paramValue("w=3u") && !p
 assert.equal(getParam("l= Lmin w=1u", "l"), "Lmin", "a name after l=");
 assert.equal(setParam("l= Lmin w=1u", "l", "2u"), "l=2u w=1u");
 
-// a schematic's own drawings, kept raw, read as shapes
-assert.deepEqual(graphicOf({ t: "raw", line: "LINE Normal 0 16 64 16 2" }), ["line", [0, 16, 64, 16, 2]]);
-assert.deepEqual(graphicOf({ t: "raw", line: "ARC Normal 0 0 32 32 0 16 32 16" }), ["arc", [0, 0, 32, 32, 0, 16, 32, 16]]);
-assert.deepEqual(graphicBox({ t: "raw", line: "RECTANGLE Normal 64 80 -16 0" }), [-16, 0, 64, 80]);
-assert.equal(graphicOf({ t: "raw", line: "SHEET 1 880 680" }), null);
-assert.equal(graphicOf({ t: "raw", line: "LINE Normal 0 16" }), null);
+// a schematic's own drawings: drawn as shapes, moved by all their points, picked by their outline
+{
+  const rect = { t: "draw" as const, kind: "RECTANGLE", width: "Normal", p: [64, 80, -16, 0], style: 2 };
+  assert.deepEqual(drawShape(rect), ["rect", [64, 80, -16, 0, 2]]);
+  assert.deepEqual(box(rect, {}), [-16, 0, 64, 80]);
+  assert.deepEqual((shifted(rect, 16, -16) as typeof rect).p, [80, 64, 0, -16]);
+  assert.equal(hit([rect], {}, [24, 1], 4), 0, "its edge");
+  assert.equal(hit([rect], {}, [24, 40], 4), -1, "not its inside: the circuit it frames");
+  const arc = { t: "draw" as const, kind: "ARC", width: "Normal", p: [0, 0, 32, 32, 0, 16, 32, 16] };
+  assert.equal(hit([arc], {}, [16, 32], 3), 0);
+}
 
 console.log("spice-check: ok");

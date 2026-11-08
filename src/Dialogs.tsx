@@ -509,7 +509,7 @@ export const Dialogs = memo(function Dialogs() {
     }
     case "new": {
       const at = dialog.at;
-      const place = (it: Item) => (at && it.t !== "wire" && it.t !== "raw" ? (commit([...items, { ...it, x: at[0], y: at[1] }]), close()) : useS.setState({ dialog: null, tool: { k: "place", item: it } }));
+      const place = (it: Item) => (at && it.t !== "wire" && it.t !== "raw" && it.t !== "draw" ? (commit([...items, { ...it, x: at[0], y: at[1] }]), close()) : useS.setState({ dialog: null, tool: { k: "place", item: it } }));
       if (dialog.item.t === "text") return <DirectiveDialog item={dialog.item} title={dialog.item.directive ? "SPICE Directive" : "Comment"} raw={!dialog.item.directive} onDone={place} />;
       return <ItemForm item={dialog.item} title="Net Name" onDone={place} />;
     }
