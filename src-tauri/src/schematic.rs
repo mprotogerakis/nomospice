@@ -2658,10 +2658,21 @@ mod tests {
         let src = EXAMPLES.iter().find(|e| e.0 == "step_rc").unwrap().1.replace("FLAG 224 64 out", "FLAG 224 64 out+").replace("vdb(out)", "vdb(out+)");
         let nl = netlist_for_sim(&parse_asc(&src), &mut Library::builtin());
         let run = crate::ngspice::run(&nl.prepared(None, &mut vec![])).unwrap();
-        let (bytes, skipped) = crate::ngspice::export_raw(&run.plot, run.id).unwrap();
+        let bytes = crate::ngspice::export_raw(run.id).unwrap();
         let text = String::from_utf8_lossy(&bytes);
-        assert!(skipped.is_empty() && text.matches("Plotname:").count() == 3, "one plot per step: {skipped:?}");
+        assert_eq!(text.matches("Plotname:").count(), 3, "one plot per step");
         assert!(text.contains("\tv(out+)\t") && text.contains("\tI(R1)\tcurrent") && !text.contains("vsense"), "{}", &text[..text.find("Binary:").unwrap_or(400).min(text.len())]);
+        // the columns kept are the right ones: the first step's last v(out+), as traced (complex: .ac)
+        let head_end = bytes.windows(8).position(|w| w == b"Binary:\n").unwrap() + 8;
+        let head = std::str::from_utf8(&bytes[..head_end]).unwrap();
+        let n = |k: &str| head.lines().find_map(|l| l.strip_prefix(k)).unwrap().trim().parse::<usize>().unwrap();
+        let (vars, points) = (n("No. Variables:"), n("No. Points:"));
+        let col = head.lines().skip_while(|l| !l.starts_with("Variables:")).skip(1).position(|l| l.split('\t').nth(2) == Some("v(out+)")).unwrap();
+        let at = head_end + ((points - 1) * vars + col) * 16;
+        let f = |o: usize| f64::from_le_bytes(bytes[o..o + 8].try_into().unwrap());
+        let t = crate::ngspice::trace("v(\"out+\")", &run.scale, run.id).unwrap(); // (quoted, as probes write it)
+        let k = t.x.len() / 3 - 1; // (the first of three steps' curves, its last point)
+        assert!((f(at) - t.re[k]).abs() < 1e-12 && (f(at + 8) - t.im.as_ref().unwrap()[k]).abs() < 1e-12, "{} {}", f(at), t.re[k]);
         // the results themselves unchanged: a part current still traced as before
         assert!(crate::ngspice::trace("I(R1)", &run.scale, run.id).is_ok());
     }

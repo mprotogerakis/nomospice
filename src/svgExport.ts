@@ -63,9 +63,7 @@ export const saveSvg = (svg: string, suffix: string) => saveBeside("svg", "SVG i
 export async function saveRaw() {
   const run = useS.getState().sim?.run;
   if (!run) return;
-  const left = await saveBeside<string[]>("raw", "Simulation results (raw)", "", "export_raw", { plot: run.plot, run: run.id });
-  // (names ngspice's command line would read as something else, a$b: said, not silently missing)
-  if (left?.length) await message(`Written without ${left.join(", ")}: ngspice cannot write a vector of that name.`, { title: "Export", kind: "warning" });
+  await saveBeside("raw", "Simulation results (raw)", "", "export_raw", { run: run.id });
 }
 
 export const xmlEscape = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");

@@ -326,17 +326,15 @@ fn cancel_locus() {
     SWEEP_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 }
 
-/// The results of run `run` (its plot `plot`) as a .raw file.
+/// The results of run `run` as a .raw file.
 #[tauri::command]
-/// Returns the vectors left out (see ngspice::export_raw).
-async fn export_raw(path: String, plot: String, run: u64) -> Result<Vec<String>, String> {
+async fn export_raw(path: String, run: u64) -> Result<(), String> {
     if !path.to_lowercase().ends_with(".raw") {
         return Err(format!("{path}: not a .raw file"));
     }
     tauri::async_runtime::spawn_blocking(move || {
-        let (bytes, skipped) = ngspice::export_raw(&plot, run)?;
-        write_atomic(std::path::Path::new(&path), &bytes).map_err(|e| format!("{path}: {e}"))?; // (a failed write leaves the file as it was)
-        Ok(skipped)
+        let bytes = ngspice::export_raw(run)?;
+        write_atomic(std::path::Path::new(&path), &bytes).map_err(|e| format!("{path}: {e}")) // (a failed write leaves the file as it was)
     })
     .await
     .map_err(|e| e.to_string())?
