@@ -103,7 +103,12 @@ function SymLabels({ it, def }: { it: Extract<Item, { t: "sym" }>; def?: SymbolD
   );
 }
 
-/** Pin names inside a generated subcircuit box, kept upright whatever the rotation. */
+/** Where a pin's name goes from it (its LTspice justification), the text upright: LEFT starts
+ *  right of the pin, TOP below it …; the vertical kinds as their direction says. */
+const JUST: Record<string, Pt> = { LEFT: [1, 0], RIGHT: [-1, 0], TOP: [0, 1], BOTTOM: [0, -1], VLEFT: [0, -1], VRIGHT: [0, 1], VTOP: [1, 0], VBOTTOM: [-1, 0] };
+
+/** Pin names: inside a generated subcircuit box, or where the symbol puts them (a block's ports,
+ *  an IC's pins), kept upright whatever the rotation. */
 function PinLabels({ it, def }: { it: Extract<Item, { t: "sym" }>; def: SymbolDef }) {
   const bb = symBox(it, def), cx = (bb[0] + bb[2]) / 2, cy = (bb[1] + bb[3]) / 2;
   return (
@@ -111,6 +116,15 @@ function PinLabels({ it, def }: { it: Extract<Item, { t: "sym" }>; def: SymbolDe
       {def.pins.map((p, k) => {
         const [dx, dy] = xform(it.rot, p.x, p.y);
         const [x, y] = [it.x + dx, it.y + dy];
+        if (!def.pin_labels) {
+          const dir = JUST[p.just ?? ""];
+          if (!dir || !p.name) return null;
+          const [ux, uy] = xform(it.rot, dir[0], dir[1]), off = p.off || 8;
+          return (
+            <text key={k} x={x + ux * off} y={y + uy * off} dominantBaseline={uy > 0 ? "hanging" : uy < 0 ? "auto" : "central"}
+              textAnchor={ux > 0 ? "start" : ux < 0 ? "end" : "middle"}>{p.name}</text>
+          );
+        }
         const ux = Math.sign(cx - x), uy = Math.sign(cy - y), horiz = Math.abs(cx - x) >= Math.abs(cy - y);
         return (
           <text key={k} x={x + (horiz ? ux * 36 : 0)} y={y + (horiz ? 0 : uy * 40)} dominantBaseline="central"
@@ -127,7 +141,12 @@ function Flag({ it, leftward }: { it: Extract<Item, { t: "flag" }>; leftward: bo
   return (
     <g>
       <circle cx={it.x} cy={it.y} r={2.5} fill="currentColor" />
-      <rect x={x} y={it.y - 10} width={w} height={20} rx={3} fill="var(--surface-panel)" fillOpacity={0.85} />
+      {/* (a port, a pin of the schematic's block symbol: pointed at both ends) */}
+      {it.extra?.some((l) => l.startsWith("IOPIN ")) ? (
+        <polygon points={`${x},${it.y} ${x + 6},${it.y - 10} ${x + w - 6},${it.y - 10} ${x + w},${it.y} ${x + w - 6},${it.y + 10} ${x + 6},${it.y + 10}`} fill="var(--surface-panel)" fillOpacity={0.85} />
+      ) : (
+        <rect x={x} y={it.y - 10} width={w} height={20} rx={3} fill="var(--surface-panel)" fillOpacity={0.85} />
+      )}
       <text x={x + w / 2} y={it.y} textAnchor="middle" dominantBaseline="central" fill="currentColor" stroke="none" className="font-mono text-[12px]">{it.name}</text>
     </g>
   );
@@ -151,7 +170,7 @@ const ItemView = memo(function ItemView({ it, lib, leftward }: { it: Shape; lib:
         <g>
           {def ? <use href={`#sym-${def.name}`} transform={matrix(it.rot, it.x, it.y)} />
             : <rect x={it.x - 16} y={it.y - 16} width={32} height={32} strokeDasharray="4 3" />}
-          {def?.pin_labels && <PinLabels it={it} def={def} />}
+          {def && (def.pin_labels || def.pins.some((p) => p.just)) && <PinLabels it={it} def={def} />}
           <g stroke="none"><SymLabels it={it} def={def} /></g>
         </g>
       );
@@ -574,15 +593,20 @@ export const Schematic = memo(function Schematic() {
       { label: "Fit view", hint: "Space", run: fit },
       "-",
       { label: "Export schematic as SVG…", disabled: !items.some(isShape), run: () => void saveSvg(schematicSvg(items, lib), "") },
+      // (hierarchy: this schematic as a block of others in its folder; back to the one it was opened from)
+      { label: "Create block symbol…", run: () => window.dispatchEvent(new Event("nomospice:block-symbol")) },
+      ...(useS.getState().parents.length ? [{ label: "Back to the schematic above", run: () => window.dispatchEvent(new Event("nomospice:up")) }] : []),
     ];
     if (count > 1) return [...arrange, "-", ...clip, del];
     switch (it.t) {
       case "sym": {
         const prefix = prefixOf(it, defOf(lib, it)); // the part's own Prefix wins, as in the netlist
         const kind = ({ D: "D", Q: "NPN|PNP", M: "NMOS|PMOS|VDMOS", J: "NJF|PJF", X: "SUBCKT" } as Record<string, string>)[prefix];
+        const sheet = defOf(lib, it)?.sheet;
         return [
           { label: "Edit…", hint: probing ? undefined : "dbl-click", run: edit },
-          ...(kind ? [{ label: "Choose model from library…", run: () => set({ dialog: { k: "parts", replace: i, kind } }) }] : []),
+          ...(sheet ? [{ label: "Open its schematic", run: () => window.dispatchEvent(new CustomEvent("nomospice:sheet", { detail: sheet })) }] : []),
+          ...(kind && !sheet ? [{ label: "Choose model from library…", run: () => set({ dialog: { k: "parts", replace: i, kind } }) }] : []),
           ...plot,
           "-", ...arrange,
           { label: "Duplicate", hint: "⌘D", run: duplicate },

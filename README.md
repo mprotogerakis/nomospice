@@ -47,6 +47,11 @@ files — with a modern UI, ngspice as the engine, a Rust core and a React front
   (one click downloads the original package from the Internet Archive; ~45,000 models and
   subcircuits) and your own folders. Search, preview, place — subcircuits get a generated box symbol;
   definitions and their dependencies are pulled into the netlist automatically.
+- **Hierarchy**: a schematic becomes a block of others: mark its port labels (In, Out, BiDir in the
+  label's dialog), right-click > *Create block symbol* writes `name.asy` beside it, and placed in a
+  schematic of that folder it runs as a subcircuit of `name.asc` (parameters in the block's Value,
+  `R=10k`; the sheet's `.param R=1k` is the default). Right-click a block to open its schematic; the
+  status bar's ↑ leads back up. LTspice's `SymbolType BLOCK` symbols work the same way.
 - **Netlists**: open a `.cir`/`.net`/`.sp` file and it becomes a schematic of one SPICE directive
   holding it: it runs, its nodes plot by name (Add trace), saving writes an `.asc` beside it.
 - **Git**: branch and file state in the status bar; History panel to commit, compare a revision

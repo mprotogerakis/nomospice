@@ -20,11 +20,14 @@ export interface SymbolDef {
   value: string;
   spice_line: string;
   desc: string;
-  pins: { x: number; y: number; name: string }[];
+  /** `just`: where its name is drawn (LEFT, RIGHT, TOP, BOTTOM, V…), `off` units from it; none: not */
+  pins: { x: number; y: number; name: string; just?: string; off?: number }[];
   shapes: [string, number[]][];
   windows: Record<string, [number, number]>;
   /** draw pin names (generated boxes for library subcircuits) */
   pin_labels: boolean;
+  /** a hierarchical block: the schematic it stands for (its subcircuit) */
+  sheet?: string;
 }
 
 /** A model or subcircuit in the indexed libraries (library.rs). */

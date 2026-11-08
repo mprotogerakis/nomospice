@@ -138,6 +138,19 @@ async fn save_asc(path: String, items: Vec<Item>) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// A block symbol for the schematic at `path` (`<name>.asy` beside it, written over one there: the
+/// app asks first), from its port labels: placed in another schematic of that folder, it stands
+/// for this one.
+#[tauri::command]
+async fn block_symbol(path: String, items: Vec<Item>) -> Result<String, String> {
+    let asy = std::path::Path::new(&path).with_extension("asy");
+    let data = schematic::encode(&schematic::block_asy(&items)?);
+    tauri::async_runtime::spawn_blocking(move || write_atomic(&asy, &data).map(|_| asy.to_string_lossy().into_owned()))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
 /// Live netlist for the UI; includes are resolved too, only to surface their warnings.
 /// SVG export (schematic, plots): only .svg files, written like a schematic save.
 #[tauri::command]
@@ -716,7 +729,7 @@ fn main() {
         // updates from the GitHub releases (latest.json, signed with the key in ~/.tauri; see scripts/publish-release.sh)
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .invoke_handler(tauri::generate_handler![symbols, examples, path_exists, open_asc, save_asc, export_svg, export_raw, netlist, simulate, root_locus, cancel_locus, folder_symbols, trace, run_id, halt, cli_args, quit, recovery_save, recovery_take, recovery_resolve, recovery_clear,
+        .invoke_handler(tauri::generate_handler![symbols, examples, path_exists, open_asc, save_asc, block_symbol, export_svg, export_raw, netlist, simulate, root_locus, cancel_locus, folder_symbols, trace, run_id, halt, cli_args, quit, recovery_save, recovery_take, recovery_resolve, recovery_clear,
             library_sources, library_set_sources, library_search, library_text, library_fetch_microcap,
             git_status, git_log, git_show, git_commit, git_init])
         .setup(|app| {

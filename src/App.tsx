@@ -210,13 +210,40 @@ async function openExample(items: Item[]) {
   if (await discardOk()) await loadDoc(items, null);
 }
 
+/** A block's schematic in place of this one (`up`: the one above); the way back is kept. */
+async function openSheet(path: string, up = false) {
+  const { path: from, parents } = useS.getState();
+  if (!(await discardOk())) return;
+  try {
+    await openPath(path);
+    useS.setState({ parents: up ? parents.slice(0, -1) : from ? [...parents, from] : [] });
+  } catch (e) {
+    await fail(`Cannot open ${path}`)(e);
+  }
+}
+/** This schematic's block symbol (`name.asy` beside it): placed in another schematic of the folder,
+ *  it stands for this one, its port labels the pins. */
+async function blockSymbol() {
+  const { path, unwritten, items } = useS.getState();
+  if (!path || path === unwritten) return void message("Save the schematic first: its symbol goes beside it.", { title: "nomospice" });
+  const asy = path.replace(/\.asc$/i, "") + ".asy";
+  if ((await invoke<boolean>("path_exists", { path: asy })) && !(await ask(`${fileName(asy)} already exists. Replace it with a new block symbol?`, { title: "nomospice", kind: "warning" }))) return;
+  try {
+    await invoke("block_symbol", { path, items });
+  } catch (e) {
+    return void message(String(e), { title: "No block symbol", kind: "warning" });
+  }
+  await loadSymbols(useS.getState().items, undefined, { force: true }).catch(() => {});
+  await message(`${fileName(asy)} is written. Place it (Component, ${fileName(asy).replace(/\.asy$/i, "")}) in a schematic in this folder: it stands for this one, its port labels are the pins.`, { title: "nomospice" });
+}
+
 
 let booted = false;
 
 export function App() {
   const s = useS(useShallow((x) => ({
     hasItems: x.items.length > 0, sim: x.sim, tool: x.tool, selCount: x.sel.length, canUndo: x.past.length > 0, canRedo: x.future.length > 0,
-    running: x.running, live: x.live, stale: x.stale, panel: x.panel, path: x.path, dirty: x.dirty, warnings: x.nets?.warnings, git: x.git,
+    running: x.running, live: x.live, stale: x.stale, panel: x.panel, path: x.path, dirty: x.dirty, warnings: x.nets?.warnings, git: x.git, parents: x.parents,
   })));
   const [mode, setMode] = useState<ThemeMode>(() => initializeTheme().mode);
   const [split, setSplit] = useState(0.45);
@@ -270,6 +297,17 @@ export function App() {
         await fail(`Cannot open ${file}`)(e);
       }
     })();
+  }, []);
+
+  useEffect(() => {
+    // (from the schematic's menus) a block's schematic, the one above, a block symbol of this one
+    const sheet = (e: Event) => void openSheet((e as CustomEvent<string>).detail);
+    const up = () => void (useS.getState().parents.length && openSheet(useS.getState().parents.at(-1)!, true));
+    const sym = () => void blockSymbol();
+    window.addEventListener("nomospice:sheet", sheet);
+    window.addEventListener("nomospice:up", up);
+    window.addEventListener("nomospice:block-symbol", sym);
+    return () => (window.removeEventListener("nomospice:sheet", sheet), window.removeEventListener("nomospice:up", up), window.removeEventListener("nomospice:block-symbol", sym));
   }, []);
 
   useEffect(() => {
@@ -457,6 +495,11 @@ export function App() {
       </div>
 
       <StatusBar>
+        {s.parents.length > 0 && (
+          <StatusSegment onClick={() => window.dispatchEvent(new Event("nomospice:up"))} title={`Back to ${s.parents.at(-1)}, which this schematic is a block of`}>
+            ↑ {fileName(s.parents.at(-1)!)}
+          </StatusSegment>
+        )}
         <StatusSegment flex sans>{keys(hint)}</StatusSegment>
         {s.git && (
           <StatusSegment onClick={() => useS.setState({ panel: "history" })} title="Version history (git)">

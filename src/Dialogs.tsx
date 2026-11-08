@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { open } from "@tauri-apps/plugin-dialog";
 import type { Item, LibEntry, LibSource } from "./types";
-import { addTrace, analysisItem, commit, currentTab, loadSymbols, placePart, placeSymbol, refreshLibrarySymbols, setYAxis, useS } from "./store";
+import { addTrace, analysisItem, commit, currentTab, fileName, loadSymbols, placePart, placeSymbol, refreshLibrarySymbols, setYAxis, useS } from "./store";
 import { defOf, prefixOf, vexpr } from "./geom";
 import { Button } from "./ui/button";
 import { closeDialog as close, Field, FIELD, Modal, numHelp, NumField, Rows, TextField } from "./ui/dialog";
@@ -29,6 +29,9 @@ const INSTANCE: Record<string, [string, string, string, string][]> = {
   Q: AREA_M,
   D: AREA_M,
 };
+
+/** A label's port kind (In, Out, BiDir; "" none), from its IOPIN line. */
+const port = (extra?: string[]) => extra?.find((l) => l.startsWith("IOPIN "))?.split(/\s+/)[3] ?? "";
 
 /** Edits a part or a net label; `onDone` receives the result (commit in place, or start placing it).
  *  Comments and directives use DirectiveDialog. */
@@ -78,7 +81,7 @@ function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: 
           {source ? <SourceEditor attrs={it.attrs} setAttrs={(attrs) => setIt({ ...it, attrs })} current={prefix === "I"} spiceLine={def?.spice_line} /> : (
             <>
               <TextField label="Value" value={attr("Value")} set={(v) => setAttr("Value", v)} autofocus unit={unit}
-                {...(valueHelp ?? {})} hint={unit ? "e.g. 4.7k, 100n, 1Meg; LTspice extras like Rser=0.1 may follow" : undefined} />
+                {...(valueHelp ?? {})} hint={unit ? "e.g. 4.7k, 100n, 1Meg; LTspice extras like Rser=0.1 may follow" : def?.sheet ? "parameters for its schematic, e.g. R=10k (a .param R there is the default)" : undefined} />
               {/* (D, Q, M: their common instance parameters as fields; Value2 holds them, as SPICE reads them) */}
               {/* (Value2 itself with an open brace or quote: its items cannot be told apart, edited there) */}
               {INSTANCE[prefix] && !balanced(attr("Value2")) && <div className="text-2xs text-status-warning">⚠ Value2 has an unclosed brace or quote: edit it there.</div>}
@@ -117,9 +120,20 @@ function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: 
         </>
       )}
       {it.t === "flag" && (
-        <Field label="Net name" hint="0 = ground">
-          <input data-autofocus className={FIELD} value={it.name} onChange={(e) => setIt({ ...it, name: e.target.value.replace(/\s/g, "_") })} />
-        </Field>
+        <>
+          <Field label="Net name" hint="0 = ground">
+            <input data-autofocus className={FIELD} value={it.name} onChange={(e) => setIt({ ...it, name: e.target.value.replace(/\s/g, "_") })} />
+          </Field>
+          {/* (LTspice's IOPIN: a pin of the schematic's block symbol) */}
+          <Field label="Port" hint="a pin of this schematic's block symbol (Create block symbol: inputs left, outputs right)">
+            <select className={FIELD} value={port(it.extra)} onChange={(e) => setIt({ ...it, extra: [...(it.extra ?? []).filter((l) => !l.startsWith("IOPIN ")), ...(e.target.value ? [`IOPIN ${it.x} ${it.y} ${e.target.value}`] : [])] })}>
+              <option value="">none</option>
+              <option value="In">input</option>
+              <option value="Out">output</option>
+              <option value="BiDir">bidirectional</option>
+            </select>
+          </Field>
+        </>
       )}
     </Modal>
   );
@@ -154,7 +168,7 @@ function PartsDialog({ replace, kind0, libraries }: { replace?: number; kind0?: 
   // braces: Chromium's (WebView2) scrollIntoView returns a Promise, which React would call as the cleanup
   useEffect(() => { listRef.current?.children[i]?.scrollIntoView({ block: "nearest" }); }, [i]);
   const symbols = useMemo<LibEntry[]>(
-    () => Object.values(lib).filter((d) => !d.name.startsWith("subckt:")).map((d) => ({ name: d.name, kind: "SYMBOL", pins: d.pins.map((p) => p.name), source: d.desc, file: "", symbol: d.name })),
+    () => Object.values(lib).filter((d) => !d.name.startsWith("subckt:")).map((d) => ({ name: d.name, kind: "SYMBOL", pins: d.pins.map((p) => p.name), source: d.desc || (d.sheet ? `block: ${fileName(d.sheet)}` : ""), file: "", symbol: d.name })),
     [lib],
   );
   useEffect(() => {
@@ -471,6 +485,12 @@ const HELP: [string, [string, string][]][] = [
     ["⌘,", "model libraries (Micro-Cap 12, your folders)"],
     ["drop a .lib/.sub on it", "an .include directive for it"],
     ["right-click the canvas", "export the schematic as SVG"],
+  ]],
+  ["Hierarchy", [
+    ["a label's Port", "in, out, bidirectional: a pin of this schematic's block"],
+    ["right-click the canvas", "Create block symbol: name.asy beside it, ports as pins; place it in a schematic of that folder"],
+    ["right-click a block", "Open its schematic; the status bar's ↑ leads back up"],
+    ["a block's Value", "parameters for its schematic: R=10k (its .param R=1k the default)"],
   ]],
 ];
 

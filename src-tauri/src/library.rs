@@ -389,7 +389,7 @@ pub fn subckt_symbol(name: &str) -> Option<crate::schematic::SymbolDef> {
         let y = 32 * row as i32 + 16;
         let (px, edge) = if side == 0 { (-32, 0) } else { (w + 32, w) };
         d.shapes.push(("line".into(), vec![px, y, edge, y]));
-        d.pins.push(crate::schematic::Pin { x: px, y, name: pin.clone() });
+        d.pins.push(crate::schematic::Pin { x: px, y, name: pin.clone(), ..Default::default() });
     }
     d.windows.insert(0, (0, -12));
     d.windows.insert(3, (0, h + 12));
