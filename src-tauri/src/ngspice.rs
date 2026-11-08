@@ -53,9 +53,8 @@ static RUNS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0)
 /// The latest run: its id, its current sensors (trace expressions name part currents, `I(R1)`,
 /// `Ib(Q1)`) and, for a `.step` run, each step's plot.
 static SENSORS: Mutex<(u64, Option<std::sync::Arc<[crate::schematic::Sensor]>>, Option<std::sync::Arc<[String]>>)> = Mutex::new((0, None, None));
-/// The latest run's id, its plot and how many `.meas par()` helpers it has (for export_raw: from
-/// here, never from the webview, so no plot name of its comes to ngspice's command line).
-static RUN_INFO: Mutex<(u64, String, usize)> = Mutex::new((0, String::new(), 0));
+/// The latest run's id and how many `.meas par()` helpers it has (for export_raw).
+static RUN_INFO: Mutex<(u64, usize)> = Mutex::new((0, 0));
 /// Counts Halt presses. An operation (a simulation, a root locus) notes the count when it begins
 /// (`begin`) and is halted once the count moves on (`halted_since`): a Halt stops what was running
 /// when it was pressed, never something started afterwards, and no later start can undo it. Only
@@ -456,7 +455,7 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
     let pars = if !crate::schematic::contains_ci(text, "par(") { 0 } else {
         crate::schematic::statements(text, &crate::schematic::PAR_STATEMENTS).iter().map(|l| crate::schematic::par_calls(l)).sum()
     };
-    *RUN_INFO.lock().unwrap_or_else(|e| e.into_inner()) = (id, plot0.clone(), pars);
+    *RUN_INFO.lock().unwrap_or_else(|e| e.into_inner()) = (id, pars);
     api.command(&format!("setplot {plot0}"));
     let (_, mut scale) = plot_vectors(api, plot0, sensors, pars);
     // one frequency (`.ac lin 1 50 50`): phasors, shown as a table like .op instead of a 1-point plot
@@ -590,7 +589,7 @@ fn all_vectors(api: &Api, plot: &str) -> Vec<String> {
 }
 
 /// `raw` (ngspice's binary raw file, a plot or several) with only the variables `keep` names (by
-/// their name in the file, giving the name to write; the scale, the first, always), renumbered:
+/// their name in the file, giving the name to write), renumbered:
 /// each plot's header (text up to `Binary:`) rewritten, its data (points × variables × 8 bytes,
 /// 16 complex) copied column by column. None: not such a file.
 /// ponytail: the whole file in memory (twice); stream it if exports reach gigabytes
@@ -599,34 +598,44 @@ fn filter_raw(raw: &[u8], keep: &dyn Fn(&str) -> Option<String>) -> Option<Vec<u
     let mut at = 0;
     while at < raw.len() {
         let rest = &raw[at..];
-        let end = rest.windows(8).position(|w| w == b"Binary:\n")? + 8;
-        let head = std::str::from_utf8(&rest[..end]).ok()?;
-        let num = |key: &str| head.lines().find_map(|l| l.strip_prefix(key)).and_then(|v| v.trim().parse::<usize>().ok());
-        let width = if head.lines().any(|l| l.starts_with("Flags:") && l.contains("complex")) { 16 } else { 8 };
+        // the header: whole lines (\n or \r\n) up to the line `Binary:`; `Variables:` a line of its own
+        // (line by line, lazily: never splitting the binary data that follows)
+        let (mut end, mut head, mut found) = (0, Vec::<String>::new(), false);
+        for l in rest.split_inclusive(|&b| b == b'\n') {
+            end += l.len();
+            let t = std::str::from_utf8(l).ok()?.trim_end_matches(['\n', '\r']).to_string();
+            if t == "Binary:" {
+                found = true;
+                break;
+            }
+            head.push(t);
+        }
+        if !found {
+            return None;
+        }
+        let vars_at = head.iter().position(|l| l == "Variables:")?;
+        let num = |key: &str| head[..vars_at].iter().find_map(|l| l.strip_prefix(key)).and_then(|v| v.trim().parse::<usize>().ok());
+        let width = if head[..vars_at].iter().any(|l| l.starts_with("Flags:") && l.contains("complex")) { 16 } else { 8 };
         let (nvars, npoints) = (num("No. Variables:")?, num("No. Points:")?);
         let data = rest.get(end..end + nvars * npoints * width)?;
-        let vars_at = head.find("Variables:\n")?;
         // ("\t2\ti(vsense_r1)\tcurrent": index, name, the rest)
-        let vars: Vec<(&str, &str)> = head[vars_at + 11..end - 8].split_inclusive('\n').filter_map(|l| {
+        let vars: Vec<(&str, &str)> = head[vars_at + 1..].iter().filter_map(|l| {
             let f: Vec<&str> = l.splitn(4, '\t').collect();
             (f.len() == 4).then(|| (f[2], f[3]))
         }).collect();
         if vars.len() != nvars {
             return None;
         }
-        let kept: Vec<(usize, String, &str)> = vars.iter().enumerate()
-            .filter_map(|(k, (name, rest))| if k == 0 { Some((k, name.to_string(), *rest)) } else { keep(name).map(|n| (k, n, *rest)) })
-            .collect();
-        for l in head[..vars_at].split_inclusive('\n') {
-            if l.starts_with("No. Variables:") {
-                out.extend(format!("No. Variables: {}\n", kept.len()).bytes());
-            } else {
-                out.extend(l.bytes());
-            }
+        // (the scale first, as the file has it: it is among what `keep` takes; .op has none)
+        let kept: Vec<(usize, String, &str)> = vars.iter().enumerate().filter_map(|(k, (name, rest))| keep(name).map(|n| (k, n, *rest))).collect();
+        for l in &head[..vars_at] {
+            let l = if l.starts_with("No. Variables:") { format!("No. Variables: {}", kept.len()) } else { l.clone() };
+            out.extend(l.bytes());
+            out.push(b'\n');
         }
         out.extend(b"Variables:\n");
         for (j, (_, name, rest)) in kept.iter().enumerate() {
-            out.extend(format!("\t{j}\t{name}\t{rest}").bytes());
+            out.extend(format!("\t{j}\t{name}\t{rest}\n").bytes());
         }
         out.extend(b"Binary:\n");
         for p in 0..npoints {
@@ -648,13 +657,14 @@ fn filter_raw(raw: &[u8], keep: &dyn Fn(&str) -> Option<String>) -> Option<Vec<u
 /// ngspice are not changed.
 pub fn export_raw(run: u64) -> Result<Vec<u8>, String> {
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
-    let name = format!("nomospice-export-{}-{nanos}.raw", std::process::id());
+    // (not named nomospice-…: another instance starting would clear that from the shared folder)
+    let name = format!("export-{}-{nanos}.raw", std::process::id());
     let tmp = [SCRATCH.get().cloned(), Some(std::env::temp_dir())].into_iter().flatten().map(|d| d.join(&name))
         .find(|p| { let t = p.to_string_lossy().replace('\\', "/"); !t.chars().any(|c| c.is_control() || "'\"$`{};!&|<>~".contains(c)) })
         .ok_or("neither the app's folder nor the temporary one has a name ngspice's command line takes as it is")?;
     let shown = tmp.to_string_lossy().replace('\\', "/");
     let (of, sensors, steps) = SENSORS.lock().unwrap_or_else(|e| e.into_inner()).clone();
-    let (info_of, plot, pars) = RUN_INFO.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let (info_of, pars) = *RUN_INFO.lock().unwrap_or_else(|e| e.into_inner());
     if of != run || info_of != run {
         return Err("the results were replaced by a later run (a root locus or another simulation): run the simulation again".into());
     }
@@ -664,10 +674,14 @@ pub fn export_raw(run: u64) -> Result<Vec<u8>, String> {
     if RUNS.load(Ordering::SeqCst) != run {
         return Err("the results were replaced by a later run (a root locus or another simulation): run the simulation again".into());
     }
-    let plots: Vec<String> = match &steps { Some(s) if !s.is_empty() => s.to_vec(), _ => vec![plot] };
+    // (the plot the results are read from now: put back afterwards, the traces read from it)
+    let current = cstr(unsafe { (api.cur_plot)() });
+    let plots: Vec<String> = match &steps { Some(s) if !s.is_empty() => s.to_vec(), _ => vec![current.clone()] };
     let rename: std::collections::HashMap<String, String> = sensors.iter().map(|s| (format!("i({})", s.source), s.label.clone())).collect();
     let mut wanted = std::collections::HashSet::new();
+    // (names decorated as below: v(out), i(v1); not plainwrite's bare ones)
     api.command("set filetype=binary");
+    api.command("unset plainwrite");
     let mut failed = None;
     for (k, p) in plots.iter().enumerate() {
         api.command(&format!("setplot {p}"));
@@ -690,6 +704,7 @@ pub fn export_raw(run: u64) -> Result<Vec<u8>, String> {
         }
     }
     api.command("unset appendwrite");
+    api.command(&format!("setplot {current}"));
     drop(g);
     let raw = std::fs::read(&tmp);
     let _ = std::fs::remove_file(&tmp);
