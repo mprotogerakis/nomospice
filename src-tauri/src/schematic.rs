@@ -561,17 +561,23 @@ pub fn asy_items(src: &str) -> Vec<Item> {
         let num = |i: usize| tok.get(i).and_then(|s| s.parse::<i32>().ok());
         let rest = |n: usize| line.trim_start().splitn(n + 1, ' ').nth(n).unwrap_or("").to_string();
         match tok.first().copied() {
-            Some("LINE") if tok.len() == 6 && tok[1] == "Normal" => match (num(2), num(3), num(4), num(5)) {
+            // (not one of no length, a dot: a wire of none is cleaned away on the canvas)
+            Some("LINE") if tok.len() == 6 && tok[1] == "Normal" && (num(2), num(3)) != (num(4), num(5)) => match (num(2), num(3), num(4), num(5)) {
                 (Some(x1), Some(y1), Some(x2), Some(y2)) => items.push(Item::Wire { x1, y1, x2, y2 }),
                 _ => items.push(Item::Raw { line: line.to_string() }),
             },
             Some("LINE" | "RECTANGLE" | "CIRCLE" | "ARC") => items.push(drawing(&tok).unwrap_or_else(|| Item::Raw { line: line.to_string() })),
-            Some("PIN") => items.push(Item::Flag { x: num(1).unwrap_or(0), y: num(2).unwrap_or(0), name: String::new(), extra: vec![line.to_string()] }),
+            // (its lines as words with single spaces: written back as read, found by their heads; a
+            // pin of no position kept as written)
+            Some("PIN") => match (num(1), num(2)) {
+                (Some(x), Some(y)) => items.push(Item::Flag { x, y, name: String::new(), extra: vec![tok.join(" ")] }),
+                _ => items.push(Item::Raw { line: line.to_string() }),
+            },
             Some("PINATTR") if matches!(items.last(), Some(Item::Flag { .. })) => {
                 if let Some(Item::Flag { name, extra, .. }) = items.last_mut() {
                     match tok.get(1) {
                         Some(&"PinName") => *name = rest(2).trim().to_string(), // (as parse_asy reads it)
-                        _ => extra.push(line.to_string()),
+                        _ => extra.push(tok.join(" ")),
                     }
                 }
             }
@@ -616,7 +622,10 @@ pub fn write_asy(items: &[Item]) -> String {
         let Item::Flag { x, y, name, extra } = it else { continue };
         // (where its name shows, as read; a new pin's not)
         let pin = extra.iter().find(|l| l.starts_with("PIN ")).map(|l| l.split_whitespace().skip(3).collect::<Vec<_>>().join(" ")).filter(|j| !j.is_empty());
-        out += &format!("PIN {x} {y} {}\nPINATTR PinName {name}\n", pin.as_deref().unwrap_or("NONE 8"));
+        out += &format!("PIN {x} {y} {}\n", pin.as_deref().unwrap_or("NONE 8"));
+        if !name.is_empty() {
+            out += &format!("PINATTR PinName {name}\n");
+        }
         extra.iter().filter(|l| l.starts_with("PINATTR ") && !l.starts_with("PINATTR SpiceOrder ")).for_each(|l| out += &format!("{l}\n"));
         // (its number as read; a new pin's, or a copy's of another's, the next free one)
         let n = order(extra).filter(|n| taken.insert(*n)).unwrap_or_else(|| {

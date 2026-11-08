@@ -161,7 +161,7 @@ function ItemForm({ item, title, onDone }: { item: Item; title: string; onDone: 
 }
 
 /** Where a pin's name shows (its PIN line's justification: NONE … ; `none` if it has no PIN line). */
-const pinJust = (extra?: string[], none = "NONE") => pinLine(extra)?.just ?? none;
+const pinJust = (extra?: string[]) => pinLine(extra)?.just ?? "NONE";
 
 /** A symbol's attributes (SYMATTR lines: Prefix, Value, Description, SpiceModel …) and its type:
  *  a part (CELL) or a hierarchical block (BLOCK, its schematic of the same name). */

@@ -79,6 +79,9 @@ fn schematic_at(base: &Path, args: &Value) -> Result<(Vec<schematic::Item>, Opti
         (Some(text), _) => Ok((schematic::parse_asc(text), None)),
         (None, Some(p)) => {
             let path = resolve(base, p);
+            if schematic::is_symbol(&path.to_string_lossy()) {
+                return Err(format!("{}: a symbol, not a schematic", path.display()));
+            }
             let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
             Ok((schematic::load(&path.to_string_lossy(), &bytes).0, Some(path))) // (a netlist too)
         }

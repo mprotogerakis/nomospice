@@ -202,8 +202,8 @@ let autoPlotted = new Set<string>();
 /** Git status of the open file (none for an unsaved document). */
 export async function refreshGit() {
   const path = get().path;
-  // (not a document not yet written: a new symbol, an opened netlist's .asc)
-  const git = path && path !== get().unwritten ? await invoke<GitStatus>("git_status", { path }) : null;
+  // (a document in no folder yet: none)
+  const git = path && dirOf(path) ? await invoke<GitStatus>("git_status", { path }) : null;
   if (get().path === path) set({ git }); // an older file's status must not land on the new one
 }
 
@@ -236,7 +236,7 @@ export function nextInst(items: Item[], prefix: string) {
 /** Start placing a symbol (LTspice: R, C, L, D, F2 ...); `value` e.g. a library model name. */
 export function placeSymbol(name: string, value?: string) {
   const def = get().lib[symKey(name)];
-  if (!def) return;
+  if (!def || isSymbolDoc(get().path)) return; // (a symbol holds no parts)
   const attrs: Record<string, string> = { Value: value ?? def.value };
   set({ tool: { k: "place", item: { t: "sym", sym: name, x: 0, y: 0, rot: "R0", attrs } }, sel: [] });
 }

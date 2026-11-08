@@ -223,7 +223,9 @@ async function openExample(items: Item[]) {
 async function newSymbol() {
   if (!(await discardOk())) return;
   // (a name no file there has: the new symbol is no other one's)
-  const dir = dirOf(useS.getState().path), base = `${dir ? `${dir}/` : ""}untitled`;
+  // (in the folder's own separator; a root's ends in one)
+  const dir = dirOf(useS.getState().path), sep = dir?.includes("\\") ? "\\" : "/";
+  const base = dir ? `${dir.endsWith(sep) ? dir : dir + sep}untitled` : "untitled";
   let path = `${base}.asy`;
   for (let k = 2; dir && (await invoke<boolean>("path_exists", { path })); k++) path = `${base}-${k}.asy`;
   await loadDoc([{ t: "raw", line: "SymbolType CELL" }, { t: "raw", line: "SYMATTR Prefix X" }], path, true);
@@ -442,6 +444,7 @@ export function App() {
   const warnings = s.warnings ?? [];
   const errors = s.sim && !s.sim.run;
 
+  const symbolDoc = isSymbolDoc(s.path); // (a symbol holds no parts, no ground)
   return (
     <div className="flex h-full flex-col">
       <Toolbar className="gap-1 px-2">
@@ -456,7 +459,7 @@ export function App() {
         {s.running ? (
           <ToolbarButton label="Halt" icon={<Square />} onClick={() => invoke("halt")} className="text-status-danger">Halt</ToolbarButton>
         ) : (
-          <ToolbarButton label="Run" hotkey="⌘↵" icon={<Play />} disabled={isSymbolDoc(s.path)} onClick={simulate} className="text-status-success">Run</ToolbarButton>
+          <ToolbarButton label="Run" hotkey="⌘↵" icon={<Play />} disabled={symbolDoc} onClick={simulate} className="text-status-success">Run</ToolbarButton>
         )}
         <ToolbarButton label="Edit simulation command" icon={<SlidersHorizontal />} onClick={() => useS.setState({ dialog: { k: "sim" } })} />
         <ToolbarButton label="Live: re-run on every edit" icon={<Zap />} pressable active={s.live} onClick={() => useS.setState({ live: !s.live })} />
@@ -464,14 +467,14 @@ export function App() {
         <ToolbarButton label="Select (drag: wires follow)" hotkey="Esc / F8" icon={<MousePointer2 />} pressable active={tool.k === "select"} onClick={() => useS.setState({ tool: { k: "select" } })} />
         <ToolbarButton label="Move (wires stay)" hotkey="M / F7" icon={<Move />} pressable active={tool.k === "move"} onClick={moveTool} />
         <ToolbarButton label="Wire" hotkey="W / F3" icon={<Spline />} pressable active={tool.k === "wire"} onClick={() => useS.setState({ tool: { k: "wire" } })} />
-        <ToolbarButton label="Ground" hotkey="G" icon={G.gnd} pressable active={tool.k === "place" && tool.item.t === "flag" && tool.item.name === "0"} onClick={() => placeFlag("0")} />
+        <ToolbarButton label="Ground" disabled={symbolDoc} hotkey="G" icon={G.gnd} pressable active={tool.k === "place" && tool.item.t === "flag" && tool.item.name === "0"} onClick={() => placeFlag("0")} />
         <ToolbarButton label="Net label" hotkey="N / F4" icon={<Tag />} onClick={() => newItem({ t: "flag", x: 0, y: 0, name: "" })} />
-        <ToolbarButton label="Resistor" hotkey="R" icon={G.res} pressable active={placing("res")} onClick={() => placeSymbol("res")} />
-        <ToolbarButton label="Capacitor" hotkey="C" icon={G.cap} pressable active={placing("cap")} onClick={() => placeSymbol("cap")} />
-        <ToolbarButton label="Inductor" hotkey="L" icon={G.ind} pressable active={placing("ind")} onClick={() => placeSymbol("ind")} />
-        <ToolbarButton label="Diode" hotkey="D" icon={G.diode} pressable active={placing("diode")} onClick={() => placeSymbol("diode")} />
-        <ToolbarButton label="Voltage source" hotkey="V" icon={G.volt} pressable active={placing("voltage")} onClick={() => placeSymbol("voltage")} />
-        <ToolbarButton label="Component" hotkey="P / F2 / ⌘K" icon={<Component />} onClick={() => useS.setState({ dialog: { k: "parts" } })} />
+        <ToolbarButton label="Resistor" disabled={symbolDoc} hotkey="R" icon={G.res} pressable active={placing("res")} onClick={() => placeSymbol("res")} />
+        <ToolbarButton label="Capacitor" disabled={symbolDoc} hotkey="C" icon={G.cap} pressable active={placing("cap")} onClick={() => placeSymbol("cap")} />
+        <ToolbarButton label="Inductor" disabled={symbolDoc} hotkey="L" icon={G.ind} pressable active={placing("ind")} onClick={() => placeSymbol("ind")} />
+        <ToolbarButton label="Diode" disabled={symbolDoc} hotkey="D" icon={G.diode} pressable active={placing("diode")} onClick={() => placeSymbol("diode")} />
+        <ToolbarButton label="Voltage source" disabled={symbolDoc} hotkey="V" icon={G.volt} pressable active={placing("voltage")} onClick={() => placeSymbol("voltage")} />
+        <ToolbarButton label="Component" disabled={symbolDoc} hotkey="P / F2 / ⌘K" icon={<Component />} onClick={() => useS.setState({ dialog: { k: "parts" } })} />
         <ToolbarSeparator />
         <ToolbarButton label="Comment" hotkey="T" icon={<Type />} onClick={() => newItem({ t: "text", x: 0, y: 0, text: "", directive: false })} />
         <ToolbarButton label="SPICE directive" hotkey="S" icon={<Code />} onClick={() => newItem({ t: "text", x: 0, y: 0, text: "", directive: true })} />

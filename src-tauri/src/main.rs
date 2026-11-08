@@ -131,6 +131,16 @@ async fn path_exists(path: String) -> bool {
 
 #[tauri::command]
 async fn save_asc(path: String, items: Vec<Item>) -> Result<(), String> {
+    // (a symbol's name is how schematics place it: one word, not a built-in symbol's, which wins)
+    if schematic::is_symbol(&path) {
+        let stem = std::path::Path::new(&path).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        if stem.contains(char::is_whitespace) {
+            return Err(format!("“{stem}”: a symbol's name has no spaces (a schematic places it by name)"));
+        }
+        if schematic::builtin_symbol(&schematic::sym_key(&stem)) {
+            return Err(format!("{stem} is a built-in symbol's name, which a placed {stem} would be: choose another"));
+        }
+    }
     // (a symbol as one; Latin-1 like LTspice, UTF-16 if needed)
     let data = schematic::encode(&if schematic::is_symbol(&path) { schematic::write_asy(&items) } else { schematic::write_asc(&items) });
     tauri::async_runtime::spawn_blocking(move || write_atomic(std::path::Path::new(&path), &data))
