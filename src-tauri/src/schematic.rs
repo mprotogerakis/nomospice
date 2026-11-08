@@ -720,8 +720,8 @@ struct Hier {
     /// symbols whose sheet is no subcircuit here (it places itself, it lacks a port), and why:
     /// their parts call a model of that name, as before there was a sheet
     refused: BTreeMap<String, String>,
-    /// the sheets' `.global` lines and `.lib name … .endl` sections: the top netlist's (their
-    /// includes stay in their subcircuits, inlined there: what a file holds is that block's)
+    /// the sheets' `.global` lines: the top netlist's (their includes stay in their subcircuits,
+    /// inlined there: what a file holds is that block's)
     hoisted: Vec<String>,
     /// some sheet has a source with an AC amplitude
     ac: bool,
@@ -1971,7 +1971,8 @@ impl Expander<'_> {
             Some(_) if !self.read => {}
             Some(path) => {
                 let key = (self.scope.0.clone(), path.canonicalize().unwrap_or(path.clone()), sec.map(str::to_lowercase));
-                if !self.seen.insert(key) {
+                // (one the deck includes outside any subcircuit: global already, not inlined again)
+                if self.seen.contains(&(None, key.1.clone(), key.2.clone())) || !self.seen.insert(key) {
                     return; // already inlined (or an include cycle)
                 }
                 match std::fs::read(&path) {
@@ -2401,9 +2402,9 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
         if call.is_some() && def.block && block.is_none() && h.refused.get(&name).is_some_and(|w| !w.is_empty()) {
             h.quiet.insert(model.clone());
         }
-        if "DQMXJSW".contains(prefix) && model.is_empty() {
+        if "DQMXJS".contains(prefix) && model.is_empty() {
             nl.warnings.push(format!("{inst}: no model or subcircuit named (its Value is empty)"));
-        } else if "DQMXJSW".contains(prefix) && block.is_none() && !defined(&model) && !used_models.contains(&model) {
+        } else if "DQMXJSW".contains(prefix) && !model.is_empty() && block.is_none() && !defined(&model) && !used_models.contains(&model) {
             used_models.push(model);
         }
         let extra: Vec<String> = ["Value2", "SpiceLine", "SpiceLine2"].iter()
@@ -2645,6 +2646,8 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
                     }
                 }
             }
+        }
+        if lines.iter().any(|l| l.contains(BLOCK_TAG)) {
             lines = lines.iter().map(fill).collect();
         }
         for b in &h.blocks {
@@ -2689,15 +2692,15 @@ fn sheet_subckt(name: &str, path: &str, def: &SymbolDef, lib: &mut Library, h: &
     }
     let label = |pin: &str| sheet_label(&items, pin);
     // (what netlisting it adds goes again if it is refused: its own blocks, their hoisted lines)
-    // (and the parameters its parts gave blocks there before, its AC sources; the library
+    // (and the parameters its parts gave blocks there before, its AC sources and includes; the library
     // definitions it pulled stay, unused; what it said of blocks in it stays said: true anyway)
-    let (blocks, hoisted, ac) = (h.blocks.len(), h.hoisted.len(), h.ac);
+    let (blocks, hoisted, ac, included) = (h.blocks.len(), h.hoisted.len(), h.ac, h.included);
     let params: Vec<_> = h.blocks.iter().map(|b| b.params.clone()).collect();
     let rollback = |h: &mut Hier| {
         h.blocks.truncate(blocks);
         h.blocks.iter_mut().zip(params).for_each(|(b, p)| b.params = p);
         h.hoisted.truncate(hoisted);
-        h.ac = ac;
+        (h.ac, h.included) = (ac, included);
     };
     h.stack.push((name.to_string(), said.clone()));
     let child = build_netlist(&items, lib, false, h);
@@ -2724,26 +2727,13 @@ fn sheet_subckt(name: &str, path: &str, def: &SymbolDef, lib: &mut Library, h: &
     let lines = deck_lines(&child.text);
     let own = lines.iter().filter(|l| l.top && l.param())
         .flat_map(|l| param_defs(l.line, &l.low).into_iter().map(|(n, _)| n.to_ascii_lowercase())).collect();
-    // (its .global lines and `.lib name … .endl` sections, each as one: the top netlist's; not those
-    // inside a .subckt of its own)
-    let (mut body, mut section) = (vec![], None::<Vec<&str>>);
-    for (k, l) in lines.iter().enumerate() {
-        let w = l.low.split_whitespace().next().unwrap_or("");
-        // (`.lib name` up to an `.endl` before the next `.lib`: a section; else a file to include)
-        let next = || lines[k + 1..].iter().find_map(|m| m.low.split_whitespace().next().filter(|h| *h == ".lib" || *h == ".endl"));
-        if l.top && section.is_none() && w == ".lib" && l.low.split_whitespace().count() == 2 && next() == Some(".endl") {
-            section = Some(vec![]);
-        }
-        match &mut section {
-            Some(s) => {
-                s.push(l.line);
-                if w == ".endl" {
-                    h.hoisted.push(s.join("\n"));
-                    section = None;
-                }
-            }
-            None if l.top && w == ".global" => h.hoisted.push(l.line.to_string()),
-            None => body.push(l.line.to_string()),
+    // (its .global lines: the top netlist's; not those inside a .subckt of its own)
+    let mut body = vec![];
+    for l in &lines {
+        if l.top && l.low.split_whitespace().next() == Some(".global") {
+            h.hoisted.push(l.line.to_string());
+        } else {
+            body.push(l.line.to_string());
         }
     }
     h.blocks.push(Block { name: name.into(), ports, body, params: Default::default(), own });
@@ -3144,7 +3134,7 @@ TEXT 0 200 Left 2 !.param R=1k\\n.tran 1m\\n.control\\nrun\\n.endc\\n.global vcc
         // a library part's symbol beside its test bench, which places it: no block, quietly
         std::fs::write(dir.join("bench.asy"), "Version 4\nSymbolType CELL\nSYMATTR Prefix X\nSYMATTR Value bench\nPIN 0 0 NONE 0\nPINATTR PinName a\n").unwrap();
         std::fs::write(dir.join("bench.asc"), "Version 4\nFLAG 0 0 a\nSYMBOL bench 0 0 R0\nSYMATTR InstName U1\n").unwrap();
-        // a `.lib` section hoisted whole, a `.lib` file alone, the parts staying
+        // its includes and sections stay with its parts
         std::fs::write(dir.join("secs.asy"), &asy).unwrap();
         std::fs::write(dir.join("secs.asc"), "Version 4\nFLAG 0 0 in\nFLAG 0 64 out\nTEXT 0 200 Left 2 !.lib m.lib\\nR1 in out 1k\\n.lib mysect\\n.model DX D\\n.endl\n").unwrap();
         // a subcircuit symbol without a schematic: its Value as written
@@ -3191,7 +3181,7 @@ SYMBOL half 400 300 R0\nSYMATTR InstName U4\nSYMATTR Value R=3k\nFLAG 352 300 a\
         assert!(!nl.text.contains(".subckt sheet_bench") && nl.text.lines().any(|l| l.starts_with("XU1 ") && l.ends_with(" bench")) && !nl.warnings.iter().any(|w| w.contains("bench.asc")), "{:?}\n{}", nl.warnings, nl.text);
         let t = netlist(&parse_asc("Version 4\nSYMBOL secs 0 0 R0\nSYMATTR InstName U1\n"), &mut lib).text;
         let sub = t.find(".subckt sheet_secs").unwrap_or_else(|| panic!("{t}"));
-        assert!(t.find(".lib mysect\n.model DX D\n.endl") < Some(sub) && t.find(".lib m.lib") > Some(sub) && t.find("R1 in out 1k") > Some(sub), "a section at the top, an included file and the parts in the block: {t}");
+        assert!(t.find(".lib mysect") > Some(sub) && t.find(".lib m.lib") > Some(sub) && t.find("R1 in out 1k") > Some(sub), "{t}");
         let nl = netlist(&parse_asc("Version 4\nSYMBOL amp 0 0 R0\nSYMATTR InstName U1\n"), &mut lib);
         assert!(nl.text.lines().any(|l| l.starts_with("XU1 ") && l.ends_with(" Amp")), "{}", nl.text);
         std::fs::remove_dir_all(dir).ok();

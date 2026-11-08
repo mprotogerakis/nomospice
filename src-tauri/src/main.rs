@@ -335,8 +335,8 @@ async fn folder_symbols(from: String, to: String, names: Vec<String>, copy: bool
             let bytes = std::fs::read(src).ok();
             let same = new.get(&key).is_none_or(|t| std::fs::read(t).ok() == bytes);
             let def = bytes.map(|b| schematic::parse_asy(&key, &schematic::decode(&b))).filter(|d| same && d.calls_sheet());
-            // (case-insensitive disks: another spelling of the same file)
-            let own = |p: &std::path::PathBuf| doc.as_deref().is_some_and(|d| if cfg!(any(target_os = "macos", windows)) { d.to_lowercase() == p.to_string_lossy().to_lowercase() } else { std::path::Path::new(d) == p.as_path() });
+            // (the same file however spelled: case, links, `..`)
+            let own = |p: &std::path::PathBuf| doc.as_deref().is_some_and(|d| same_file(std::path::Path::new(d), p));
             if let (Some(def), Some(sheet)) = (def, old_sheets.get(&key).filter(|p| !own(p))) {
                 // (only one the netlist would take as its block's: not a library part's test bench)
                 let items = std::fs::read(sheet).map(|b| schematic::parse_asc(&schematic::decode(&b))).unwrap_or_default();
@@ -370,6 +370,18 @@ async fn folder_symbols(from: String, to: String, names: Vec<String>, copy: bool
         }
         if failed.is_empty() { Ok(out) } else { Err(failed.join("; ")) }
     }).await.map_err(|e| e.to_string())?
+}
+
+/// Whether two paths name one file (another case on a case-insensitive disk, a link, `..`).
+#[cfg(unix)]
+fn same_file(a: &std::path::Path, b: &std::path::Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    matches!((std::fs::metadata(a), std::fs::metadata(b)), (Ok(x), Ok(y)) if (x.dev(), x.ino()) == (y.dev(), y.ino()))
+}
+#[cfg(not(unix))]
+fn same_file(a: &std::path::Path, b: &std::path::Path) -> bool {
+    let canon = |p: &std::path::Path| std::fs::canonicalize(p).map(|c| c.to_string_lossy().to_lowercase());
+    matches!((canon(a), canon(b)), (Ok(x), Ok(y)) if x == y)
 }
 
 /// Stops a running root locus at its next step (its panel's Halt; the toolbar Halt stops everything).
