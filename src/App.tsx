@@ -104,7 +104,7 @@ export function installGuards() {
   useS.subscribe((s, prev) => {
     if (s.items === prev.items && s.dirty === prev.dirty && s.path === prev.path) return;
     clearTimeout(mirrorTimer);
-    mirrorTimer = setTimeout(() => (s.dirty ? recover("recovery_save", { doc: { path: s.path, items: s.items } }) : recover("recovery_clear")), 800);
+    mirrorTimer = setTimeout(() => (s.dirty ? recover("recovery_save", { doc: { path: s.path, items: s.items, unwritten: useS.getState().unwritten } }) : recover("recovery_clear")), 800);
   });
 }
 
@@ -137,7 +137,7 @@ async function openPath(path: string) {
 }
 let saveQueue: Promise<unknown> = Promise.resolve();
 
-const MODEL_FILE = /\.(lib|sub|mod|inc|cir|net|ckt|sp|spi|bjt|dio|jft|mos)$/i;
+const MODEL_FILE = /\.(lib|sub|mod|inc|cir|sp|spi|bjt|dio|jft|mos)$/i; // (not .net: a whole circuit, LTspice's netlist of a schematic)
 /** What dropping these files does (null: nothing). */
 const dropAction = (paths: string[]) =>
   paths.some((p) => /\.asc$/i.test(p)) ? "Open schematic" : paths.some((p) => MODEL_FILE.test(p)) ? "Add as .include directive" : null;
@@ -250,15 +250,16 @@ export function App() {
       setExamples(await invoke<[string, Item[]][]>("examples"));
       const args = await invoke<string[]>("cli_args");
       const file = args.find((a) => /\.asc$/i.test(a) || NETLIST.test(a));
-      const rec = await invoke<{ path: string | null; items: Item[] } | null>("recovery_take");
+      const rec = await invoke<{ path: string | null; items: Item[]; unwritten?: string | null } | null>("recovery_take");
       // an empty document is a valid snapshot too (the user deleted everything)
       const restore = Array.isArray(rec?.items) && (await ask(`Restore unsaved changes${rec.path ? ` to ${rec.path}` : ""} from the last session?`, { title: "nomospice", kind: "info" }));
       await invoke("recovery_resolve", { keep: restore }).catch(() => {}); // restore: becomes our recovery file
       if (restore) {
         await loadDoc(rec!.items, rec!.path);
         useS.setState({ dirty: true });
-        // (a document never written, an opened netlist's .asc: its first save asks, as it would have)
-        if (rec!.path && !(await invoke<boolean>("path_exists", { path: rec!.path }))) useS.setState({ unwritten: rec!.path });
+        // (a document never written, an opened netlist's .asc: its first save asks, as it would have;
+        // as the snapshot says, else by whether its file is there)
+        if (rec!.path && (rec!.unwritten === rec!.path || !(await invoke<boolean>("path_exists", { path: rec!.path })))) useS.setState({ unwritten: rec!.path });
         if (file) await message(`${file} was not opened because the previous session was restored.`, { title: "nomospice" });
         return;
       }

@@ -463,8 +463,9 @@ pub fn netlist_items(text: &str) -> Vec<Item> {
         match w.as_str() {
             ".control" => control = true,
             ".endc" => control = false,
-            w if control && ANALYSES.iter().any(|(c, _)| *c == w) => {
-                let dot = ANALYSES.iter().find(|(c, _)| *c == w).map_or(w, |(_, d)| *d);
+            // (an analysis of the control language's variables, `tran 1n $&tstop`: no dot command, left out)
+            w if control && !l.contains(['$', '&']) && ANALYSES.iter().any(|(c, _)| *c == w) => {
+                let dot = ANALYSES.iter().find(|(c, _)| *c == w).unwrap().1;
                 let line = format!("{dot}{}", &l.trim()[w.len()..]);
                 if !taken.contains(&line) {
                     taken.push(line); // (an analysis repeated in the block, `alter` between: once)
@@ -1950,13 +1951,13 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool) -> Netlist {
     for (i, p) in pins.iter().enumerate() {
         nl.nets[i] = p.iter().map(|&p| names[&dsu.find(p)].clone()).collect();
     }
-    // (a schematic of no parts, or with part lines in a directive (an opened netlist): those lines
-    // ground it, or not; only drawn parts alone are said to float)
-    let part_lines = || items.iter().any(|it| matches!(it, Item::Text { text, directive: true, .. } if text.lines().any(|l| {
+    // (a schematic of no parts, an opened netlist: its lines ground it or not, ngspice says; a part
+    // line in a directive with a node 0 grounds the drawing too)
+    let grounded_by_lines = || items.iter().any(|it| matches!(it, Item::Text { text, directive: true, .. } if text.lines().any(|l| {
         let t: Vec<&str> = l.split_whitespace().collect();
-        t.len() >= 3 && t[0].starts_with(|c: char| c.is_ascii_alphabetic())
+        t.len() >= 3 && t[0].starts_with(|c: char| c.is_ascii_alphabetic()) && t[1..t.len() - 1].contains(&"0")
     })));
-    if ground.is_none() && items.iter().any(|it| matches!(it, Item::Sym { .. })) && !part_lines() {
+    if ground.is_none() && items.iter().any(|it| matches!(it, Item::Sym { .. })) && !grounded_by_lines() {
         nl.warnings.push("no ground (0) in schematic".into());
     }
 
@@ -2227,22 +2228,29 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool) -> Netlist {
     // a netlist's own part lines (an opened .cir, parts written in a directive): their models from
     // the libraries too, as a drawn part's; only names the libraries know (a node, a value: none)
     {
-        let index = crate::library::index();
-        let known = |m: &str| index.as_ref().is_some_and(|ix| ix.get(m).is_some());
-        for d in &directives {
+        // (where SPICE has the model: D n+ n- model; Q c b e [s] model; M d g s b model; J/Z d g s
+        // model; X …nodes subckt [params]: the last word before them)
+        let wanted: Vec<String> = directives.iter().flat_map(|d| {
             let t: Vec<&str> = d.split_whitespace().collect();
-            let prefix = t.first().and_then(|w| w.chars().next()).map_or(' ', |c| c.to_ascii_uppercase());
-            if !"DQMJZX".contains(prefix) {
-                continue;
-            }
-            // (X: its subcircuit, the last word before the parameters; others: any word after the nodes)
-            let names: Vec<String> = if prefix == 'X' {
+            let at: &[usize] = match t.first().and_then(|w| w.chars().next()).map(|c| c.to_ascii_uppercase()) {
+                Some('D') => &[3],
+                Some('Q') => &[4, 5],
+                Some('M') => &[5],
+                Some('J' | 'Z') => &[4],
+                Some('X') => &[],
+                _ => return vec![],
+            };
+            if t[0].starts_with(['X', 'x']) {
                 t[1..].iter().take_while(|w| !w.contains('=') && !w.eq_ignore_ascii_case("params:")).last().map(|w| w.to_lowercase()).into_iter().collect()
             } else {
-                t.iter().skip(3).map(|w| w.to_lowercase()).collect()
-            };
-            for m in names {
-                if known(&m) && !defined(&m) && !used_models.contains(&m) {
+                at.iter().filter_map(|&k| t.get(k)).map(|w| w.to_lowercase()).collect()
+            }
+        }).filter(|m| !defined(m) && !used_models.contains(m)).collect();
+        // (the library's index only when there is something to look up: building it takes a while)
+        if !wanted.is_empty() {
+            let index = crate::library::index();
+            for m in wanted {
+                if index.as_ref().is_some_and(|ix| ix.get(&m).is_some()) && !used_models.contains(&m) {
                     used_models.push(m);
                 }
             }
