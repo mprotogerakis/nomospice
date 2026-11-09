@@ -354,8 +354,9 @@ export const Waveform = memo(function Waveform() {
             u.over.addEventListener("wheel", (e) => {
               e.preventDefault();
               const { min, max } = u.scales.x;
-              if (min == null || max == null || u.cursor.left == null) return;
               const lg = logX ? Math.log10 : (v: number) => v, ex = logX ? (v: number) => 10 ** v : lg;
+              const xd = u.data[0], d0 = lg(xd[0]), d1 = lg(xd[xd.length - 1]); // (ascending: ord())
+              if (min == null || max == null || u.cursor.left == null || !(d1 > d0)) return;
               const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1; // (lines, pages as pixels)
               const dx = e.deltaX * unit, dy = e.deltaY * unit;
               let lo = lg(min), hi = lg(max);
@@ -366,6 +367,11 @@ export const Waveform = memo(function Waveform() {
                 const c = lg(u.posToVal(u.cursor.left, "x")), f = Math.exp(dy * 0.002); // proportional: trackpads send many small deltas
                 (lo = c - (c - lo) * f), (hi = c + (hi - c) * f);
               }
+              // within the run: zoomed out past it, a log axis's 10^hi reached Infinity and uPlot's
+              // ticks looped forever (the app hung)
+              if (hi - lo >= d1 - d0) [lo, hi] = [d0, d1];
+              else if (lo < d0) [lo, hi] = [d0, d0 + hi - lo];
+              else if (hi > d1) [lo, hi] = [d1 - (hi - lo), d1];
               setPlot({ zoom: [ex(lo), ex(hi)] });
               u.setScale("x", { min: ex(lo), max: ex(hi) });
             }, { passive: false });
