@@ -52,6 +52,9 @@ export function SimDialog({ index, kind0, of }: { index?: number; kind0?: Analys
       if (!analysisOptions([{ text: line, directive: !alternate }]).length) return setErr("Fill in the analysis first (e.g. a stop time, the frequencies or the output).");
       const ref = items[analysisItem(items, currentTab(useS.getState()))];
       const at = ref?.t === "text" ? { x: ref.x, y: ref.y + 32 * ref.text.split("\n").length } : { x: 0, y: 0 };
+      // (the next free line there: not over a comment written under the analysis)
+      const rows = 32 * line.split("\n").length;
+      while (items.some((it) => it.t === "text" && it.x === at.x && at.y < it.y + 32 * it.text.split("\n").length && at.y + rows > it.y)) at.y += 32;
       commit([...items, { t: "text", ...at, text: line, directive: !alternate }]);
       closeDialog();
       void selectTab(kind); // (not if the line does not read as an analysis: no tab to show)
