@@ -215,10 +215,10 @@ function ExportSvg({ items, lib }: { items: Item[]; lib: Record<string, SymbolDe
   );
 }
 
-/** Standalone SVG of the whole schematic in the light theme, cropped to its content. */
 /** The schematic as an SVG file (asked where); nothing drawn: nothing. */
 export const exportSchematic = () => ((s) => void (s.items.some(isShape) && saveSvg(schematicSvg(s.items, s.lib), "")))(useS.getState());
 
+/** Standalone SVG of the whole schematic in the light theme, cropped to its content. */
 export function schematicSvg(items: Item[], lib: Record<string, SymbolDef>): string {
   const host = document.createElement("div");
   host.style.cssText = "position:fixed;left:-100000px;top:0";

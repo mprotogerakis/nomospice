@@ -505,22 +505,32 @@ fn doc_path(window: tauri::Window, path: Option<String>) {
     }
 }
 
-/// The window that has `path` open comes to the front: its label; none has it: None.
+/// The window that has `path` open (`focus`: it comes to the front). None has it: None, and with
+/// `claim` it is this window's from now on (two windows opening it at once: one of them gets it).
 #[tauri::command]
-fn focus_doc(app: tauri::AppHandle, path: String) -> Option<String> {
+fn doc_window(app: tauri::AppHandle, window: tauri::Window, path: String, focus: bool, claim: bool) -> Option<String> {
     use tauri::Manager;
-    let docs = DOCS.lock().map(|d| d.clone()).unwrap_or_default();
-    let label = docs.iter().find(|(_, p)| *p == &path || same_file(std::path::Path::new(p.as_str()), std::path::Path::new(&path)))?.0.clone();
-    let w = app.get_webview_window(&label)?;
-    let _ = w.unminimize();
-    let _ = w.set_focus();
+    let mut docs = DOCS.lock().ok()?;
+    let Some(label) = docs.iter().find(|(_, p)| **p == path || same_file(std::path::Path::new(p.as_str()), std::path::Path::new(&path))).map(|(l, _)| l.clone()) else {
+        if claim {
+            docs.insert(window.label().to_string(), path);
+        }
+        return None;
+    };
+    drop(docs);
+    if let Some(w) = app.get_webview_window(&label).filter(|_| focus) {
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    }
     Some(label)
 }
 
 /// Quit: each window in turn (the focused one first) asks about its unsaved changes; one
-/// cancelled, the app stays as it is; all answered, it ends (their recovery copies with it).
-/// The window asked and where its answer goes; a window that closes meanwhile answers yes.
-static QUIT: Mutex<Option<(String, std::sync::mpsc::Sender<bool>)>> = Mutex::new(None);
+/// cancelled, the app stays as it is. Rounds until no window had anything new to ask about (one
+/// edited or opened while another asked is asked too); then it ends, their recovery copies with it.
+/// The window asked and where its answer goes, (go on, asked the user); a window that closes
+/// meanwhile answers go on.
+static QUIT: Mutex<Option<(String, std::sync::mpsc::Sender<(bool, bool)>)>> = Mutex::new(None);
 static QUITTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn quit_all(app: &tauri::AppHandle) {
@@ -535,20 +545,31 @@ fn quit_all(app: &tauri::AppHandle) {
         return;
     }
     let app = app.clone();
-    std::thread::spawn(move || {
+    std::thread::spawn(move || loop {
         let first = focused(&app);
         let mut labels: Vec<String> = app.webview_windows().into_keys().collect();
         labels.sort_by_key(|l| Some(l) != first.as_ref());
+        let mut asked = false;
         for label in labels {
             let (tx, rx) = std::sync::mpsc::channel();
             if let Ok(mut q) = QUIT.lock() {
                 *q = Some((label.clone(), tx));
             }
-            if app.get_webview_window(&label).is_some() && ask(&app, &label).is_ok() && rx.recv() == Ok(false) {
-                QUIT.lock().map(|mut q| q.take()).ok();
-                QUITTING.store(false, SeqCst);
-                return;
+            if app.get_webview_window(&label).is_none() || ask(&app, &label).is_err() {
+                continue;
             }
+            match rx.recv() {
+                Ok((false, _)) => {
+                    QUIT.lock().map(|mut q| q.take()).ok();
+                    QUITTING.store(false, SeqCst);
+                    return;
+                }
+                Ok((true, a)) => asked |= a,
+                Err(_) => {} // (closed meanwhile)
+            }
+        }
+        if asked {
+            continue;
         }
         if let Ok(held) = OWN.lock() {
             for (_, json) in held.values() {
@@ -556,15 +577,17 @@ fn quit_all(app: &tauri::AppHandle) {
             }
         }
         app.exit(0);
+        return;
     });
 }
 
-/// A window's answer to Quit: true, go on (saved, or not to be kept); false, stay.
+/// A window's answer to Quit: `ok`, go on (saved, or not to be kept), else stay; `asked`: the
+/// user was asked (something changed since the last round).
 #[tauri::command]
-fn quit_answer(window: tauri::Window, ok: bool) {
+fn quit_answer(window: tauri::Window, ok: bool, asked: bool) {
     let Ok(mut q) = QUIT.lock() else { return };
     if q.as_ref().is_some_and(|(l, _)| l == window.label()) {
-        let _ = q.take().unwrap().1.send(ok);
+        let _ = q.take().unwrap().1.send((ok, asked));
     }
 }
 
@@ -674,9 +697,9 @@ fn recovery_release(label: &str) {
     drop(CLAIM.lock().ok().and_then(|mut c| c.remove(label))); // (undecided: stays for the next launch)
 }
 
-/// Unsaved documents in `dir` of closed windows and dead instances, newest first, each locked by
-/// us while held (dropped: free again). `limit`: at most this many.
-fn orphans(dir: &std::path::Path, limit: usize) -> Vec<(std::fs::File, std::path::PathBuf, serde_json::Value)> {
+/// Recovery files in `dir` of closed windows and dead instances (their lock files), newest first,
+/// each locked by us while held (dropped: free again).
+fn candidates(dir: &std::path::Path) -> Vec<(std::fs::File, std::path::PathBuf)> {
     let Ok(entries) = std::fs::read_dir(dir) else { return vec![] };
     let mut found = vec![];
     for p in entries.flatten().map(|e| e.path()) {
@@ -704,8 +727,14 @@ fn orphans(dir: &std::path::Path, limit: usize) -> Vec<(std::fs::File, std::path
         }
     }
     found.sort_by_key(|o| std::cmp::Reverse(o.0));
+    found.into_iter().map(|(_, f, lock)| (f, lock)).collect()
+}
+
+/// Unsaved documents in `dir` of closed windows and dead instances, newest first, each locked by
+/// us while held (dropped: free again). `limit`: at most this many.
+fn orphans(dir: &std::path::Path, limit: usize) -> Vec<(std::fs::File, std::path::PathBuf, serde_json::Value)> {
     let mut out = vec![];
-    for (_, f, lock) in found {
+    for (f, lock) in candidates(dir) {
         if out.len() == limit {
             break;
         }
@@ -727,17 +756,27 @@ fn orphans(dir: &std::path::Path, limit: usize) -> Vec<(std::fs::File, std::path
 /// stays on disk, locked by us, until `recovery_resolve`.
 #[tauri::command]
 async fn recovery_take(app: tauri::AppHandle, window: tauri::Window) -> Option<serde_json::Value> {
-    let _scan = SCAN.lock().ok()?;
-    let (f, lock, doc) = orphans(&recovery_dir(&app).ok()?, 1).pop()?;
-    CLAIM.lock().ok()?.insert(window.label().to_string(), (f, lock));
-    Some(doc)
+    // (file IO under a lock: off the async workers other commands share)
+    tauri::async_runtime::spawn_blocking(move || {
+        let _scan = SCAN.lock().ok()?;
+        let (f, lock, doc) = orphans(&recovery_dir(&app).ok()?, 1).pop()?;
+        CLAIM.lock().ok()?.insert(window.label().to_string(), (f, lock));
+        Some(doc)
+    })
+    .await
+    .ok()?
 }
 
 /// How many more unsaved documents wait to be restored (each in a window of its own).
 #[tauri::command]
 async fn recovery_count(app: tauri::AppHandle) -> usize {
-    let _scan = SCAN.lock();
-    recovery_dir(&app).map_or(0, |d| orphans(&d, usize::MAX).len())
+    // (a corrupt one counted too: the window opened for it finds none and closes)
+    tauri::async_runtime::spawn_blocking(move || {
+        let _scan = SCAN.lock();
+        recovery_dir(&app).map_or(0, |d| candidates(&d).iter().filter(|(_, lock)| lock.with_extension("json").exists()).count())
+    })
+    .await
+    .unwrap_or(0)
 }
 
 /// The user answered the restore prompt. `keep`: the orphan becomes this window's recovery
@@ -903,9 +942,9 @@ async fn git_init(path: String) -> Result<(), String> {
 /// into the page.
 fn build_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     use tauri::menu::{Menu, MenuItem, PredefinedMenuItem as P, Submenu, HELP_SUBMENU_ID};
-    let it = |id: &str, text: &str, key: Option<&str>| MenuItem::with_id(app, id, text, true, key);
-    // a single key (R: resistor) as the menu shows it; not on Linux, where GTK takes it before the page
-    let key = |k: &'static str| if cfg!(target_os = "linux") { None } else { Some(k) };
+    // the key as the menu shows it; none on Linux, where GTK would take it before the page (typing,
+    // a context menu open: the page's own rules), so the page's hotkeys do it as before
+    let it = |id: &str, text: &str, key: Option<&str>| MenuItem::with_id(app, id, text, true, if cfg!(target_os = "linux") { None } else { key });
     let sep = || P::separator(app);
     #[cfg(target_os = "macos")]
     let app_menu = Submenu::with_items(app, "nomospice", true, &[
@@ -955,9 +994,19 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::
         #[cfg(windows)]
         &P::redo(app, None)?,
         &sep()?,
+        #[cfg(not(target_os = "linux"))]
         &P::cut(app, None)?,
+        #[cfg(not(target_os = "linux"))]
         &P::copy(app, None)?,
+        #[cfg(not(target_os = "linux"))]
         &P::paste(app, None)?,
+        // (GTK's would press keys, which needs libxdo: the page's instead)
+        #[cfg(target_os = "linux")]
+        &it("cut", "Cut", None)?,
+        #[cfg(target_os = "linux")]
+        &it("copy", "Copy", None)?,
+        #[cfg(target_os = "linux")]
+        &it("paste", "Paste", None)?,
         &it("duplicate", "Duplicate", Some("CmdOrCtrl+D"))?,
         &it("delete", "Delete", None)?, // (its keys are the page's: the log's selected text has them too)
         #[cfg(not(windows))]
@@ -971,23 +1020,23 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::
         &it("find", "Find…", Some("CmdOrCtrl+F"))?,
     ])?;
     let place = Submenu::with_items(app, "Place", true, &[
-        &it("wire", "Wire", key("W"))?,
-        &it("ground", "Ground", key("G"))?,
-        &it("label", "Net Label…", key("N"))?,
+        &it("wire", "Wire", Some("W"))?,
+        &it("ground", "Ground", Some("G"))?,
+        &it("label", "Net Label…", Some("N"))?,
         &sep()?,
-        &it("res", "Resistor", key("R"))?,
-        &it("cap", "Capacitor", key("C"))?,
-        &it("ind", "Inductor", key("L"))?,
-        &it("diode", "Diode", key("D"))?,
-        &it("voltage", "Voltage Source", key("V"))?,
-        &it("current", "Current Source", key("I"))?,
+        &it("res", "Resistor", Some("R"))?,
+        &it("cap", "Capacitor", Some("C"))?,
+        &it("ind", "Inductor", Some("L"))?,
+        &it("diode", "Diode", Some("D"))?,
+        &it("voltage", "Voltage Source", Some("V"))?,
+        &it("current", "Current Source", Some("I"))?,
         &it("component", "Component…", Some("CmdOrCtrl+K"))?,
         &sep()?,
-        &it("comment", "Comment…", key("T"))?,
-        &it("directive", "SPICE Directive…", key("S"))?,
+        &it("comment", "Comment…", Some("T"))?,
+        &it("directive", "SPICE Directive…", Some("S"))?,
         &sep()?,
         &it("select", "Select", None)?,
-        &it("move", "Move", key("M"))?,
+        &it("move", "Move", Some("M"))?,
         &it("delete-tool", "Delete Mode", None)?,
     ])?;
     let simulate = Submenu::with_items(app, "Simulate", true, &[
@@ -1111,7 +1160,7 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![symbols, examples, path_exists, open_asc, save_asc, block_symbol, export_svg, export_raw, netlist, simulate, root_locus, cancel_locus, folder_symbols, trace, run_id, halt, cli_args, recovery_save, recovery_take, recovery_count, recovery_resolve, recovery_clear,
-            new_window, window_count, doc_path, focus_doc, quit_answer,
+            new_window, window_count, doc_path, doc_window, quit_answer,
             library_sources, library_set_sources, library_search, library_text, library_fetch_microcap,
             git_status, git_log, git_show, git_commit, git_init])
         .setup(|app| {

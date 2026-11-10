@@ -97,18 +97,25 @@ export function installGuards() {
   getCurrentWindow().onCloseRequested(async (e) => {
     if (!(await leave())) e.preventDefault();
   });
-  // Quit asks the windows in turn (see quit_all): this one's unsaved changes, in front if it has any
-  let asking = false; // (asked again: Quit chosen again while its question is open)
+  // Quit asks the windows in turn, in rounds (see quit_all): this one's unsaved changes, in front if
+  // it has any; not again about the same ones (Don't Save) unless edited since
+  let asking = false, settled: unknown = null; // (asking: Quit chosen again while its question is open)
   void getCurrentWebviewWindow().listen("quit-ask", async () => {
     if (asking) return;
+    const s = useS.getState();
+    if (!s.dirty || s.items === settled) return void invoke("quit_answer", { ok: true, asked: false });
     asking = true;
     try {
-      if (useS.getState().dirty) await getCurrentWindow().setFocus().catch(() => {});
-      await invoke("quit_answer", { ok: await discardOk() });
+      await getCurrentWindow().setFocus().catch(() => {});
+      const ok = await discardOk();
+      if (ok) settled = useS.getState().items;
+      await invoke("quit_answer", { ok, asked: true });
     } finally {
       asking = false;
     }
   });
+  // (when a key was pressed last: a menu command right after it came by its key)
+  window.addEventListener("keydown", () => void (keyAt = performance.now()), true);
   // the menu bar's commands, for this window when it is the focused one
   void getCurrentWebviewWindow().listen<string>("menu", (e) => command(e.payload));
   listen("libraries-changed", () => void refreshLibrarySymbols().catch(() => {}));
@@ -128,6 +135,9 @@ const fail = (what: string) => (e: unknown) => message(`${what}: ${e}`, { title:
 /** A window of its own, opened for `args` (a file, `--restore`, `--new-symbol <folder>`); none: an
  *  empty schematic. */
 const newWindow = (args: string[] = []) => invoke("new_window", { args }).catch(fail("Cannot open a window"));
+/** The window that has `path` open, brought to the front (`claim`: none has it, it is this one's
+ *  from now on: one window opens it, even if two try at once). */
+const docWindow = (path: string, focus = true, claim = false) => invoke<string | null>("doc_window", { path, focus, claim }).catch(() => null);
 /** This window holds nothing yet (untitled, untouched): what is opened goes here, not into a new one. */
 const untouched = () => ((s) => !s.items.length && !s.dirty && !s.path)(useS.getState());
 
@@ -140,7 +150,7 @@ async function openFile(path?: string) {
     path = picked;
   }
   // (this window's own file: read again, as asked)
-  const at = await invoke<string | null>("focus_doc", { path }).catch(() => null);
+  const at = await docWindow(path);
   if (at && at !== getCurrentWindow().label) return;
   if (!at && !untouched()) return void newWindow([path]);
   if (at && !(await discardOk())) return;
@@ -200,6 +210,12 @@ async function saveFile(as = false): Promise<boolean> {
     // GTK save dialogs do not add the filter's extension, and checked for overwrite without it
     path += `.${ext}`;
     if ((await invoke<boolean>("path_exists", { path })) && !(await ask(`${fileName(path)} already exists. Replace it?`, { title: "nomospice", kind: "warning" }))) return false;
+  }
+  // (open in another window: the two would write over each other)
+  const at = await docWindow(path, false);
+  if (at && at !== getCurrentWindow().label) {
+    await message(`${fileName(path)} is open in another window: close it there first.`, { title: "nomospice" });
+    return false;
   }
   const items = useS.getState().items;
   const doc = docId();
@@ -265,7 +281,7 @@ async function newSymbol(dir = dirOf(useS.getState().path)) {
 
 /** A block's schematic in place of this one (`up`: the one above); the way back is kept. */
 async function openSheet(path: string, up = false) {
-  if (((at) => at && at !== getCurrentWindow().label)(await invoke<string | null>("focus_doc", { path }).catch(() => null))) return; // (open in another window: there)
+  if (((at) => at && at !== getCurrentWindow().label)(await docWindow(path))) return; // (open in another window: there)
   if (!(await discardOk())) return;
   // (after the save it may have asked for: where it went; a never written document has no way back)
   const { path: from, parents, unwritten } = useS.getState();
@@ -306,7 +322,8 @@ const C: Record<string, () => unknown> = {
   "export-raw": () => useS.getState().sim?.run && saveRaw(),
   libraries: () => openLibraries(), "check-updates": () => checkForUpdate(true),
   about: () => useS.setState({ dialog: { k: "about" } }), help: () => useS.setState({ dialog: { k: "help" } }),
-  undo: () => undo(), redo: () => redo(), "select-all": () => useS.setState({ sel: useS.getState().items.flatMap((it, i) => (it.t === "raw" ? [] : [i])) }),
+  undo: () => undo(), redo: () => redo(), cut: () => copySelection(true), copy: () => copySelection(), paste: () => pasteClipboard(),
+  "select-all": () => useS.setState({ sel: useS.getState().items.flatMap((it, i) => (it.t === "raw" ? [] : [i])) }),
   duplicate: () => duplicate(), delete: () => deleteSelection(), rotate: () => transform(rotate), mirror: () => transform(mirror),
   find: () => useS.setState({ dialog: { k: "find" } }),
   wire: () => useS.setState({ tool: { k: "wire" }, sel: [] }), ground: () => placeFlag("0"), label: () => newItem({ t: "flag", x: 0, y: 0, name: "" }),
@@ -324,16 +341,20 @@ const C: Record<string, () => unknown> = {
 /** Commands a symbol has no use for (no parts, directives or analyses; drawn upright). */
 const NOT_IN_SYMBOLS = new Set(["component", "directive", "ground", "res", "cap", "ind", "diode", "voltage", "current", "rotate", "mirror", "run", "sim-command", "live", "add-trace", "export-plot", "export-raw", "block-symbol"]);
 
-/** A menu bar command for this window. Undo, Redo and Select All in a text field are its own. */
+/** When a key was pressed last (a menu command right after it came by that key). */
+let keyAt = -Infinity;
+
+/** A menu bar command for this window. Undo, Redo, Select All (Linux: Cut, Copy, Paste) in a text
+ *  field are its own. By key, as the page's hotkeys: none while typing (but Close and the model
+ *  libraries, the menu's own) or with a context menu open; clicked, it runs. */
 function command(id: string) {
-  const field = textField();
-  if (field && (id === "undo" || id === "redo")) return void document.execCommand(id);
+  const field = textField(), byKey = performance.now() - keyAt < 500;
+  if (field && (id === "undo" || id === "redo" || id === "cut" || id === "copy" || id === "paste")) return void document.execCommand(id);
   if (field && id === "select-all") return field.select();
-  // typing: its keys (⌘D, ⌃R …) edit no part
-  if (field && ["duplicate", "delete", "rotate", "mirror"].includes(id)) return;
+  if (field && byKey && id !== "close" && id !== "libraries") return;
   const s = useS.getState();
-  // a context menu open: the keys are its own (as the page's); it goes
-  if (s.menu) return void useS.setState({ menu: null });
+  if (s.menu) useS.setState({ menu: null });
+  if (s.menu && byKey) return;
   // a dialog open: ⌘W closes it (as Esc); the rest waits (it would replace the dialog and lose its
   // edits), but for help and about, which go
   if (s.dialog && s.dialog.k !== "help" && s.dialog.k !== "about") return void (id === "close" && useS.setState({ dialog: null }));
@@ -398,16 +419,19 @@ export function App() {
           await loadDoc(rec!.items, rec!.path, unwritten);
           useS.setState({ dirty: true });
           // (the file asked for: in a window of its own, unless it is the one restored)
-          if (file && !(await invoke<string | null>("focus_doc", { path: file }).catch(() => null))) void newWindow([file, ...args.filter((a) => a === "--run")]);
+          if (file && !(await docWindow(file))) void newWindow([file, ...args.filter((a) => a === "--run")]);
         } else if (!main) return void getCurrentWindow().destroy(); // (opened only for it)
         // more unsaved work (several windows were open): each in a window of its own, asked there
         if (main) for (let k = await invoke<number>("recovery_count").catch(() => 0); k > 0; k--) void newWindow(["--restore"]);
         if (restore) return;
       }
+      // (a window opened for a file: unless another one has it by now, then that one comes forward)
+      if (file && !main && (await docWindow(file, true, true))) return void getCurrentWindow().destroy();
       try {
         if (file) await openPath(file);
         if (args.includes("--run")) await simulate();
       } catch (e) {
+        if (!useS.getState().path) void invoke("doc_path", { path: null }).catch(() => {}); // (claimed, but not opened: free again)
         await fail(`Cannot open ${file}`)(e);
       }
     })();
