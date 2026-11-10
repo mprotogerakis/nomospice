@@ -73,9 +73,9 @@ files — with a modern UI, ngspice as the engine, a Rust core and a React front
 
 ## Documentation
 
-In [`docs/`](docs/index.md): tutorials, how-to guides, a reference and explanations
-([Diátaxis](https://diataxis.fr)), with screenshots made by the app itself and narrated videos of the
-tutorials made from them (see [How this documentation is made](docs/documentation.md)).
+**<https://mprotogerakis.github.io/nomospice/>**: tutorials, how-to guides, a reference and
+explanations ([Diátaxis](https://diataxis.fr)), with screenshots made by the app itself (sources in
+[`docs/`](docs/index.md), see [How this documentation is made](docs/documentation.md)).
 
 ## Download
 

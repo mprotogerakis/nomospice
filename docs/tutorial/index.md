@@ -8,6 +8,3 @@ Four lessons that build on each other. Do them in order; each takes about ten mi
 4. **[Your own block](blocks.md)**: turn the filter into a block with its own symbol and use it twice.
 
 You need nomospice [installed](../install.md). The tutorials use the macOS keys; on Windows and Linux press ++ctrl++ where they say ++cmd++.
-
-!!! info "As a video"
-    Every tutorial can be turned into a narrated video: its pictures in order, each with the text that follows it spoken and shown as subtitles. See [How this documentation is made](../documentation.md).

@@ -19,6 +19,8 @@ LINK = re.compile(r"!?\[[^\]]*\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)|<img\b[^>]*\bsrc
 FETCHED = re.compile(r"<(?:link|script|img|iframe|source|video|audio|embed|object)\b[^>]*?\b(?:href|src|data)\s*=\s*[\"']((?:https?:)?//[^\"']+)", re.I)
 # fetched by scripts and styles: CSS url()/@import, and Material's repository widget (repo_url:
 # stars and forks from api.github.com)
+# the site's own address (site_url): its own pages, not a third party (a canonical link names it)
+OWN = (re.search(r"^site_url:\s*(\S+)", (ROOT / "mkdocs.yml").read_text(), re.M) or [None, "\0"])[1]
 STYLE = re.compile(r"(?:url\(\s*[\"']?|@import\s+[\"'])((?:https?:)?//[^\"')]+)", re.I)
 
 
@@ -50,12 +52,14 @@ def main():
         for html in sorted(site.rglob("*.html")):
             text = html.read_text(encoding="utf-8")
             for url in FETCHED.findall(text) + STYLE.findall(text):
-                errors.append(f"{html.relative_to(site)}: fetches {url}")
+                if not url.startswith(OWN):
+                    errors.append(f"{html.relative_to(site)}: fetches {url}")
             if 'data-md-component="source"' in text:
                 errors.append(f"{html.relative_to(site)}: the repository widget fetches from api.github.com (repo_url)")
         for css in sorted(site.rglob("*.css")):
             for url in STYLE.findall(css.read_text(encoding="utf-8", errors="replace")):
-                errors.append(f"{css.relative_to(site)}: fetches {url}")
+                if not url.startswith(OWN):
+                    errors.append(f"{css.relative_to(site)}: fetches {url}")
     for e in errors:
         print(e)
     print(f"docs: {len(errors)} problem(s)" if errors else "docs: ok")

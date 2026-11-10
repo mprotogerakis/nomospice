@@ -13,6 +13,16 @@ python3 scripts/check-docs.py site
 
 `check-docs.py` checks that every picture and link resolves, that every picture is used, and that the built site fetches nothing from third parties (no web fonts, no scripts from elsewhere). CI runs the same.
 
+## Publish the website
+
+The site is served by GitHub Pages from the branch `gh-pages`, which only ever holds the built site:
+
+```sh
+.venv/bin/mkdocs gh-deploy --strict    # builds, commits the site to gh-pages and pushes it
+```
+
+It is at <https://mprotogerakis.github.io/nomospice/> a minute later.
+
 ## Screenshots
 
 Every picture comes from the real app, played by a **scene**: `docs/scenes/<name>.js` drives a development build of nomospice as a user would, pressing keys, clicking the schematic and filling in dialogs, and every `shot(id)` saves a picture of the window as `docs/img/<name>/<id>.png`.
@@ -41,9 +51,9 @@ Other helpers: `move`, `rightClick`, `type` (into a field by selector), `press` 
 
 With pngquant installed, the pictures are stored with a palette of their own, a quarter of the size. The app runs under its own identifier, so the installed app's settings and recovery files are not touched, and git commits a scene makes are signed by *nomospice docs*. Change the app, run the scenes again, and the pictures are current.
 
-## Videos
+## Videos (experimental)
 
-Every tutorial can be turned into a narrated video:
+Every tutorial can be turned into a narrated video. The system voices do not sound good enough yet, so the videos are not published:
 
 ```sh
 nix shell nixpkgs#ffmpeg -c scripts/docs-video.py docs/tutorial/*.md    # into build/videos/
