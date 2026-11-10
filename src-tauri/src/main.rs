@@ -363,7 +363,7 @@ async fn root_locus(window: tauri::Window, items: Vec<Item>, dir: Option<String>
 /// use, as (file, clash): clash when the new folder has a different file of that name (it would be
 /// used instead, and is not overwritten). `copy`: copy the others there (else only list them).
 #[tauri::command]
-async fn folder_symbols(from: String, to: String, names: Vec<String>, copy: bool, doc: Option<String>) -> Result<Vec<(String, bool)>, String> {
+async fn folder_symbols(app: tauri::AppHandle, from: String, to: String, names: Vec<String>, copy: bool, doc: Option<String>) -> Result<Vec<(String, bool)>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         // the library's own rule for which .asy files are a folder's symbols
         let (old, old_sheets) = schematic::folder_contents(std::path::Path::new(&from));
@@ -415,6 +415,9 @@ async fn folder_symbols(from: String, to: String, names: Vec<String>, copy: bool
                     out.push((file, false));
                 }
             }
+        }
+        if let Some((file, _)) = out.iter().find(|(_, there)| copy && !there) {
+            symbols_changed(&app, &std::path::Path::new(&to).join(file).to_string_lossy()); // (that folder's windows)
         }
         if failed.is_empty() { Ok(out) } else { Err(failed.join("; ")) }
     }).await.map_err(|e| e.to_string())?

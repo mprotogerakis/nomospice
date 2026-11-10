@@ -310,7 +310,7 @@ impl Library {
         // (noted by the calls that report it only: a netlist's turn does not use the change up)
         let changed = rescan && self.local.seen.insert(dir.map(std::path::Path::to_path_buf), stamp.clone()).as_ref() != Some(&stamp);
         if !moved && stamp == self.local.stamp {
-            return false;
+            return changed; // (loaded already, by a netlist's turn: still news to this call)
         }
         self.sheets.clear();
         self.local.stamp = stamp;

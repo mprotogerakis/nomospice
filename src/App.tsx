@@ -112,13 +112,13 @@ export function installGuards() {
     const s = useS.getState();
     // (asking already, closing it or opening another file: that answer first, the Quit stays)
     if (prompting) return void invoke("quit_answer", { ok: false, asked: true });
-    if (!s.dirty || (settled?.no === no && s.items === settled.items)) return void (clearTimeout(mirrorTimer), invoke("quit_answer", { ok: true, asked: false }));
+    if (!s.dirty || (settled?.no === no && s.items === settled.items)) return void invoke("quit_answer", { ok: true, asked: false });
     asking = true;
     let ok = false;
     try {
       await getCurrentWindow().setFocus().catch(() => {});
       ok = await discardOk();
-      if (ok) (settled = { no, items: useS.getState().items }), clearTimeout(mirrorTimer); // (no copy written after Quit clears them)
+      if (ok) settled = { no, items: useS.getState().items };
       else refused = no;
     } finally {
       asking = false;
@@ -152,6 +152,10 @@ const newWindow = (args: string[] = []) => invoke("new_window", { args }).catch(
 /** The window that has `path` open, brought to the front (`claim`: none has it, it is this one's
  *  from now on: one window opens it, even if two try at once). */
 const docWindow = (path: string, focus = true, claim = false) => invoke<string | null>("doc_window", { path, focus, claim }).catch(() => null);
+/** Whether another window has `path` open (brought to the front if `focus`). */
+const elsewhere = async (path: string, focus = true) => ((at) => !!at && at !== getCurrentWindow().label)(await docWindow(path, focus));
+/** The file this window has open, told again (a claim that came to nothing). */
+const resyncDoc = () => ((s) => void invoke("doc_path", { path: s.path && s.path !== s.unwritten ? s.path : null }).catch(() => {}))(useS.getState());
 /** This window holds nothing yet (untitled, untouched): what is opened goes here, not into a new one. */
 const untouched = () => ((s) => !s.items.length && !s.dirty && !s.path)(useS.getState());
 
@@ -163,14 +167,15 @@ async function openFile(path?: string) {
     if (typeof picked !== "string") return;
     path = picked;
   }
-  // (this window's own file: read again, as asked)
-  const at = await docWindow(path);
+  // (this window's own file: read again, as asked; another's: shown there; none: here, claimed)
+  const here = untouched(), at = await docWindow(path, true, here);
   if (at && at !== getCurrentWindow().label) return;
-  if (!at && !untouched()) return void newWindow([path]);
+  if (!at && !here) return void newWindow([path]);
   if (at && !(await discardOk())) return;
   try {
     await openPath(path);
   } catch (e) {
+    resyncDoc();
     await fail(`Cannot open ${path}`)(e);
   }
 }
@@ -210,6 +215,14 @@ async function dropFiles(paths: string[]) {
 
 /** Save (as): true once the file is written. */
 async function saveFile(as = false): Promise<boolean> {
+  prompting++; // (its dialogs open: a Quit waits for them, as for discardOk's)
+  try {
+    return await saveNow(as);
+  } finally {
+    prompting--;
+  }
+}
+async function saveNow(as: boolean): Promise<boolean> {
   const prev = useS.getState().path;
   const { ext, filters } = saveAs(isSymbolDoc(prev));
   let path = prev;
@@ -224,8 +237,7 @@ async function saveFile(as = false): Promise<boolean> {
   const bare = !path.toLowerCase().endsWith(`.${ext}`);
   if (bare) path += `.${ext}`;
   // (open in another window: the two would write over each other)
-  const at = await docWindow(path, false);
-  if (at && at !== getCurrentWindow().label) {
+  if (await elsewhere(path, false)) {
     await message(`${fileName(path)} is open in another window: close it there first.`, { title: "nomospice" });
     return false;
   }
@@ -294,7 +306,7 @@ async function newSymbol(dir = dirOf(useS.getState().path)) {
 
 /** A block's schematic in place of this one (`up`: the one above); the way back is kept. */
 async function openSheet(path: string, up = false) {
-  if (((at) => at && at !== getCurrentWindow().label)(await docWindow(path))) return; // (open in another window: there)
+  if (await elsewhere(path)) return; // (open in another window: there)
   if (!(await discardOk())) return;
   // (after the save it may have asked for: where it went; a never written document has no way back)
   const { path: from, parents, unwritten } = useS.getState();
@@ -440,7 +452,7 @@ export function App() {
         if (file) await openPath(file);
         if (args.includes("--run")) await simulate();
       } catch (e) {
-        if (!useS.getState().path) void invoke("doc_path", { path: null }).catch(() => {}); // (claimed, but not opened: free again)
+        resyncDoc(); // (claimed, but maybe not opened: free again)
         await fail(`Cannot open ${file}`)(e);
       }
     })();
