@@ -19,3 +19,6 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     </Boundary>
   </React.StrictMode>,
 );
+
+// documentation screenshots (dev builds only: see src/scenes.ts)
+if (import.meta.env.DEV) void import("./scenes").then((m) => m.playScene());

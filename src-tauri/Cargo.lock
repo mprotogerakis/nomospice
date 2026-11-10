@@ -1974,6 +1974,7 @@ name = "nomospice"
 version = "0.1.11"
 dependencies = [
  "libloading 0.8.9",
+ "objc2",
  "serde",
  "serde_json",
  "tauri",

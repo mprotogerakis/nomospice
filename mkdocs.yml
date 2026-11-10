@@ -1,0 +1,86 @@
+site_name: nomospice
+site_description: >-
+  A circuit simulator with schematic capture and click-to-probe waveforms, ngspice as its engine.
+repo_url: https://github.com/mprotogerakis/nomospice
+repo_name: mprotogerakis/nomospice
+edit_uri: edit/main/docs/
+
+# Plain .html files instead of directory URLs: the site also reads from file:// (a browser does not
+# resolve a directory link to its index.html there), and works unchanged behind any web server.
+use_directory_urls: false
+
+theme:
+  name: material
+  # No Google Fonts: Material loads Roboto from fonts.googleapis.com by default, which sends every
+  # visitor's IP address to Google before anything is shown. `false` uses the system fonts and
+  # makes no third-party request (scripts/check-docs.py checks the built site for any).
+  font: false
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      accent: deep orange
+      toggle: { icon: material/weather-night, name: Dark mode }
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      accent: deep orange
+      toggle: { icon: material/weather-sunny, name: Light mode }
+  features:
+    - navigation.sections
+    - navigation.top
+    - search.suggest
+    - content.code.copy
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.keys
+
+# the screenshot scenes drive the app (scripts/docs-shots.sh); they are no pages
+exclude_docs: |
+  /scenes/
+
+nav:
+  - Home: index.md
+  - Install: install.md
+  - Tutorials:
+      - Overview: tutorial/index.md
+      - Your first simulation: tutorial/first-circuit.md
+      - Frequency response: tutorial/frequency-response.md
+      - Sweeps and measurements: tutorial/sweeps.md
+      - Your own block: tutorial/blocks.md
+  - How-to guides:
+      - Overview: how-to/index.md
+      - Open schematics, symbols and netlists: how-to/open-files.md
+      - Use model libraries: how-to/model-libraries.md
+      - Draw and edit symbols: how-to/symbols.md
+      - Work with several windows: how-to/windows.md
+      - Keep a version history: how-to/version-history.md
+      - Recover unsaved work: how-to/recover-work.md
+      - Choose an analysis: how-to/analyses.md
+      - Plot and measure: how-to/plot-and-measure.md
+      - Find poles and zeros: how-to/poles-and-zeros.md
+      - Use a transfer function as a source: how-to/laplace.md
+      - Export schematics, plots and results: how-to/export.md
+      - Let an AI assistant use nomospice: how-to/ai-assistant.md
+  - Reference:
+      - Overview: reference/index.md
+      - Keys and menus: reference/keys-and-menus.md
+      - Analyses and directives: reference/analyses-and-directives.md
+      - The plot window: reference/plot-window.md
+      - Parts and symbols: reference/parts.md
+      - Files and folders: reference/files.md
+      - Command line and MCP: reference/command-line.md
+  - Explanation:
+      - Overview: explanation/index.md
+      - How a simulation runs: explanation/how-it-works.md
+      - Hierarchy: explanation/hierarchy.md
+      - One ngspice, many windows: explanation/windows-and-engine.md
+      - Compatibility: explanation/compatibility.md
+  - Project:
+      - How this documentation is made: documentation.md

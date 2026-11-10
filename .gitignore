@@ -5,3 +5,7 @@ src-tauri/gen
 .DS_Store
 src-tauri/ngspice
 *.tsbuildinfo
+site
+build
+.venv
+__pycache__

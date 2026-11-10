@@ -372,7 +372,7 @@ const go = (id: string) => () => command(id);
 
 /** A menu bar command for this window. Undo, Redo, Select All (Linux: Cut, Copy, Paste) in a text
  *  field are its own. (Its keys reach it only where the page lets them: see the keydown handler.) */
-function command(id: string) {
+export function command(id: string) {
   const field = textField();
   if (field && (id === "undo" || id === "redo" || id === "cut" || id === "copy" || id === "paste")) return void document.execCommand(id);
   if (field && id === "select-all") return field.select();

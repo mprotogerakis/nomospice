@@ -748,7 +748,7 @@ export const Schematic = memo(function Schematic() {
           {defs.map((d) => <SymbolGraphics key={d.name} def={d} />)}
         </defs>
         {gap > 4 && <rect width="100%" height="100%" fill="url(#grid)" />}
-        <g transform={`translate(${view.x} ${view.y}) scale(${view.k})`} fill="none" strokeLinecap="round">
+        <g data-world transform={`translate(${view.x} ${view.y}) scale(${view.k})`} fill="none" strokeLinecap="round">
           {shown.map((it, i) => {
             if (!isShape(it)) return null;
             const selected = selSet.has(i);

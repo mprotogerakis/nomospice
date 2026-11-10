@@ -1258,6 +1258,64 @@ fn on_menu(app: &tauri::AppHandle, id: &str) {
     }
 }
 
+// ---------------------------------------------------------------- documentation screenshots
+
+// Dev builds only (scripts/docs-shots.sh): NOMOSPICE_SCENES=<name> plays docs/scenes/<name>.js in the
+// first window (see src/scenes.ts), each shot a picture of the window in NOMOSPICE_SHOTS.
+
+/// The scene to play and its work folder (NOMOSPICE_SCENE_WORK: where it saves files); none outside
+/// a dev build's first window.
+#[tauri::command]
+fn scene(window: tauri::Window) -> Option<(String, String)> {
+    let name = std::env::var("NOMOSPICE_SCENES").ok().filter(|_| cfg!(debug_assertions) && window.label() == "main")?;
+    let work = std::env::var("NOMOSPICE_SCENE_WORK").unwrap_or_else(|_| std::env::temp_dir().join("nomospice-scenes").to_string_lossy().into_owned());
+    let _ = std::fs::create_dir_all(&work);
+    Some((name, work))
+}
+
+/// The window as `<NOMOSPICE_SHOTS>/<name>.png`, 1600 px wide. (Sync: on the main thread, where
+/// AppKit wants the window asked.)
+#[tauri::command]
+fn scene_shot(window: tauri::WebviewWindow, name: String) -> Result<(), String> {
+    if !cfg!(debug_assertions) {
+        return Err("dev builds only".into());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let dir = std::env::var("NOMOSPICE_SHOTS").map_err(|_| "NOMOSPICE_SHOTS is not set".to_string())?;
+        let file = std::path::Path::new(&dir).join(format!("{name}.png"));
+        std::fs::create_dir_all(file.parent().unwrap()).map_err(|e| e.to_string())?;
+        let ns = window.ns_window().map_err(|e| e.to_string())? as *mut objc2::runtime::AnyObject;
+        let number: isize = unsafe { objc2::msg_send![ns, windowNumber] };
+        // (-o: no shadow, -x: no sound; the window alone, whatever lies over it)
+        let ok = std::process::Command::new("screencapture").arg("-o").arg("-x").arg(format!("-l{number}")).arg(&file).status().map_err(|e| e.to_string())?.success()
+            && std::process::Command::new("sips").args(["--resampleWidth", "1600"]).arg(&file).stdout(std::process::Stdio::null()).status().map_err(|e| e.to_string())?.success();
+        if !ok {
+            return Err(format!("{}: not captured", file.display()));
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (window, name);
+        Err("screenshots are taken on macOS".into())
+    }
+}
+
+/// A scene's failure, for scripts/docs-shots.sh to show (the app's stderr).
+#[tauri::command]
+fn scene_log(message: String) {
+    eprintln!("scene: {message}");
+}
+
+/// The scene played: the app ends.
+#[tauri::command]
+fn scene_done(app: tauri::AppHandle) {
+    if cfg!(debug_assertions) {
+        app.exit(0);
+    }
+}
+
 /// Tauri's app_config_dir without a running app (for `--mcp`).
 fn config_dir() -> Option<std::path::PathBuf> {
     let home = std::path::PathBuf::from(std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?);
@@ -1307,7 +1365,7 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![symbols, examples, path_exists, open_asc, save_asc, block_symbol, export_svg, export_raw, netlist, simulate, root_locus, cancel_locus, folder_symbols, trace, run_id, halt, cli_args, recovery_save, recovery_take, recovery_count, recovery_resolve, recovery_clear,
-            new_window, window_count, doc_path, doc_window, quit_answer, quit_waiting, unsaved_windows,
+            new_window, window_count, doc_path, doc_window, quit_answer, quit_waiting, unsaved_windows, scene, scene_shot, scene_log, scene_done,
             library_sources, library_set_sources, library_search, library_text, library_fetch_microcap,
             git_status, git_log, git_show, git_commit, git_init])
         .setup(|app| {
@@ -1321,6 +1379,12 @@ fn main() {
             }
             std::thread::spawn(|| drop(library::index()));
             app.set_menu(build_menu(app.handle())?)?;
+            // (a scene: one window size for every screenshot)
+            if cfg!(debug_assertions) && std::env::var_os("NOMOSPICE_SCENES").is_some() {
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.set_size(tauri::LogicalSize::new(1280.0, 800.0));
+                }
+            }
             Ok(())
         })
         .on_menu_event(|app, event| on_menu(app, event.id().as_ref()))

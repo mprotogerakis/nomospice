@@ -71,6 +71,12 @@ files — with a modern UI, ngspice as the engine, a Rust core and a React front
 - A menu bar with every command and its key, context menus everywhere, light/dark theme, crash
   recovery for unsaved work, automatic updates from the GitHub releases, macOS / Windows / Linux.
 
+## Documentation
+
+In [`docs/`](docs/index.md): tutorials, how-to guides, a reference and explanations
+([Diátaxis](https://diataxis.fr)), with screenshots made by the app itself and narrated videos of the
+tutorials made from them (see [How this documentation is made](docs/documentation.md)).
+
 ## Download
 
 [Releases](https://github.com/mprotogerakis/nomospice/releases): Windows installer (x64) and a signed,

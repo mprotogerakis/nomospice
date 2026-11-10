@@ -1,0 +1,22 @@
+name: docs
+
+# The documentation site: built strictly (a broken link or a missing page fails), then checked
+# (pictures, links, no third-party requests). The pictures come from scripts/docs-shots.sh on a Mac.
+on:
+  push:
+    paths: ["docs/**", "mkdocs.yml", "requirements-docs.txt", "scripts/check-docs.py", ".github/workflows/docs.yml"]
+  pull_request:
+    paths: ["docs/**", "mkdocs.yml", "requirements-docs.txt", "scripts/check-docs.py", ".github/workflows/docs.yml"]
+  workflow_dispatch:
+
+jobs:
+  site:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -r requirements-docs.txt
+      - run: mkdocs build --strict
+      - run: python3 scripts/check-docs.py site

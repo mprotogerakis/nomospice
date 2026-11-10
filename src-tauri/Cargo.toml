@@ -15,3 +15,7 @@ serde_json = "1"
 libloading = "0.8"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+
+# dev builds' documentation screenshots: the window's number for screencapture
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
