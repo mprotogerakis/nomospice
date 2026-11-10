@@ -16,7 +16,10 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 DOCS = ROOT / "docs"
 LINK = re.compile(r"!?\[[^\]]*\]\(([^)\s]+)\)")
 # fetched by the browser on its own (an <a href> is followed only if the visitor chooses to)
-FETCHED = re.compile(r"<(?:link|script|img|iframe|source|video|audio|embed|object)\b[^>]*?\b(?:href|src|data)\s*=\s*[\"'](https?://[^\"']+)", re.I)
+FETCHED = re.compile(r"<(?:link|script|img|iframe|source|video|audio|embed|object)\b[^>]*?\b(?:href|src|data)\s*=\s*[\"']((?:https?:)?//[^\"']+)", re.I)
+# fetched by scripts and styles: CSS url()/@import, and Material's repository widget (repo_url:
+# stars and forks from api.github.com)
+STYLE = re.compile(r"(?:url\(\s*[\"']?|@import\s+[\"'])((?:https?:)?//[^\"')]+)", re.I)
 
 
 def pages():
@@ -45,8 +48,14 @@ def main():
     if len(sys.argv) > 1:
         site = pathlib.Path(sys.argv[1])
         for html in sorted(site.rglob("*.html")):
-            for url in FETCHED.findall(html.read_text(encoding="utf-8")):
+            text = html.read_text(encoding="utf-8")
+            for url in FETCHED.findall(text) + STYLE.findall(text):
                 errors.append(f"{html.relative_to(site)}: fetches {url}")
+            if 'data-md-component="source"' in text:
+                errors.append(f"{html.relative_to(site)}: the repository widget fetches from api.github.com (repo_url)")
+        for css in sorted(site.rglob("*.css")):
+            for url in STYLE.findall(css.read_text(encoding="utf-8", errors="replace")):
+                errors.append(f"{css.relative_to(site)}: fetches {url}")
     for e in errors:
         print(e)
     print(f"docs: {len(errors)} problem(s)" if errors else "docs: ok")

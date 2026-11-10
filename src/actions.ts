@@ -96,7 +96,7 @@ export function copySelection(cut = false, to?: DataTransfer) {
 export const MENU_OWN_KEYS = "wq,";
 /** ⌘-keys of the menu bar the page runs itself, swallowed where it does not (typing, a dialog):
  *  else the menu bar would run them all the same. */
-export const PAGE_KEYS = "nosdfkl=+-";
+export const PAGE_KEYS = "nosdfklre=+-";
 
 /** Whether a key the page leaves alone (typing, a dialog or `contextMenu` open) must be swallowed,
  *  else the menu bar's keys (macOS) would run it all the same: in a context menu all but its own

@@ -13,7 +13,7 @@ The keys are the macOS ones. On Windows and Linux press ++ctrl++ for ++cmd++. In
 | ++n++, ++f4++ | net label |
 | ++s++ | SPICE directive (`.tran`, `.param`, `.step` …) |
 | ++t++ | comment |
-| ++ctrl+r++, ++ctrl+e++ | rotate, mirror (the part being placed, or the selection) |
+| ++cmd+r++, ++cmd+e++ (or ++ctrl+r++, ++ctrl+e++) | rotate, mirror (the part being placed, or the selection) |
 | drag | move parts; their wires follow |
 | ++m++, ++f7++ | move parts off their wires; ++esc++ or ++f8++ ends it |
 | ++cmd+c++ ++cmd+x++ ++cmd+v++ | copy, cut, paste (also between windows) |

@@ -127,6 +127,9 @@ export function installGuards() {
   });
   // the menu bar's commands, for this window when it is the focused one
   void getCurrentWebviewWindow().listen<string>("menu", (e) => command(e.payload));
+  // Windows: WebView2's own browser keys never act, whatever the page does with the key: Ctrl+R
+  // and F5 would reload the page and lose the schematic, Ctrl+P print, Ctrl+F find, Ctrl+N a window
+  if (!MAC) window.addEventListener("keydown", (e) => void (((e.ctrlKey && e.key.length === 1 && "rpsonfgjuht".includes(e.key.toLowerCase())) || /^F(3|5|7|11|12)$/.test(e.key)) && e.preventDefault()), true);
   listen("libraries-changed", () => void refreshLibrarySymbols().catch(() => {}));
   // a symbol saved (by any window): this folder's schematic draws and netlists it anew
   listen<string>("symbols-changed", ({ payload }) => {

@@ -295,11 +295,11 @@ impl Library {
     /// component list shows them; they replace one cached from LTspice or a library folder (it
     /// comes back with another folder), not a built-in symbol. Another folder (or
     /// none) drops them again; `rescan` reloads the same folder (a symbol saved meanwhile).
-    /// Whether the folder's symbols were (re)loaded (another folder, or changed).
-    pub fn set_dir(&mut self, dir: Option<&std::path::Path>, rescan: bool) -> bool {
+    /// (Whether that changed anything for a window: `news_for`.)
+    pub fn set_dir(&mut self, dir: Option<&std::path::Path>, rescan: bool) {
         let moved = self.local.dir.as_deref() != dir;
         if !moved && !rescan {
-            return false; // netlisting: no disk access
+            return; // netlisting: no disk access
         }
         let (list, sheets) = dir.map(folder_contents).unwrap_or_default(); // one listing for the stamp and the load
         let mut list: Vec<_> = list.into_iter().collect();
@@ -307,7 +307,7 @@ impl Library {
         // (None: no such folder; a schematic added or removed beside a symbol makes it a block or not)
         let stamp = dir.and_then(|d| std::fs::metadata(d).ok()).map(|_| (asy_stamp(&list), sheets.values().cloned().collect::<std::collections::BTreeSet<_>>()));
         if !moved && stamp == self.local.stamp {
-            return false;
+            return;
         }
         self.sheets.clear();
         self.local.stamp = stamp;
@@ -332,7 +332,11 @@ impl Library {
                 Err(_) => {}
             }
         }
-        true
+    }
+
+    /// A window closed: what it was told goes.
+    pub fn forget(&mut self, who: &str) {
+        self.local.seen.retain(|(w, _), _| w != who);
     }
 
     /// Whether the current folder's symbols changed since window `who` was last told (told now).

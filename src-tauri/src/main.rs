@@ -819,7 +819,8 @@ async fn recovery_clear(window: tauri::Window) -> Result<(), String> {
 }
 
 /// A closed window lets go of its recovery file: unlocked, so unsaved work it left (closed
-/// without asking: never, but a crash of its page) is an orphan to restore; nothing left: gone.
+/// without asking: never, but a crash of its page) is an orphan, offered at the next start (a
+/// scan passes over this process's files); nothing left: gone.
 fn recovery_release(label: &str) {
     if let Some((f, json)) = OWN.lock().ok().and_then(|mut h| h.remove(label)) {
         if !json.exists() {
@@ -1390,7 +1391,11 @@ fn main() {
         .on_menu_event(|app, event| on_menu(app, event.id().as_ref()))
         .on_window_event(|window, event| match event {
             tauri::WindowEvent::Focused(true) => drop(LAST_FOCUSED.lock().map(|mut l| *l = window.label().to_string())),
-            tauri::WindowEvent::Destroyed => forget_window(window.label()),
+            tauri::WindowEvent::Destroyed => {
+                use tauri::Manager;
+                forget_window(window.label());
+                window.state::<Lib>().0.lock().unwrap_or_else(|e| e.into_inner()).forget(window.label());
+            }
             _ => {}
         })
         .run(tauri::generate_context!())

@@ -1,9 +1,8 @@
 site_name: nomospice
 site_description: >-
   A circuit simulator with schematic capture and click-to-probe waveforms, ngspice as its engine.
-repo_url: https://github.com/mprotogerakis/nomospice
-repo_name: mprotogerakis/nomospice
-edit_uri: edit/main/docs/
+# (no repo_url: Material would fetch the repository's stars and forks from api.github.com in every
+# visitor's browser; the pages link to GitHub instead)
 
 # Plain .html files instead of directory URLs: the site also reads from file:// (a browser does not
 # resolve a directory link to its index.html there), and works unchanged behind any web server.
