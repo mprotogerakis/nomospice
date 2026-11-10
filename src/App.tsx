@@ -112,13 +112,13 @@ export function installGuards() {
     const s = useS.getState();
     // (asking already, closing it or opening another file: that answer first, the Quit stays)
     if (prompting) return void invoke("quit_answer", { ok: false, asked: true });
-    if (!s.dirty || (settled?.no === no && s.items === settled.items)) return void invoke("quit_answer", { ok: true, asked: false });
+    if (!s.dirty || (settled?.no === no && s.items === settled.items)) return void (clearTimeout(mirrorTimer), invoke("quit_answer", { ok: true, asked: false }));
     asking = true;
     let ok = false;
     try {
       await getCurrentWindow().setFocus().catch(() => {});
       ok = await discardOk();
-      if (ok) settled = { no, items: useS.getState().items };
+      if (ok) (settled = { no, items: useS.getState().items }), clearTimeout(mirrorTimer); // (no copy written after Quit clears them)
       else refused = no;
     } finally {
       asking = false;

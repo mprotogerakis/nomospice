@@ -307,7 +307,8 @@ impl Library {
         list.sort();
         // (None: no such folder; a schematic added or removed beside a symbol makes it a block or not)
         let stamp = dir.and_then(|d| std::fs::metadata(d).ok()).map(|_| (asy_stamp(&list), sheets.values().cloned().collect::<std::collections::BTreeSet<_>>()));
-        let changed = self.local.seen.insert(dir.map(std::path::Path::to_path_buf), stamp.clone()).as_ref() != Some(&stamp);
+        // (noted by the calls that report it only: a netlist's turn does not use the change up)
+        let changed = rescan && self.local.seen.insert(dir.map(std::path::Path::to_path_buf), stamp.clone()).as_ref() != Some(&stamp);
         if !moved && stamp == self.local.stamp {
             return false;
         }

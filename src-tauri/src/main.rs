@@ -545,14 +545,20 @@ async fn doc_window(app: tauri::AppHandle, window: tauri::Window, path: String, 
 }
 fn doc_window_now(app: &tauri::AppHandle, own: &str, path: String, focus: bool, claim: bool) -> Option<String> {
     use tauri::Manager;
-    let mut docs = DOCS.lock().ok()?;
-    let Some(label) = docs.iter().find(|(_, p)| **p == path || same_file(std::path::Path::new(p.as_str()), std::path::Path::new(&path))).map(|(l, _)| l.clone()) else {
-        if claim {
+    // (compared without holding DOCS: the main thread's doc_path waits for no disk)
+    let docs = DOCS.lock().ok()?.clone();
+    let found = docs.iter().find(|(_, p)| **p == path || same_file(std::path::Path::new(p.as_str()), std::path::Path::new(&path))).map(|(l, _)| l.clone());
+    let Some(label) = found.or_else(|| {
+        // none: claimed, unless a window claimed the same path meanwhile
+        let mut docs = DOCS.lock().ok()?;
+        let other = docs.iter().find(|(_, p)| **p == path).map(|(l, _)| l.clone());
+        if other.is_none() && claim {
             docs.insert(own.to_string(), path);
         }
+        other
+    }) else {
         return None;
     };
-    drop(docs);
     if let Some(w) = app.get_webview_window(&label).filter(|_| focus) {
         let _ = w.unminimize();
         let _ = w.set_focus();
@@ -595,7 +601,11 @@ fn quit_all(app: &tauri::AppHandle) {
             if let Ok(mut q) = QUIT.lock() {
                 *q = Some((label.clone(), tx));
             }
-            if app.get_webview_window(&label).is_none() || ask(&app, &label).is_err() {
+            if app.get_webview_window(&label).is_none() {
+                continue;
+            }
+            if ask(&app, &label).is_err() {
+                mute.push(label); // (not asked: its recovery copy kept)
                 continue;
             }
             // (no answer: its page may have missed the question, loading still: asked again; a page
@@ -680,7 +690,8 @@ fn forget_window(label: &str) {
     // ponytail: their counts stay, a few bytes per closed window (gone, a stopped run would go on)
     ngspice::halt(label);
     sweep_gen(label, true);
-    recovery_release(label);
+    let l = label.to_string();
+    std::thread::spawn(move || recovery_release(&l)); // (waits for a recovery write: not on the main thread)
     if let Ok(mut q) = QUIT.lock() {
         if q.as_ref().is_some_and(|(l, _)| l == label) {
             q.take(); // (closed while asked by Quit: its answer is yes)
@@ -854,7 +865,7 @@ async fn recovery_count(app: tauri::AppHandle) -> usize {
     // (a corrupt one counted too: the window opened for it finds none and closes)
     tauri::async_runtime::spawn_blocking(move || {
         let _scan = SCAN.lock();
-        recovery_dir(&app).map_or(0, |d| candidates(&d).iter().filter(|(_, lock)| lock.with_extension("json").exists()).count())
+        recovery_dir(&app).map_or(0, |d| candidates(&d).len())
     })
     .await
     .unwrap_or(0)
@@ -1020,7 +1031,9 @@ async fn git_init(path: String) -> Result<(), String> {
 /// system's Quit cannot be vetoed). Undo, Redo and Select All are the page's (the schematic's, or
 /// a text field's), Cut, Copy and Paste the system's (a text field's; the schematic's by key or
 /// by the page's copy events). Windows: the system's edit items press their keys (Ctrl+C …)
-/// into the page.
+/// into the page. Their own keys (registered, unlike ours) never reach the menu while the page
+/// has the focus: WebView2 takes keys in its own process (were it otherwise, muda's Ctrl+C would
+/// press Ctrl+C again and again).
 fn build_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     use tauri::menu::{Menu, MenuItem, PredefinedMenuItem as P, Submenu, HELP_SUBMENU_ID};
     // the key as the menu shows it; none on Linux, where GTK would take it before the page (typing,
