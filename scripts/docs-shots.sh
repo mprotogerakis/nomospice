@@ -23,14 +23,18 @@ for n in $names; do
   rm -rf "docs/img/$n"
   rm -f "$data"/recovery-* # (a scene ends with its schematic unsaved: no restore question next time)
   echo "scene $n"
+  # (a process group of its own: pnpm, cargo and the app end together)
+  set -m
   NOMOSPICE_SCENES=$n NOMOSPICE_SHOTS=$PWD/docs/img NOMOSPICE_SCENE_WORK=$work/$n \
     pnpm tauri dev --config '{"identifier":"de.nomospice.docs"}' >"$work/$n.log" 2>&1 &
   app=$!
+  set +m
   # (a scene stuck, say on a native dialog it cannot answer: ended after 10 minutes)
-  ( sleep 600; echo "scene $n: timed out" >>"$work/$n.log"; pkill -f "target/debug/nomospice"; kill $app ) 2>/dev/null &
+  ( sleep 600; echo "scene $n: timed out" >>"$work/$n.log"; kill -- -$app ) 2>/dev/null &
   dog=$!
-  wait $app || { tail -20 "$work/$n.log"; exit 1; }
-  kill $dog 2>/dev/null || true
+  ok=0; wait $app || ok=$?
+  kill $dog 2>/dev/null; wait $dog 2>/dev/null # (reaped quietly)
+  if [ $ok -ne 0 ]; then tail -20 "$work/$n.log"; exit 1; fi
   if [ -f "docs/img/$n/ERROR.png" ]; then echo "scene $n failed: docs/img/$n/ERROR.png"; grep -A3 "^scene:" "$work/$n.log" | head -8; exit 1; fi
   # (a palette per picture: a quarter of the size, no visible difference; pngquant if there is one)
   if command -v pngquant >/dev/null; then pngquant --quality=80-95 --skip-if-larger --force --ext .png "docs/img/$n"/*.png || true; fi

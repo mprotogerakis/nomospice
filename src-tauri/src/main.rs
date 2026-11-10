@@ -709,13 +709,18 @@ fn focused(app: &tauri::AppHandle) -> Option<String> {
 }
 
 /// A window closed: what it held goes.
-fn forget_window(label: &str) {
+fn forget_window(app: &tauri::AppHandle, label: &str) {
     // its simulation or root locus stops (else another window waits for it, with no Halt for it).
     // ponytail: their counts stay, a few bytes per closed window (gone, a stopped run would go on)
     ngspice::halt(label);
     sweep_gen(label, true);
-    let l = label.to_string();
-    std::thread::spawn(move || recovery_release(&l)); // (waits for a recovery write: not on the main thread)
+    // (these wait for a recovery write, a symbol lookup on the disk: not on the main thread)
+    let (app, l) = (app.clone(), label.to_string());
+    std::thread::spawn(move || {
+        use tauri::Manager;
+        recovery_release(&l);
+        app.state::<Lib>().0.lock().unwrap_or_else(|e| e.into_inner()).forget(&l);
+    });
     if let Ok(mut q) = QUIT.lock() {
         if q.as_ref().is_some_and(|(l, _)| l == label) {
             q.take(); // (closed while asked by Quit: its answer is yes)
@@ -1391,11 +1396,7 @@ fn main() {
         .on_menu_event(|app, event| on_menu(app, event.id().as_ref()))
         .on_window_event(|window, event| match event {
             tauri::WindowEvent::Focused(true) => drop(LAST_FOCUSED.lock().map(|mut l| *l = window.label().to_string())),
-            tauri::WindowEvent::Destroyed => {
-                use tauri::Manager;
-                forget_window(window.label());
-                window.state::<Lib>().0.lock().unwrap_or_else(|e| e.into_inner()).forget(window.label());
-            }
+            tauri::WindowEvent::Destroyed => forget_window(tauri::Manager::app_handle(window), window.label()),
             _ => {}
         })
         .run(tauri::generate_context!())

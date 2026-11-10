@@ -52,11 +52,14 @@ export function SimDialog({ index, kind0, of }: { index?: number; kind0?: Analys
       if (!analysisOptions([{ text: line, directive: !alternate }]).length) return setErr("Fill in the analysis first (e.g. a stop time, the frequencies or the output).");
       const ref = items[analysisItem(items, currentTab(useS.getState()))];
       const at = ref?.t === "text" ? { x: ref.x, y: ref.y + 32 * ref.text.split("\n").length } : { x: 0, y: 0 };
-      // (the next free line there: not over a text written under the analysis, at about 8 units
-      // a character)
-      const box = (x: number, text: string) => [x, x + 8 * Math.max(...text.split("\n").map((l) => l.length))];
+      // (the next free line there: not over a text written under the analysis, at about 8 units a
+      // character, as it is aligned; a vertical one by its line)
+      const box = (x: number, text: string, align = "Left") => {
+        const w = 8 * Math.max(...text.split("\n").map((l) => l.length));
+        return align.startsWith("V") ? [x - 16, x + 16] : align.startsWith("Right") ? [x - w, x] : align.startsWith("Center") ? [x - w / 2, x + w / 2] : [x, x + w];
+      };
       const [x0, x1] = box(at.x, line), rows = 32 * line.split("\n").length;
-      while (items.some((it) => it.t === "text" && ((b) => b[0] < x1 && x0 < b[1])(box(it.x, it.text)) && at.y < it.y + 32 * it.text.split("\n").length && at.y + rows > it.y)) at.y += 32;
+      while (items.some((it) => it.t === "text" && ((b) => b[0] < x1 && x0 < b[1])(box(it.x, it.text, it.align)) && at.y < it.y + 32 * it.text.split("\n").length && at.y + rows > it.y)) at.y += 32;
       commit([...items, { t: "text", ...at, text: line, directive: !alternate }]);
       closeDialog();
       void selectTab(kind); // (not if the line does not read as an analysis: no tab to show)

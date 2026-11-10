@@ -14,7 +14,7 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DOCS = ROOT / "docs"
-LINK = re.compile(r"!?\[[^\]]*\]\(([^)\s]+)\)")
+LINK = re.compile(r"!?\[[^\]]*\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)|<img\b[^>]*\bsrc=[\"']([^\"']+)")  # (a title after it; an <img>)
 # fetched by the browser on its own (an <a href> is followed only if the visitor chooses to)
 FETCHED = re.compile(r"<(?:link|script|img|iframe|source|video|audio|embed|object)\b[^>]*?\b(?:href|src|data)\s*=\s*[\"']((?:https?:)?//[^\"']+)", re.I)
 # fetched by scripts and styles: CSS url()/@import, and Material's repository widget (repo_url:
@@ -31,7 +31,7 @@ def pages():
 def main():
     errors, used = [], set()
     for page, text in pages():
-        for target in LINK.findall(text):
+        for target in (a or b for a, b in LINK.findall(text)):
             if re.match(r"[a-z][a-z0-9+.-]*:", target) or target.startswith("#"):
                 continue  # (another site, mail)
             path = (page.parent / target.split("#")[0]).resolve()

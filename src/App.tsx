@@ -129,7 +129,10 @@ export function installGuards() {
   void getCurrentWebviewWindow().listen<string>("menu", (e) => command(e.payload));
   // Windows: WebView2's own browser keys never act, whatever the page does with the key: Ctrl+R
   // and F5 would reload the page and lose the schematic, Ctrl+P print, Ctrl+F find, Ctrl+N a window
-  if (!MAC) window.addEventListener("keydown", (e) => void (((e.ctrlKey && e.key.length === 1 && "rpsonfgjuht".includes(e.key.toLowerCase())) || /^F(3|5|7|11|12)$/.test(e.key)) && e.preventDefault()), true);
+  // (by the key's place, as WebView2 takes them: a Cyrillic layout's Ctrl+К is Ctrl+R; Alt+← → would
+  // leave the page). ponytail: a list; WebView2's AreBrowserAcceleratorKeysEnabled(false) on each
+  // window would cover every such key (needs the webview2-com crate on Windows)
+  if (!MAC) window.addEventListener("keydown", (e) => void (((e.ctrlKey && /^Key[RPSONFGJUHT]$/.test(e.code)) || /^(F(3|5|7|11|12)|BrowserRefresh|BrowserBack|BrowserForward)$/.test(e.code) || (e.altKey && /^Arrow(Left|Right)$/.test(e.code))) && e.preventDefault()), true);
   listen("libraries-changed", () => void refreshLibrarySymbols().catch(() => {}));
   // a symbol saved (by any window): this folder's schematic draws and netlists it anew
   listen<string>("symbols-changed", ({ payload }) => {

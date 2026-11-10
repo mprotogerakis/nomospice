@@ -59,6 +59,11 @@ def scenes(page: pathlib.Path):
         if line.startswith("# "):
             title = line[2:].strip()
             continue
+        if line.startswith("#") and text is not None:
+            # (a section after a picture: its text a cue of its own, over the same picture)
+            text = []
+            out.append((out[-1][0], text))
+            continue
         if line.startswith("#") or line.lstrip().startswith("|"):
             continue
         m = re.match(r"\s*!\[[^\]]*\]\(([^)]+)\)\s*$", line)
@@ -70,6 +75,7 @@ def scenes(page: pathlib.Path):
     if not out:
         sys.exit(f"{page}: no pictures")
     result = [(img, spoken(" ".join(t))) for img, t in out]
+    result = [r for k, r in enumerate(result) if r[1] or k == 0]
     result[0] = (result[0][0], spoken(f"{title}. {' '.join(intro)}") + " " + result[0][1])
     return title, result
 

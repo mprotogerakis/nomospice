@@ -499,6 +499,7 @@ async function runOnce(): Promise<boolean> {
         // DC rails (vcc ...) would squash the signals on a shared axis: drop flat ones if any trace varies
         // (a loop: spreading 70k samples of a stepped trace into Math.min overflows the stack; gaps skipped)
         const flat = (t: Trace) => {
+          if (!t.data) return false; // (failed: kept, so the check below sees it)
           let lo = Infinity, hi = -Infinity;
           for (const y of t.data?.re ?? []) if (y != null) (lo = Math.min(lo, y)), (hi = Math.max(hi, y));
           return hi - lo <= 1e-6 * Math.max(Math.abs(hi), Math.abs(lo), 1e-9);
