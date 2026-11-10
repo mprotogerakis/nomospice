@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { message, open } from "@tauri-apps/plugin-dialog";
 import type { Item, LibEntry, LibSource } from "./types";
-import { addTrace, analysisItem, commit, currentTab, fileName, forDoc, isSymbolDoc, loadSymbols, placePart, placeSymbol, refreshLibrarySymbols, setYAxis, useS } from "./store";
+import { addTrace, analysisItem, commit, currentTab, fileName, forDoc, isSymbolDoc, loadSymbols, placePart, placeSymbol, setYAxis, useS } from "./store";
 import { defOf, pinLine, portOf, prefixOf, vexpr } from "./geom";
 import { Button } from "./ui/button";
 import { closeDialog as close, Field, FIELD, Modal, numHelp, NumField, Rows, TextField } from "./ui/dialog";
@@ -337,7 +337,7 @@ function Sources({ start }: { start?: "add" | "microcap" }) {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const save = async (next: LibSource[]) => {
     setList(next);
-    await invoke("library_set_sources", { sources: next }).then(refreshLibrarySymbols, (e) => setBusy(String(e)));
+    await invoke("library_set_sources", { sources: next }).catch((e) => setBusy(String(e))); // (every window then reloads its parts)
   };
   const add = async () => {
     const dir = await open({ directory: true, multiple: false });
@@ -354,7 +354,6 @@ function Sources({ start }: { start?: "add" | "microcap" }) {
     try {
       setList(await invoke<LibSource[]>("library_fetch_microcap"));
       setBusy("");
-      await refreshLibrarySymbols();
     } catch (e) {
       setBusy(`Download failed: ${e}`);
     }
@@ -540,7 +539,9 @@ const HELP: [string, [string, string][]][] = [
     ["right-click the plot", "FFT, Nyquist, Nichols, log or fixed y axis, CSV, SVG, .raw"],
   ]],
   ["Files", [
-    ["⌘S · ⌘O · ⌘N · ⌘W", "save · open (.asc, netlists) · new · close"],
+    ["⌘S · ⌘O", "save · open (.asc, netlists): here while this window is empty, else in a window of its own"],
+    ["⌘N · ⌘W", "new window · close it (the last one: emptied)"],
+    ["the menu bar", "every command, with its key"],
     ["⌘,", "model libraries (Micro-Cap 12, your folders)"],
     ["drop a .lib/.sub on it", "an .include directive for it"],
     ["right-click the canvas", "export the schematic as SVG"],

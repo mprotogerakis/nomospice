@@ -66,8 +66,10 @@ files — with a modern UI, ngspice as the engine, a Rust core and a React front
   amplifier, diode sweep, BJT curves, noise, phasors, Sallen-Key poles and root locus, RC timing with
   `.meas`, buck converter (efficiency), rectifier (RMS, power), result tabs, `Prefix X` subcircuit,
   `.step` of a capacitor, a Laplace low-pass, Monte Carlo of an RC filter.
-- Context menus everywhere, light/dark theme, crash recovery for unsaved work, automatic updates
-  from the GitHub releases, macOS / Windows / Linux.
+- **Windows**: one schematic per window (⌘N, or ⌘O while one holds something), copy and paste
+  between them; macOS merges them into tabs (*Window → Merge All Windows*).
+- A menu bar with every command and its key, context menus everywhere, light/dark theme, crash
+  recovery for unsaved work, automatic updates from the GitHub releases, macOS / Windows / Linux.
 
 ## Download
 

@@ -89,6 +89,34 @@ export function copySelection(cut = false) {
   return true;
 }
 
+/** The focused text field, if one has the focus (its own Undo, Select All, Copy … then). */
+export const textField = () => document.activeElement?.closest<HTMLInputElement>("input:not([type=checkbox]):not([type=radio]):not([type=button]),textarea") ?? null;
+
+/** Edit → Cut, Copy, Paste clicked in the menu bar (keys go by keydown): the parts' too. WebKit
+ *  offers Copy and Cut only for selected text, unless beforecopy/beforecut say there is something. */
+export function installClipboardEvents() {
+  const parts = () => !textField() && !useS.getState().dialog && !window.getSelection()?.toString();
+  const offer = (e: Event) => void (parts() && copyText() && e.preventDefault());
+  document.addEventListener("beforecopy", offer);
+  document.addEventListener("beforecut", offer);
+  document.addEventListener("beforepaste", (e) => void (parts() && e.preventDefault()));
+  const take = (cut: boolean) => (e: ClipboardEvent) => {
+    const t = parts() && copyText();
+    if (!t || !e.clipboardData) return;
+    e.preventDefault();
+    e.clipboardData.setData("text/plain", t);
+    (clip = t), (written = true);
+    if (cut) deleteSelection();
+  };
+  document.addEventListener("copy", take(false));
+  document.addEventListener("cut", take(true));
+  document.addEventListener("paste", (e) => {
+    if (!parts() || !e.clipboardData) return;
+    e.preventDefault();
+    pasteText(e.clipboardData.getData("text/plain"));
+  });
+}
+
 /** Paste the system clipboard's items (also from another window). The last copied here instead
  *  where the system clipboard cannot be read here at all, or did not take them; other text there,
  *  or reading declined: nothing. Not if the tool changed while reading (Esc, another tool). */

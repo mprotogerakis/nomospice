@@ -358,9 +358,12 @@ export const Schematic = memo(function Schematic() {
       autoFit.current = false;
       frame(its, Math.max(view.k, 1)); // (zoomed in further already: kept, if they fit)
     };
+    // (the menu's Zoom In / Out: about the middle, as the corner's buttons)
+    const onZoom = (e: Event) => zoomAt(view.k * ZOOM_STEP ** (e as CustomEvent<number>).detail, size.w / 2, size.h / 2);
     window.addEventListener("nomospice:fit", onFit);
     window.addEventListener("nomospice:show", onShow);
-    return () => (window.removeEventListener("nomospice:fit", onFit), window.removeEventListener("nomospice:show", onShow));
+    window.addEventListener("nomospice:zoom", onZoom);
+    return () => (window.removeEventListener("nomospice:fit", onFit), window.removeEventListener("nomospice:show", onShow), window.removeEventListener("nomospice:zoom", onZoom));
   });
   useLayoutEffect(() => {
     if (tool.k !== "wire") setWireStart(null);

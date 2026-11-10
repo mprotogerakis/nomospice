@@ -449,6 +449,13 @@ export const Waveform = memo(function Waveform() {
     plots.current.forEach((u) => u.setSize({ width: size.w, height: h }));
   }, [size, panes.length]);
 
+  // the menu's Export Plot as SVG (as the plot's own menu: the Bode panes, not Nyquist or Nichols)
+  useEffect(() => {
+    const exp = () => void (panes.length && !polarOn && saveSvg(plotSvg(plots.current, panes, useS.getState().plot), "-plot"));
+    window.addEventListener("nomospice:export-plot", exp);
+    return () => window.removeEventListener("nomospice:export-plot", exp);
+  }, [panes, polarOn]);
+
   // cursor lines are drawn by the draw hook from the store: redraw when they move
   useEffect(() => useS.subscribe((s, p) => (s.plot.a !== p.plot.a || s.plot.b !== p.plot.b) && plots.current.forEach((u) => u.redraw(false))), []);
 

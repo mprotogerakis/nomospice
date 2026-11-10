@@ -12,7 +12,9 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "nomospice",
+        "tabbingIdentifier": "nomospice",
         "width": 1400,
         "height": 900,
         "minWidth": 900,

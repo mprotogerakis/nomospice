@@ -432,10 +432,104 @@ async fn trace(expr: String, scale: String, run: u64) -> Result<ngspice::Trace, 
 
 static ARGS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
 
-/// `nomospice file.asc [--run]` (paths made absolute at startup)
+// ---------------------------------------------------------------- windows: one document each
+
+/// What a new window starts with (its `cli_args`): a file to open, `--restore`, `--new-symbol`.
+static PENDING: Mutex<std::collections::BTreeMap<String, Vec<String>>> = Mutex::new(std::collections::BTreeMap::new());
+/// The file each window has open (none: untitled), so a file is opened in one window only.
+static DOCS: Mutex<std::collections::BTreeMap<String, String>> = Mutex::new(std::collections::BTreeMap::new());
+static NEXT_WINDOW: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
+/// The window focused last (while a sheet or the About panel has the focus, it is still the one).
+static LAST_FOCUSED: Mutex<String> = Mutex::new(String::new());
+
+/// The first window: `nomospice file.asc [--run]` (paths made absolute at startup); another: what
+/// it was opened for (asked once).
 #[tauri::command]
-fn cli_args() -> Vec<String> {
-    ARGS.get().cloned().unwrap_or_default()
+fn cli_args(window: tauri::Window) -> Vec<String> {
+    if window.label() == "main" {
+        return ARGS.get().cloned().unwrap_or_default();
+    }
+    PENDING.lock().ok().and_then(|mut p| p.remove(window.label())).unwrap_or_default()
+}
+
+/// A new window (cascaded from the focused one), starting with `args`.
+fn open_window(app: &tauri::AppHandle, args: Vec<String>) -> Result<(), String> {
+    use tauri::Manager;
+    let label = format!("doc-{}", NEXT_WINDOW.fetch_add(1, std::sync::atomic::Ordering::SeqCst));
+    PENDING.lock().map_err(|e| e.to_string())?.insert(label.clone(), args);
+    let mut b = tauri::WebviewWindowBuilder::new(app, &label, tauri::WebviewUrl::App("index.html".into()))
+        .title("nomospice")
+        .inner_size(1400.0, 900.0)
+        .min_inner_size(900.0, 600.0);
+    #[cfg(target_os = "macos")]
+    {
+        b = b.tabbing_identifier("nomospice"); // Window → Merge All Windows: tabs
+    }
+    // cascaded from the focused window, past the windows already there
+    if let Some(w) = focused(app).and_then(|l| app.get_webview_window(&l)) {
+        if let (Ok(p), Ok(k)) = (w.outer_position(), w.scale_factor()) {
+            let at: Vec<_> = app.webview_windows().values().filter_map(|o| o.outer_position().ok().map(|q| q.to_logical::<f64>(k))).collect();
+            let (mut x, mut y) = (p.to_logical::<f64>(k).x + 28.0, p.to_logical::<f64>(k).y + 28.0);
+            while at.iter().any(|q| (q.x - x).abs() < 4.0 && (q.y - y).abs() < 4.0) {
+                (x, y) = (x + 28.0, y + 28.0);
+            }
+            b = b.position(x, y);
+        }
+    }
+    b.build().map(drop).map_err(|e| {
+        PENDING.lock().map(|mut p| p.remove(&label)).ok();
+        e.to_string()
+    })
+}
+
+/// (async: building a window from a synchronous command deadlocks on Windows)
+#[tauri::command]
+async fn new_window(app: tauri::AppHandle, args: Vec<String>) -> Result<(), String> {
+    open_window(&app, args)
+}
+
+#[tauri::command]
+fn window_count(app: tauri::AppHandle) -> usize {
+    use tauri::Manager;
+    app.webview_windows().len()
+}
+
+/// The window's document is now `path` (None: untitled, or not written yet).
+#[tauri::command]
+fn doc_path(window: tauri::Window, path: Option<String>) {
+    if let Ok(mut d) = DOCS.lock() {
+        match path {
+            Some(p) => d.insert(window.label().to_string(), p),
+            None => d.remove(window.label()),
+        };
+    }
+}
+
+/// The window that has `path` open comes to the front: true; none has it: false.
+#[tauri::command]
+fn focus_doc(app: tauri::AppHandle, path: String) -> bool {
+    use tauri::Manager;
+    let docs = DOCS.lock().map(|d| d.clone()).unwrap_or_default();
+    let Some(label) = docs.iter().find(|(_, p)| *p == &path || same_file(std::path::Path::new(p.as_str()), std::path::Path::new(&path))).map(|(l, _)| l.clone()) else { return false };
+    let Some(w) = app.get_webview_window(&label) else { return false };
+    let _ = w.unminimize();
+    let _ = w.set_focus();
+    true
+}
+
+/// The window menu commands go to: the focused one, else the one focused last, else any.
+fn focused(app: &tauri::AppHandle) -> Option<String> {
+    use tauri::Manager;
+    let ws = app.webview_windows();
+    let last = LAST_FOCUSED.lock().map(|l| l.clone()).unwrap_or_default();
+    ws.iter().find(|(_, w)| w.is_focused().unwrap_or(false)).map(|(l, _)| l.clone()).or_else(|| ws.contains_key(&last).then_some(last)).or_else(|| ws.keys().next().cloned())
+}
+
+/// A window closed: what it held goes.
+fn forget_window(label: &str) {
+    recovery_release(label);
+    DOCS.lock().map(|mut d| d.remove(label)).ok();
+    PENDING.lock().map(|mut p| p.remove(label)).ok();
 }
 
 /// The id of the run whose results ngspice holds (a result tab brought back may hold an older one).
@@ -449,16 +543,16 @@ fn halt() {
     ngspice::halt();
 }
 
-// Crash/quit recovery: the frontend mirrors unsaved work to recovery-<id>.json, because some
+// Crash/quit recovery: each window mirrors its unsaved work to recovery-<id>.json, because some
 // exits (Dock > Quit, logout, crashes) cannot be intercepted to ask about unsaved changes.
-// - Liveness: each instance holds an exclusive lock on its recovery-<id>.lock while running, so
-//   a .lock we *can* lock belongs to a dead instance and its .json is an orphan.
+// - Liveness: each window holds an exclusive lock on its recovery-<id>.lock while open, so a .lock
+//   we *can* lock belongs to a closed window or a dead instance and its .json is an orphan.
 // - Data is written to a temp file, synced and renamed: a crash mid-write keeps the last snapshot.
-// - <id> = pid + start time, so a reused pid never touches an older file.
+// - <id> = pid + start time + window, so a reused pid never touches an older file.
 // - An orphan offered for restore stays on disk (and locked by us) until the user decided.
-type Slot = Mutex<Option<(std::fs::File, std::path::PathBuf)>>;
-static OWN: Slot = Mutex::new(None);
-static CLAIM: Slot = Mutex::new(None);
+type Held = std::collections::BTreeMap<String, (std::fs::File, std::path::PathBuf)>;
+static OWN: Mutex<Held> = Mutex::new(Held::new());
+static CLAIM: Mutex<Held> = Mutex::new(Held::new());
 const STALE: std::time::Duration = std::time::Duration::from_secs(60);
 
 fn recovery_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
@@ -471,54 +565,65 @@ fn recovery_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
     Ok(dir)
 }
 
-/// Lock held for the whole save/clear, so the two never interleave.
-fn own(app: &tauri::AppHandle) -> Result<std::sync::MutexGuard<'static, Option<(std::fs::File, std::path::PathBuf)>>, String> {
-    let mut slot = OWN.lock().map_err(|e| e.to_string())?;
-    if slot.is_none() {
+/// Window `label`'s recovery file (its lock taken on first use), under the lock held for the
+/// whole save/clear, so the two never interleave.
+fn own(app: &tauri::AppHandle, label: &str) -> Result<(std::sync::MutexGuard<'static, Held>, std::path::PathBuf), String> {
+    let mut held = OWN.lock().map_err(|e| e.to_string())?;
+    if !held.contains_key(label) {
         let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis();
-        let base = recovery_dir(app)?.join(format!("recovery-{}-{t}", std::process::id()));
+        let base = recovery_dir(app)?.join(format!("recovery-{}-{t}-{label}", std::process::id()));
         let lock = std::fs::File::create(base.with_extension("lock")).map_err(|e| e.to_string())?;
         if let Err(e) = lock.try_lock() {
             let _ = std::fs::remove_file(base.with_extension("lock")); // no lock: do not leak the file
             return Err(e.to_string());
         }
-        *slot = Some((lock, base.with_extension("json")));
+        held.insert(label.to_string(), (lock, base.with_extension("json")));
     }
-    Ok(slot)
+    let json = held[label].1.clone();
+    Ok((held, json))
 }
 
 #[tauri::command]
-async fn recovery_save(app: tauri::AppHandle, doc: serde_json::Value) -> Result<(), String> {
+async fn recovery_save(app: tauri::AppHandle, window: tauri::Window, doc: serde_json::Value) -> Result<(), String> {
     // blocking file IO + fsync: keep it off the async workers other commands share
     tauri::async_runtime::spawn_blocking(move || {
-        let slot = own(&app)?;
-        write_atomic(&slot.as_ref().unwrap().1, doc.to_string().as_bytes()).map_err(|e| e.to_string())
+        let (_held, json) = own(&app, window.label())?;
+        write_atomic(&json, doc.to_string().as_bytes()).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-async fn recovery_clear() -> Result<(), String> {
-    let slot = OWN.lock().map_err(|e| e.to_string())?;
-    match slot.as_ref() {
+async fn recovery_clear(window: tauri::Window) -> Result<(), String> {
+    let held = OWN.lock().map_err(|e| e.to_string())?;
+    match held.get(window.label()) {
         Some((_, path)) if path.exists() => std::fs::remove_file(path).map_err(|e| e.to_string()),
         _ => Ok(()), // never saved anything: nothing to create or remove
     }
 }
 
-/// Newest unsaved document of a dead instance. It stays on disk, locked by us, until
-/// `recovery_resolve`; older orphans wait for the next launch.
-#[tauri::command]
-async fn recovery_take(app: tauri::AppHandle) -> Option<serde_json::Value> {
-    let dir = recovery_dir(&app).ok()?;
-    let own = OWN.lock().ok()?.as_ref().map(|(_, p)| p.with_extension("lock"));
-    let mut orphans = vec![];
-    for e in std::fs::read_dir(&dir).ok()?.flatten() {
-        let p = e.path();
+/// A closed window lets go of its recovery file: unlocked, so unsaved work it left (closed
+/// without asking: never, but a crash of its page) is an orphan to restore; nothing left: gone.
+fn recovery_release(label: &str) {
+    if let Some((f, json)) = OWN.lock().ok().and_then(|mut h| h.remove(label)) {
+        if !json.exists() {
+            let _ = std::fs::remove_file(json.with_extension("lock"));
+        }
+        drop(f);
+    }
+    drop(CLAIM.lock().ok().and_then(|mut c| c.remove(label))); // (undecided: stays for the next launch)
+}
+
+/// Unsaved documents in `dir` of closed windows and dead instances, newest first, each locked by
+/// us while held (dropped: free again). `limit`: at most this many.
+fn orphans(dir: &std::path::Path, limit: usize) -> Vec<(std::fs::File, std::path::PathBuf, serde_json::Value)> {
+    let Ok(entries) = std::fs::read_dir(dir) else { return vec![] };
+    let mut found = vec![];
+    for p in entries.flatten().map(|e| e.path()) {
         let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let ext = p.extension().map(|x| x.to_string_lossy().into_owned()).unwrap_or_default();
-        if !name.starts_with("recovery-") || Some(&p) == own.as_ref() {
+        if !name.starts_with("recovery-") {
             continue;
         }
         if name.contains(".nomospice-") && is_stale(&p) {
@@ -529,25 +634,26 @@ async fn recovery_take(app: tauri::AppHandle) -> Option<serde_json::Value> {
         }
         let Ok(f) = std::fs::File::open(&p) else { continue };
         if f.try_lock().is_err() {
-            continue; // a live instance owns it
+            continue; // an open window owns it (ours too: a second handle cannot lock it either)
         }
         let json = p.with_extension("json");
         match std::fs::metadata(&json).and_then(|m| m.modified()) {
-            Ok(t) => orphans.push((t, f, p)),
+            Ok(t) => found.push((t, f, p)),
             // clean exit; "old" so a lock file another instance just created is never removed
             Err(_) if is_stale(&p) => drop((f, std::fs::remove_file(&p))),
             Err(_) => {}
         }
     }
-    orphans.sort_by_key(|o| std::cmp::Reverse(o.0));
-    for (_, f, lock) in orphans {
+    found.sort_by_key(|o| std::cmp::Reverse(o.0));
+    let mut out = vec![];
+    for (_, f, lock) in found {
+        if out.len() == limit {
+            break;
+        }
         let json = lock.with_extension("json");
         let Ok(bytes) = std::fs::read(&json) else { continue }; // transient read error: keep it
         match serde_json::from_slice(&bytes) {
-            Ok(doc) => {
-                *CLAIM.lock().ok()? = Some((f, lock));
-                return Some(doc);
-            }
+            Ok(doc) => out.push((f, lock, doc)),
             Err(_) => {
                 // corrupt: drop it (still locked by us) so older valid sessions get their turn
                 let _ = std::fs::remove_file(json);
@@ -555,19 +661,34 @@ async fn recovery_take(app: tauri::AppHandle) -> Option<serde_json::Value> {
             }
         }
     }
-    None
+    out
 }
 
-/// The user answered the restore prompt. `keep`: the orphan becomes this instance's recovery
-/// file (atomic rename, no round trip through the UI); otherwise it is deleted. Both happen while
-/// still holding the orphan's lock, so no other instance can claim it in between.
+/// The newest unsaved document left by a closed window or a dead instance, for this window. It
+/// stays on disk, locked by us, until `recovery_resolve`.
 #[tauri::command]
-async fn recovery_resolve(app: tauri::AppHandle, keep: bool) -> Result<(), String> {
-    let Some((f, lock)) = CLAIM.lock().map_err(|e| e.to_string())?.take() else { return Ok(()) };
+async fn recovery_take(app: tauri::AppHandle, window: tauri::Window) -> Option<serde_json::Value> {
+    let (f, lock, doc) = orphans(&recovery_dir(&app).ok()?, 1).pop()?;
+    CLAIM.lock().ok()?.insert(window.label().to_string(), (f, lock));
+    Some(doc)
+}
+
+/// How many more unsaved documents wait to be restored (each in a window of its own).
+#[tauri::command]
+async fn recovery_count(app: tauri::AppHandle) -> usize {
+    recovery_dir(&app).map_or(0, |d| orphans(&d, usize::MAX).len())
+}
+
+/// The user answered the restore prompt. `keep`: the orphan becomes this window's recovery
+/// file (atomic rename, no round trip through the UI); otherwise it is deleted. Both happen while
+/// still holding the orphan's lock, so no other window or instance can claim it in between.
+#[tauri::command]
+async fn recovery_resolve(app: tauri::AppHandle, window: tauri::Window, keep: bool) -> Result<(), String> {
+    let Some((f, lock)) = CLAIM.lock().map_err(|e| e.to_string())?.remove(window.label()) else { return Ok(()) };
     let json = lock.with_extension("json");
     if keep {
-        let slot = own(&app)?;
-        std::fs::rename(&json, &slot.as_ref().unwrap().1).map_err(|e| e.to_string())?;
+        let (_held, dest) = own(&app, window.label())?;
+        std::fs::rename(&json, dest).map_err(|e| e.to_string())?;
     } else {
         let _ = std::fs::remove_file(&json);
     }
@@ -595,6 +716,8 @@ async fn library_set_sources(app: tauri::AppHandle, sources: Vec<library::Source
     let json = serde_json::to_vec_pretty(&sources).map_err(|e| e.to_string())?;
     write_atomic(&library_config(&app)?, &json).map_err(|e| e.to_string())?;
     library::set_sources(sources);
+    use tauri::Emitter;
+    let _ = app.emit("libraries-changed", ()); // (every window's parts from them)
     Ok(())
 }
 
@@ -709,43 +832,173 @@ async fn git_init(path: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || git::init(std::path::Path::new(&path))).await.map_err(|e| e.to_string())?
 }
 
-/// The frontend confirmed (or had nothing unsaved): really quit.
-#[tauri::command]
-fn quit(app: tauri::AppHandle) {
-    app.exit(0);
+/// The menu bar: the commands of the toolbar, hotkeys and context menus, each sent to the focused
+/// window as a "menu" event (its id; New and Quit are handled here). A key shown in a menu is the
+/// page's first (its hotkeys); one the page leaves (a dialog open, typing) reaches the menu, which
+/// then decides as the page would. macOS: Quit asks every window about unsaved changes first (the
+/// system's Quit cannot be vetoed); Undo, Redo and Select All are the page's (the schematic's, or
+/// a text field's), Cut, Copy and Paste the system's (a text field's; the schematic's by key).
+/// Windows: the system's edit items press their keys (Ctrl+C …) into the page.
+fn build_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
+    use tauri::menu::{Menu, MenuItem, PredefinedMenuItem as P, Submenu, HELP_SUBMENU_ID};
+    let it = |id: &str, text: &str, key: Option<&str>| MenuItem::with_id(app, id, text, true, key);
+    // a single key (R: resistor) as the menu shows it; not on Linux, where GTK takes it before the page
+    let key = |k: &'static str| if cfg!(target_os = "linux") { None } else { Some(k) };
+    let sep = || P::separator(app);
+    #[cfg(target_os = "macos")]
+    let app_menu = Submenu::with_items(app, "nomospice", true, &[
+        &it("about", "About nomospice", None)?,
+        &it("check-updates", "Check for Updates…", None)?,
+        &sep()?,
+        &it("libraries", "Model Libraries…", Some("CmdOrCtrl+,"))?,
+        &sep()?,
+        &P::services(app, None)?,
+        &sep()?,
+        &P::hide(app, None)?,
+        &P::hide_others(app, None)?,
+        &P::show_all(app, None)?,
+        &sep()?,
+        &it("quit", "Quit nomospice", Some("CmdOrCtrl+Q"))?,
+    ])?;
+    let file = Submenu::with_items(app, "File", true, &[
+        &it("new", "New Window", Some("CmdOrCtrl+N"))?,
+        &it("new-symbol", "New Symbol", None)?,
+        &it("open", "Open…", Some("CmdOrCtrl+O"))?,
+        &sep()?,
+        &it("close", "Close", Some("CmdOrCtrl+W"))?,
+        &it("save", "Save", Some("CmdOrCtrl+S"))?,
+        &it("save-as", "Save As…", Some("CmdOrCtrl+Shift+S"))?,
+        &sep()?,
+        &it("block-symbol", "Create Block Symbol…", None)?,
+        &sep()?,
+        &it("export-svg", "Export Schematic as SVG…", None)?,
+        &it("export-plot", "Export Plot as SVG…", None)?,
+        &it("export-raw", "Export Results as .raw…", None)?,
+        #[cfg(not(target_os = "macos"))]
+        &sep()?,
+        #[cfg(not(target_os = "macos"))]
+        &it("libraries", "Model Libraries…", Some("CmdOrCtrl+,"))?,
+        #[cfg(not(target_os = "macos"))]
+        &sep()?,
+        #[cfg(not(target_os = "macos"))]
+        &it("quit", "Exit", None)?,
+    ])?;
+    let edit = Submenu::with_items(app, "Edit", true, &[
+        #[cfg(target_os = "macos")]
+        &it("undo", "Undo", Some("CmdOrCtrl+Z"))?,
+        #[cfg(target_os = "macos")]
+        &it("redo", "Redo", Some("CmdOrCtrl+Shift+Z"))?,
+        #[cfg(not(target_os = "macos"))]
+        &P::undo(app, None)?,
+        #[cfg(not(target_os = "macos"))]
+        &P::redo(app, None)?,
+        &sep()?,
+        &P::cut(app, None)?,
+        &P::copy(app, None)?,
+        &P::paste(app, None)?,
+        &it("duplicate", "Duplicate", Some("CmdOrCtrl+D"))?,
+        &it("delete", "Delete", key(if cfg!(target_os = "macos") { "Backspace" } else { "Delete" }))?,
+        #[cfg(target_os = "macos")]
+        &it("select-all", "Select All", Some("CmdOrCtrl+A"))?,
+        #[cfg(not(target_os = "macos"))]
+        &P::select_all(app, None)?,
+        &sep()?,
+        &it("rotate", "Rotate", Some("Ctrl+R"))?,
+        &it("mirror", "Mirror", Some("Ctrl+E"))?,
+        &sep()?,
+        &it("find", "Find…", Some("CmdOrCtrl+F"))?,
+    ])?;
+    let place = Submenu::with_items(app, "Place", true, &[
+        &it("wire", "Wire", key("W"))?,
+        &it("ground", "Ground", key("G"))?,
+        &it("label", "Net Label…", key("N"))?,
+        &sep()?,
+        &it("res", "Resistor", key("R"))?,
+        &it("cap", "Capacitor", key("C"))?,
+        &it("ind", "Inductor", key("L"))?,
+        &it("diode", "Diode", key("D"))?,
+        &it("voltage", "Voltage Source", key("V"))?,
+        &it("current", "Current Source", key("I"))?,
+        &it("component", "Component…", Some("CmdOrCtrl+K"))?,
+        &sep()?,
+        &it("comment", "Comment…", key("T"))?,
+        &it("directive", "SPICE Directive…", key("S"))?,
+        &sep()?,
+        &it("select", "Select", None)?,
+        &it("move", "Move", key("M"))?,
+        &it("delete-tool", "Delete Mode", None)?,
+    ])?;
+    let simulate = Submenu::with_items(app, "Simulate", true, &[
+        &it("run", "Run", Some("CmdOrCtrl+Enter"))?,
+        &it("halt", "Halt", None)?,
+        &sep()?,
+        &it("sim-command", "Edit Simulation Command…", None)?,
+        &it("live", "Live Mode: Re-run on Every Edit", None)?,
+        &sep()?,
+        &it("add-trace", "Add Trace…", None)?,
+    ])?;
+    let view = Submenu::with_items(app, "View", true, &[
+        &it("fit", "Fit to Window", None)?,
+        &it("zoom-in", "Zoom In", Some("CmdOrCtrl+="))?,
+        &it("zoom-out", "Zoom Out", Some("CmdOrCtrl+-"))?,
+        &sep()?,
+        &it("panel", "Log & Netlist", Some("CmdOrCtrl+L"))?,
+        &it("history", "Version History", None)?,
+        &sep()?,
+        &it("theme", "Light or Dark Theme", None)?,
+        &it("up", "Back to the Schematic Above", None)?,
+        #[cfg(target_os = "macos")]
+        &sep()?,
+        #[cfg(target_os = "macos")]
+        &P::fullscreen(app, None)?,
+    ])?;
+    #[cfg(target_os = "macos")]
+    let window = Submenu::with_id_and_items(app, tauri::menu::WINDOW_SUBMENU_ID, "Window", true, &[&P::minimize(app, None)?, &P::maximize(app, None)?])?;
+    let help = Submenu::with_id_and_items(app, HELP_SUBMENU_ID, "Help", true, &[
+        &it("help", "Quick Reference", None)?,
+        #[cfg(not(target_os = "macos"))]
+        &sep()?,
+        #[cfg(not(target_os = "macos"))]
+        &it("check-updates", "Check for Updates…", None)?,
+        #[cfg(not(target_os = "macos"))]
+        &it("about", "About nomospice", None)?,
+    ])?;
+    let menu = Menu::with_items(app, &[
+        #[cfg(target_os = "macos")]
+        &app_menu,
+        &file,
+        &edit,
+        &place,
+        &simulate,
+        &view,
+        #[cfg(target_os = "macos")]
+        &window,
+        &help,
+    ])?;
+    #[cfg(target_os = "macos")]
+    {
+        window.set_as_windows_menu_for_nsapp()?; // (the open windows listed, Merge All Windows)
+        help.set_as_help_menu_for_nsapp()?;
+    }
+    Ok(menu)
 }
 
-/// macOS: ⌘Q goes straight to applicationWillTerminate (no way to veto), so the app menu's
-/// Quit item is replaced by one that asks the frontend about unsaved changes first. ⌘W closes
-/// the document, not the only window (which would quit the app).
-#[cfg(target_os = "macos")]
-fn install_menu(app: &tauri::App) -> tauri::Result<()> {
-    use tauri::menu::{Menu, MenuItem, MenuItemKind};
-    let menu = Menu::default(app.handle())?;
-    if let Some(MenuItemKind::Submenu(app_menu)) = menu.items()?.into_iter().next() {
-        if let Some(last) = app_menu.items()?.pop() {
-            app_menu.remove(&last)?;
+/// A menu item chosen: New and Quit here, the rest for the focused window.
+fn on_menu(app: &tauri::AppHandle, id: &str) {
+    use tauri::Emitter;
+    match id {
+        // every window asks about its unsaved changes and closes; the last one ends the app
+        "quit" => drop(app.emit("quit-requested", ())),
+        "new" => {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move { open_window(&app, vec![]) });
         }
-        app_menu.append(&MenuItem::with_id(app, "quit", "Quit nomospice", true, Some("CmdOrCtrl+Q"))?)?;
-        // where macOS users look for settings: after About
-        let libraries = MenuItem::with_id(app, "libraries", "Model Libraries…", true, Some("CmdOrCtrl+,"))?;
-        app_menu.insert_items(&[&libraries, &tauri::menu::PredefinedMenuItem::separator(app)?], 2)?;
-    }
-    for sub in menu.items()? {
-        let MenuItemKind::Submenu(sub) = sub else { continue };
-        for it in sub.items()? {
-            if let MenuItemKind::Predefined(p) = &it {
-                if p.text()? == "Close Window" {
-                    sub.remove(p)?;
-                }
+        id => {
+            if let Some(label) = focused(app) {
+                let _ = app.emit_to(tauri::EventTarget::webview_window(label), "menu", id);
             }
         }
-        if sub.text()? == "File" {
-            sub.append(&MenuItem::with_id(app, "close", "Close", true, Some("CmdOrCtrl+W"))?)?;
-        }
     }
-    app.set_menu(menu)?;
-    Ok(())
 }
 
 /// Tauri's app_config_dir without a running app (for `--mcp`).
@@ -796,7 +1049,8 @@ fn main() {
         // updates from the GitHub releases (latest.json, signed with the key in ~/.tauri; see scripts/publish-release.sh)
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .invoke_handler(tauri::generate_handler![symbols, examples, path_exists, open_asc, save_asc, block_symbol, export_svg, export_raw, netlist, simulate, root_locus, cancel_locus, folder_symbols, trace, run_id, halt, cli_args, quit, recovery_save, recovery_take, recovery_resolve, recovery_clear,
+        .invoke_handler(tauri::generate_handler![symbols, examples, path_exists, open_asc, save_asc, block_symbol, export_svg, export_raw, netlist, simulate, root_locus, cancel_locus, folder_symbols, trace, run_id, halt, cli_args, recovery_save, recovery_take, recovery_count, recovery_resolve, recovery_clear,
+            new_window, window_count, doc_path, focus_doc,
             library_sources, library_set_sources, library_search, library_text, library_fetch_microcap,
             git_status, git_log, git_show, git_commit, git_init])
         .setup(|app| {
@@ -809,21 +1063,14 @@ fn main() {
                 library::set_sources(list);
             }
             std::thread::spawn(|| drop(library::index()));
-            #[cfg(target_os = "macos")]
-            install_menu(app)?;
+            app.set_menu(build_menu(app.handle())?)?;
             Ok(())
         })
-        .on_menu_event(|app, event| {
-            use tauri::Emitter;
-            if event.id() == "quit" {
-                let _ = app.emit("quit-requested", ());
-            }
-            if event.id() == "libraries" {
-                let _ = app.emit("open-libraries", ());
-            }
-            if event.id() == "close" {
-                let _ = app.emit("close-requested", ());
-            }
+        .on_menu_event(|app, event| on_menu(app, event.id().as_ref()))
+        .on_window_event(|window, event| match event {
+            tauri::WindowEvent::Focused(true) => drop(LAST_FOCUSED.lock().map(|mut l| *l = window.label().to_string())),
+            tauri::WindowEvent::Destroyed => forget_window(window.label()),
+            _ => {}
         })
         .run(tauri::generate_context!())
         .expect("error while running nomospice");
@@ -831,6 +1078,35 @@ fn main() {
 
 #[cfg(all(test, unix))]
 mod tests {
+    #[test]
+    fn orphans_newest_first_skipping_open_windows() {
+        let dir = std::env::temp_dir().join(format!("nomospice-orphans-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let t0 = std::time::SystemTime::now() - std::time::Duration::from_secs(600);
+        let doc = |name: &str, json: &str, age: u64| {
+            std::fs::File::create(dir.join(format!("{name}.lock"))).unwrap();
+            let f = std::fs::File::create(dir.join(format!("{name}.json"))).unwrap();
+            std::io::Write::write_all(&mut &f, json.as_bytes()).unwrap();
+            f.set_modified(t0 + std::time::Duration::from_secs(age)).unwrap();
+        };
+        doc("recovery-1-1-main", r#"{"path":"old"}"#, 1);
+        doc("recovery-1-2-doc-1", r#"{"path":"new"}"#, 2);
+        doc("recovery-1-3-doc-2", r#"{"path":"open"}"#, 3); // a window still open: locked
+        let open = std::fs::File::open(dir.join("recovery-1-3-doc-2.lock")).unwrap();
+        open.try_lock().unwrap();
+        doc("recovery-1-4-doc-3", "{", 4); // corrupt: removed
+        let found = super::orphans(&dir, usize::MAX);
+        let paths: Vec<_> = found.iter().map(|(_, _, d)| d["path"].as_str().unwrap()).collect();
+        assert_eq!(paths, ["new", "old"]);
+        assert!(!dir.join("recovery-1-4-doc-3.json").exists());
+        // held while found: another look skips them; let go: there again (one at a time)
+        assert!(super::orphans(&dir, usize::MAX).is_empty());
+        drop(found);
+        assert_eq!(super::orphans(&dir, 1).len(), 1);
+        drop(open);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
     #[test]
     fn atomic_save_keeps_file_identity() {
         use std::os::unix::fs::PermissionsExt;

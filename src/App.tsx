@@ -3,6 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { listen } from "@tauri-apps/api/event";
 import { ask, message, open, save } from "@tauri-apps/plugin-dialog";
 import {
@@ -10,17 +11,18 @@ import {
   CircleHelp, Info, Plus, Scissors, X, ScrollText, SlidersHorizontal, Spline, Square, Sun, Tag, Type, Undo2, Zap,
 } from "lucide-react";
 import type { Item } from "./types";
-import { Schematic } from "./Schematic";
+import { Schematic, schematicSvg } from "./Schematic";
 import { Measurements, Waveform } from "./Waveform";
 import { PoleZero } from "./PoleZero";
 import { checkForUpdate, installUpdate, useUpdate } from "./updater";
 import { Dialogs } from "./Dialogs";
 import { Boundary } from "./Boundary";
-import { analysesOf, closeTab, currentTab, dirOf, fileName, docId, isSymbolDoc, viewOf, loadDoc, loadSymbols, placeSymbol, plotKind, probeMode, redo, refreshGit, refreshNets, relToDoc, selectTab, simulate, undo, useS, useStatus } from "./store";
+import { analysesOf, closeTab, currentTab, dirOf, fileName, docId, isSymbolDoc, viewOf, loadDoc, loadSymbols, placeSymbol, plotKind, probeMode, redo, refreshGit, refreshLibrarySymbols, refreshNets, relToDoc, selectTab, simulate, undo, useS, useStatus } from "./store";
+import { saveRaw, saveSvg } from "./svgExport";
 import { History } from "./History";
-import { mirror, rotate } from "./geom";
+import { isShape, mirror, rotate } from "./geom";
 import { ANALYSES, si, tokens } from "./spice";
-import { copySelection, deleteSelection, duplicate, newItem, pasteClipboard, placeFlag, transform } from "./actions";
+import { copySelection, deleteSelection, duplicate, installClipboardEvents, newItem, pasteClipboard, placeFlag, textField, transform } from "./actions";
 import { ContextMenu, openMenu } from "./Menu";
 import { Toolbar, ToolbarButton, ToolbarSeparator, ToolbarSpacer } from "./ui/toolbar";
 import { StatusBar, StatusSegment } from "./ui/status-bar";
@@ -95,14 +97,16 @@ export function installGuards() {
   getCurrentWindow().onCloseRequested(async (e) => {
     if (!(await leave())) e.preventDefault();
   });
-  listen("quit-requested", async () => (await leave()) && invoke("quit"));
-  // menu shortcuts bypass the keydown guards: with a dialog open, ⌘W closes the dialog (as Esc),
-  // ⌘, waits (it would replace the dialog and lose its edits)
-  listen("open-libraries", () => !useS.getState().dialog && openLibraries());
-  // (⌘W: the document goes, the app stays, as an empty untitled schematic)
-  listen("close-requested", () => (useS.getState().dialog ? useS.setState({ dialog: null }) : newFile()));
-  // mirror unsaved work for exits we cannot intercept (Dock > Quit, logout, crashes)
+  // Quit: every window asks about its own unsaved changes and closes; the last one ends the app
+  listen("quit-requested", async () => void ((await leave()) && (await getCurrentWindow().destroy())));
+  // the menu bar's commands, for this window when it is the focused one
+  void getCurrentWebviewWindow().listen<string>("menu", (e) => command(e.payload));
+  listen("libraries-changed", () => void refreshLibrarySymbols().catch(() => {}));
+  installClipboardEvents();
   useS.subscribe((s, prev) => {
+    // the file open here (opened again from another window: this one comes forward instead)
+    if (s.path !== prev.path || s.unwritten !== prev.unwritten) void invoke("doc_path", { path: s.path && s.path !== s.unwritten ? s.path : null }).catch(() => {});
+    // mirror unsaved work for exits we cannot intercept (Dock > Quit, logout, crashes)
     if (s.items === prev.items && s.dirty === prev.dirty && s.path === prev.path) return;
     clearTimeout(mirrorTimer);
     mirrorTimer = setTimeout(() => (s.dirty ? recover("recovery_save", { doc: { path: s.path, items: s.items, unwritten: useS.getState().unwritten } }) : recover("recovery_clear")), 800);
@@ -111,14 +115,22 @@ export function installGuards() {
 
 const fail = (what: string) => (e: unknown) => message(`${what}: ${e}`, { title: "nomospice", kind: "error" });
 
-/** Open a schematic: `path`, or one picked in the file dialog. */
+/** A window of its own, opened for `args` (a file, `--restore`, `--new-symbol <folder>`); none: an
+ *  empty schematic. */
+const newWindow = (args: string[] = []) => invoke("new_window", { args }).catch(fail("Cannot open a window"));
+/** This window holds nothing yet (untitled, untouched): what is opened goes here, not into a new one. */
+const untouched = () => ((s) => !s.items.length && !s.dirty && !s.path)(useS.getState());
+
+/** Open a schematic: `path`, or one picked in the file dialog. Open already: its window comes
+ *  forward; else here if this window holds nothing yet, otherwise in a window of its own. */
 async function openFile(path?: string) {
-  if (!(await discardOk())) return;
   if (path === undefined) {
     const picked = await open({ filters: OPEN_FILTERS, multiple: false });
     if (typeof picked !== "string") return;
     path = picked;
   }
+  if (await invoke<boolean>("focus_doc", { path }).catch(() => false)) return;
+  if (!untouched()) return void newWindow([path]);
   try {
     await openPath(path);
   } catch (e) {
@@ -219,21 +231,28 @@ async function saveFile(as = false): Promise<boolean> {
 async function newFile() {
   if (await discardOk()) await loadDoc([], null);
 }
+/** ⌘W: this window closes (asking about unsaved changes); the last one stays, as an empty schematic. */
+async function closeDoc() {
+  if ((await invoke<number>("window_count").catch(() => 1)) > 1) await getCurrentWindow().close();
+  else await newFile();
+}
 async function openExample(items: Item[]) {
   if (await discardOk()) await loadDoc(items, null);
 }
-/** A new symbol to draw: its first save asks where (beside the schematics that place it). */
-async function newSymbol() {
-  if (!(await discardOk())) return;
+/** A new symbol to draw: its first save asks where (beside the schematics that place it, `dir`:
+ *  of this window's). This window holds something: in a window of its own. */
+async function newSymbol(dir = dirOf(useS.getState().path)) {
+  if (!untouched()) return void newWindow(["--new-symbol", dir ?? ""]);
   // (a name no file there has: the new symbol is no other one's)
   // (in the folder's own separator; a root's ends in one)
-  const dir = dirOf(useS.getState().path), sep = dir?.includes("\\") ? "\\" : "/";
+  const sep = dir?.includes("\\") ? "\\" : "/";
   const path = dir ? await freeName(`${dir.endsWith(sep) ? dir : dir + sep}untitled`, "asy") : "untitled.asy";
   await loadDoc([{ t: "raw", line: "SymbolType CELL" }, { t: "raw", line: "SYMATTR Prefix X" }], path, true);
 }
 
 /** A block's schematic in place of this one (`up`: the one above); the way back is kept. */
 async function openSheet(path: string, up = false) {
+  if (await invoke<boolean>("focus_doc", { path }).catch(() => false)) return; // (open in another window: there)
   if (!(await discardOk())) return;
   // (after the save it may have asked for: where it went; a never written document has no way back)
   const { path: from, parents, unwritten } = useS.getState();
@@ -265,6 +284,47 @@ async function blockSymbol() {
   await message(`The block symbol ${name} is written. Place it (Component, ${name}) in a schematic in this folder: it stands for this one, its port labels are the pins.`, { title: "nomospice" });
 }
 
+/** What the menu bar's items do, by id (see build_menu), as the toolbar, hotkeys and context menus. */
+const C: Record<string, () => unknown> = {
+  open: () => openFile(), close: closeDoc, save: () => saveFile(), "save-as": () => saveFile(true),
+  "new-symbol": () => newSymbol(), "block-symbol": blockSymbol,
+  "export-svg": () => ((s) => s.items.some(isShape) && saveSvg(schematicSvg(s.items, s.lib), ""))(useS.getState()),
+  "export-plot": () => window.dispatchEvent(new Event("nomospice:export-plot")),
+  "export-raw": () => useS.getState().sim?.run && saveRaw(),
+  libraries: () => openLibraries(), "check-updates": () => checkForUpdate(true),
+  about: () => useS.setState({ dialog: { k: "about" } }), help: () => useS.setState({ dialog: { k: "help" } }),
+  undo: () => undo(), redo: () => redo(), "select-all": () => useS.setState({ sel: useS.getState().items.flatMap((it, i) => (it.t === "raw" ? [] : [i])) }),
+  duplicate: () => duplicate(), delete: () => deleteSelection(), rotate: () => transform(rotate), mirror: () => transform(mirror),
+  find: () => useS.setState({ dialog: { k: "find" } }),
+  wire: () => useS.setState({ tool: { k: "wire" }, sel: [] }), ground: () => placeFlag("0"), label: () => newItem({ t: "flag", x: 0, y: 0, name: "" }),
+  res: () => placeSymbol("res"), cap: () => placeSymbol("cap"), ind: () => placeSymbol("ind"), diode: () => placeSymbol("diode"),
+  voltage: () => placeSymbol("voltage"), current: () => placeSymbol("current"), component: () => useS.setState({ dialog: { k: "parts" } }),
+  comment: () => newItem({ t: "text", x: 0, y: 0, text: "", directive: false }), directive: () => newItem({ t: "text", x: 0, y: 0, text: "", directive: true }),
+  select: () => useS.setState({ tool: { k: "select" } }), move: () => moveTool(), "delete-tool": () => useS.setState({ tool: { k: "delete" } }),
+  run: () => simulate(), halt: () => useS.getState().running && invoke("halt"), "sim-command": () => useS.setState({ dialog: { k: "sim" } }),
+  live: () => useS.setState({ live: !useS.getState().live }), "add-trace": () => useS.getState().sim?.run && useS.setState({ dialog: { k: "trace" } }),
+  fit: () => window.dispatchEvent(new Event("nomospice:fit")),
+  "zoom-in": () => window.dispatchEvent(new CustomEvent("nomospice:zoom", { detail: 1 })), "zoom-out": () => window.dispatchEvent(new CustomEvent("nomospice:zoom", { detail: -1 })),
+  panel: () => togglePanel(), history: () => useS.setState({ panel: "history" }),
+  theme: () => window.dispatchEvent(new Event("nomospice:theme")), up: () => window.dispatchEvent(new Event("nomospice:up")),
+};
+/** Commands a symbol has no use for (no parts, directives or analyses; drawn upright). */
+const NOT_IN_SYMBOLS = new Set(["component", "directive", "ground", "res", "cap", "ind", "diode", "voltage", "current", "rotate", "mirror", "run", "sim-command", "live", "add-trace", "export-plot", "export-raw", "block-symbol"]);
+
+/** A menu bar command for this window. Undo, Redo and Select All in a text field are its own. */
+function command(id: string) {
+  const field = textField();
+  if (field && (id === "undo" || id === "redo")) return void document.execCommand(id);
+  if (field && id === "select-all") return field.select();
+  const s = useS.getState();
+  // a dialog open: ⌘W closes it (as Esc); the rest waits (it would replace the dialog and lose its
+  // edits), but for help and about, which go
+  if (s.dialog && s.dialog.k !== "help" && s.dialog.k !== "about") return void (id === "close" && useS.setState({ dialog: null }));
+  if (s.dialog || s.menu) useS.setState({ dialog: null, menu: null });
+  if (s.dialog && id === "close") return;
+  if (isSymbolDoc(s.path) && NOT_IN_SYMBOLS.has(id)) return;
+  void C[id]?.();
+}
 
 let booted = false;
 
@@ -278,6 +338,7 @@ export function App() {
   const [drop, setDrop] = useState<string | null>(null); // what releasing the dragged files would do
 
   useEffect(() => {
+    if (getCurrentWindow().label !== "main") return; // (once, not per window)
     const t = setTimeout(() => void checkForUpdate(), 4000); // a newer release on GitHub? (quietly, after startup)
     return () => clearTimeout(t);
   }, []);
@@ -303,20 +364,27 @@ export function App() {
     (async () => {
       await loadSymbols();
       setExamples(await invoke<[string, Item[]][]>("examples"));
+      // (the first window: the command line's; another: what it was opened for)
       const args = await invoke<string[]>("cli_args");
       const file = args.find((a) => /\.asc$/i.test(a) || isSymbolDoc(a) || NETLIST.test(a));
-      const rec = await invoke<{ path: string | null; items: Item[]; unwritten?: string | null } | null>("recovery_take");
-      // an empty document is a valid snapshot too (the user deleted everything)
-      const restore = Array.isArray(rec?.items) && (await ask(`Restore unsaved changes${rec.path ? ` to ${rec.path}` : ""} from the last session?`, { title: "nomospice", kind: "info" }));
-      await invoke("recovery_resolve", { keep: restore }).catch(() => {}); // restore: becomes our recovery file
-      if (restore) {
-        // (a document never written, an opened netlist's .asc: its first save asks, as it would have;
-        // as the snapshot says, else by whether its file is there)
-        const unwritten = !!rec!.path && (rec!.unwritten === rec!.path || !(await invoke<boolean>("path_exists", { path: rec!.path })));
-        await loadDoc(rec!.items, rec!.path, unwritten);
-        useS.setState({ dirty: true });
-        if (file) await message(`${file} was not opened because the previous session was restored.`, { title: "nomospice" });
-        return;
+      const main = getCurrentWindow().label === "main";
+      if (args.includes("--new-symbol")) return void newSymbol(args[args.indexOf("--new-symbol") + 1] || null);
+      if (main || args.includes("--restore")) {
+        const rec = await invoke<{ path: string | null; items: Item[]; unwritten?: string | null } | null>("recovery_take");
+        // an empty document is a valid snapshot too (the user deleted everything)
+        const restore = Array.isArray(rec?.items) && (await ask(`Restore unsaved changes${rec.path ? ` to ${rec.path}` : ""} from the last session?`, { title: "nomospice", kind: "info" }));
+        await invoke("recovery_resolve", { keep: restore }).catch(() => {}); // restore: becomes this window's recovery file
+        if (restore) {
+          // (a document never written, an opened netlist's .asc: its first save asks, as it would have;
+          // as the snapshot says, else by whether its file is there)
+          const unwritten = !!rec!.path && (rec!.unwritten === rec!.path || !(await invoke<boolean>("path_exists", { path: rec!.path })));
+          await loadDoc(rec!.items, rec!.path, unwritten);
+          useS.setState({ dirty: true });
+          if (file) void newWindow([file]); // (the file asked for: in a window of its own)
+        } else if (!main) return void getCurrentWindow().destroy(); // (opened only for it)
+        // more unsaved work (several windows were open): each in a window of its own, asked there
+        if (main) for (let k = await invoke<number>("recovery_count").catch(() => 0); k > 0; k--) void newWindow(["--restore"]);
+        if (restore) return;
       }
       try {
         if (file) await openPath(file);
@@ -338,6 +406,15 @@ export function App() {
     window.addEventListener("nomospice:up", up);
     window.addEventListener("nomospice:block-symbol", sym);
     return () => (window.removeEventListener("nomospice:new-symbol", newSym), window.removeEventListener("nomospice:sheet", sheet), window.removeEventListener("nomospice:up", up), window.removeEventListener("nomospice:block-symbol", sym));
+  }, []);
+
+  useEffect(() => {
+    // (the menu's; another window's switch reaches this one as a storage event)
+    const toggle = () => setMode((m) => updateThemePreference(m === "dark" ? "light" : "dark").mode);
+    const synced = (e: StorageEvent) => void (e.key === "theme" && setMode(initializeTheme().mode));
+    window.addEventListener("nomospice:theme", toggle);
+    window.addEventListener("storage", synced);
+    return () => (window.removeEventListener("nomospice:theme", toggle), window.removeEventListener("storage", synced));
   }, []);
 
   useEffect(() => {
@@ -388,32 +465,25 @@ export function App() {
         if (k === "v") return e.preventDefault(), pasteClipboard(); // (a selection does not matter: typing does, see above)
         if (k === "s") return run(() => saveFile(e.shiftKey));
         if (k === "o") return run(openFile);
-        if (k === "n") return run(newFile);
+        if (k === "n") return run(newWindow);
         if (k === "k") return run(() => !isSymbolDoc(useS.getState().path) && useS.setState({ dialog: { k: "parts" } }));
         if (k === "f" && !e.shiftKey && !e.altKey) return run(() => useS.setState({ dialog: { k: "find" } }));
         if (k === ",") return run(openLibraries); // macOS: the app menu's item has it
-        if (k === "w" && !MAC) return run(newFile); // Ctrl+W closes the document (macOS: File → Close takes ⌘W)
+        if (k === "w" && !MAC) return run(closeDoc); // Ctrl+W closes the window (macOS: File → Close takes ⌘W)
         if (k === "l") return run(togglePanel);
         if (k === "enter") return run(simulate);
         return;
       }
       const map: Record<string, () => unknown> = {
         escape: () => (window.dispatchEvent(new Event("nomospice:cancel")), useS.setState({ sel: [] })),
-        r: () => placeSymbol("res"), c: () => placeSymbol("cap"), l: () => placeSymbol("ind"), d: () => placeSymbol("diode"),
-        v: () => placeSymbol("voltage"), i: () => placeSymbol("current"), g: () => placeFlag("0"),
-        w: () => useS.setState({ tool: { k: "wire" }, sel: [] }), f3: () => useS.setState({ tool: { k: "wire" }, sel: [] }),
-        n: () => newItem({ t: "flag", x: 0, y: 0, name: "" }), f4: () => newItem({ t: "flag", x: 0, y: 0, name: "" }),
-        s: () => newItem({ t: "text", x: 0, y: 0, text: "", directive: true }),
-        t: () => newItem({ t: "text", x: 0, y: 0, text: "", directive: false }),
-        p: () => useS.setState({ dialog: { k: "parts" } }), f2: () => useS.setState({ dialog: { k: "parts" } }),
+        r: C.res, c: C.cap, l: C.ind, d: C.diode, v: C.voltage, i: C.current, g: C.ground,
+        w: C.wire, f3: C.wire, n: C.label, f4: C.label, s: C.directive, t: C.comment, p: C.component, f2: C.component,
         delete: deleteSelection, backspace: deleteSelection,
         f5: () => (useS.getState().sel.length ? deleteSelection() : useS.setState({ tool: { k: "delete" } })),
         f6: duplicate, f9: e.shiftKey ? redo : undo,
         // (F7/F8 as LTspice has them; on a Mac they are media keys unless fn is held: M too)
         // (F1; on a Mac a brightness key unless fn is held: ? too)
-        f1: () => useS.setState({ dialog: { k: "help" } }), "?": () => useS.setState({ dialog: { k: "help" } }),
-        f7: moveTool, m: moveTool, f8: () => useS.setState({ tool: { k: "select" } }),
-        " ": () => window.dispatchEvent(new Event("nomospice:fit")),
+        f1: C.help, "?": C.help, f7: moveTool, m: moveTool, f8: C.select, " ": C.fit,
       };
       // (a symbol holds no parts, directives or analyses)
       if (map[k] && !(isSymbolDoc(useS.getState().path) && ["p", "f2", "s"].includes(k))) run(map[k]);
@@ -451,7 +521,7 @@ export function App() {
     <div className="flex h-full flex-col">
       <Toolbar className="gap-1 px-2">
         <span className="mr-3 font-mono text-sm font-medium tracking-tight text-text-strong">nomo<span className="text-selection">spice</span></span>
-        <ToolbarButton label="New" hotkey="⌘N" icon={<FilePlus />} onClick={newFile} />
+        <ToolbarButton label="New window" hotkey="⌘N" icon={<FilePlus />} onClick={() => newWindow()} />
         <ToolbarButton label="Open" hotkey="⌘O" icon={<FolderOpen />} onClick={() => openFile()} />
         <ToolbarButton label="Save" hotkey="⌘S" icon={<Save />} onClick={() => saveFile()} />
         <ToolbarSeparator />
