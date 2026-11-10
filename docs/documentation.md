@@ -56,12 +56,11 @@ With pngquant installed, the pictures are stored with a palette of their own, a 
 Every tutorial can be turned into a narrated video. They are not published yet:
 
 ```sh
-OPENROUTER_API_KEY=… nix shell nixpkgs#ffmpeg -c scripts/docs-video.py docs/tutorial/*.md \
-    --model elevenlabs/eleven-v4 --voice george             # into build/videos/
+OPENROUTER_API_KEY=… nix shell nixpkgs#ffmpeg -c scripts/docs-video.py docs/tutorial/*.md   # into build/videos/
 ```
 
 Each picture of the page is shown while the text that follows it is spoken; the page's title and the text before the first picture are spoken over the first one. Code, tables and notes are not spoken, so a page can say more than its video; a heading is spoken only where its section has text before the next picture, such as the closing summary. The spoken text is in the video as subtitles and beside it as an `.srt` file.
 
-The voice comes from [OpenRouter](https://openrouter.ai)'s text-to-speech models (the models and their voices: `https://openrouter.ai/api/v1/models?output_modalities=speech`). Each text is spoken once and kept in `build/videos/.speech/`, so building a video again costs nothing unless its text changed. Without a key the script falls back to macOS `say` or espeak-ng, which sound far worse.
+The narrator is George of ElevenLabs v4, through [OpenRouter](https://openrouter.ai)'s text-to-speech models (`--model` and `--voice` choose another ; the models and their voices: `https://openrouter.ai/api/v1/models?output_modalities=speech`). Each text is spoken once and kept in `build/videos/.speech/`, so building a video again costs nothing unless its text changed. Without a key the script falls back to macOS `say` or espeak-ng, which sound far worse.
 
 So write a tutorial as pictures, each followed by a short paragraph that says what to do and what you see.

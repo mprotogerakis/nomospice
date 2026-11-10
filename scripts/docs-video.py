@@ -15,7 +15,7 @@ model: https://openrouter.ai/api/v1/models?output_modalities=speech), each text 
 in build/videos/.speech/ so a rebuild costs nothing; else macOS `say`, else espeak-ng.
 Needs ffmpeg and ffprobe (e.g. `nix shell nixpkgs#ffmpeg -c scripts/docs-video.py …`).
 
-    OPENROUTER_API_KEY=$(cat key) scripts/docs-video.py docs/tutorial/*.md --model elevenlabs/eleven-v3 --voice george
+    OPENROUTER_API_KEY=$(cat key) scripts/docs-video.py docs/tutorial/*.md    # ElevenLabs v4, George
 """
 import hashlib
 import json
@@ -187,8 +187,9 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("pages", nargs="+", type=pathlib.Path)
     ap.add_argument("-o", "--out", type=pathlib.Path, default=pathlib.Path("build/videos"), help="a folder, or one .mp4 for one page")
-    ap.add_argument("--model", default="fish-audio/s2.1-pro-free:free", help="OpenRouter speech model (with OPENROUTER_API_KEY)")
-    ap.add_argument("--voice", default=os.environ.get("NOMOSPICE_VOICE"), help="its voice (default: the model's)")
+    # (the narrator chosen for the tutorials)
+    ap.add_argument("--model", default="elevenlabs/eleven-v4", help="OpenRouter speech model (with OPENROUTER_API_KEY)")
+    ap.add_argument("--voice", default=os.environ.get("NOMOSPICE_VOICE", "george"), help="its voice")
     a = ap.parse_args()
     for page in a.pages:
         out = a.out if a.out.suffix == ".mp4" else a.out / f"{page.stem}.mp4"
