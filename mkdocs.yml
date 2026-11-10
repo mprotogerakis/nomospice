@@ -84,3 +84,6 @@ nav:
       - Compatibility: explanation/compatibility.md
   - Project:
       - How this documentation is made: documentation.md
+  - Rechtliches:
+      - Impressum: legal/impressum.md
+      - Datenschutz: legal/datenschutz.md
