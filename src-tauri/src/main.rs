@@ -291,7 +291,7 @@ async fn simulate(window: tauri::Window, items: Vec<Item>, dir: Option<String>, 
         let sweep = sweep_lock(|| ngspice::halted_since(&who, op));
         let res = match &sweep {
             Some(_) => ngspice::run_until(&prepared, &|| ngspice::halted_since(&who, op)),
-            None => Err(vec!["Halted before it ran (another window's root locus held ngspice).".into()]),
+            None => Err(vec!["Halted before it ran (ngspice was busy with another window's run).".into()]),
         };
         drop(sweep);
         // for the s-plane view's root locus; from the user's deck, not the libraries
@@ -512,15 +512,11 @@ fn cli_args(window: tauri::Window) -> Vec<String> {
 fn open_window(app: &tauri::AppHandle, args: Vec<String>) -> Result<(), String> {
     use tauri::Manager;
     let label = format!("doc-{}", NEXT_WINDOW.fetch_add(1, std::sync::atomic::Ordering::SeqCst));
+    // (as the first window is configured: size, tabs on macOS (Window → Merge All Windows) …)
+    let mut config = app.config().app.windows.first().cloned().unwrap_or_default();
+    config.label = label.clone();
+    let mut b = tauri::WebviewWindowBuilder::from_config(app, &config).map_err(|e| e.to_string())?;
     PENDING.lock().map_err(|e| e.to_string())?.insert(label.clone(), args);
-    let mut b = tauri::WebviewWindowBuilder::new(app, &label, tauri::WebviewUrl::App("index.html".into()))
-        .title("nomospice")
-        .inner_size(1400.0, 900.0)
-        .min_inner_size(900.0, 600.0);
-    #[cfg(target_os = "macos")]
-    {
-        b = b.tabbing_identifier("nomospice"); // Window → Merge All Windows: tabs
-    }
     // cascaded from the focused window, past the windows already there
     if let Some(w) = focused(app).and_then(|l| app.get_webview_window(&l)) {
         if let (Ok(p), Ok(k)) = (w.outer_position(), w.scale_factor()) {
@@ -745,7 +741,7 @@ fn halt(window: tauri::Window) {
 // - Liveness: each window holds an exclusive lock on its recovery-<id>.lock while open, so a .lock
 //   we *can* lock belongs to a closed window or a dead instance and its .json is an orphan.
 // - Data is written to a temp file, synced and renamed: a crash mid-write keeps the last snapshot.
-// - <id> = pid + start time + window, so a reused pid never touches an older file.
+// - <id> = pid + the process's start time + window, so a reused pid never touches an older file.
 // - An orphan offered for restore stays on disk (and locked by us) until the user decided.
 type Held = std::collections::BTreeMap<String, (std::fs::File, std::path::PathBuf)>;
 static OWN: Mutex<Held> = Mutex::new(Held::new());
@@ -765,13 +761,22 @@ fn recovery_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
     Ok(dir)
 }
 
+/// This process's recovery files: `recovery-<pid>-<start>-` (a scan passes them over: an open
+/// window's own; a dead instance of the same pid had another start).
+fn own_prefix() -> &'static str {
+    static P: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    P.get_or_init(|| {
+        let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis();
+        format!("recovery-{}-{t}-", std::process::id())
+    })
+}
+
 /// Window `label`'s recovery file (its lock file taken on first use), and the guard over them all
 /// (held for a whole save or clear).
 fn own(app: &tauri::AppHandle, label: &str) -> Result<(std::sync::MutexGuard<'static, Held>, std::path::PathBuf), String> {
     let mut held = OWN.lock().map_err(|e| e.to_string())?;
     if !held.contains_key(label) {
-        let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis();
-        let base = recovery_dir(app)?.join(format!("recovery-{}-{t}-{label}", std::process::id()));
+        let base = recovery_dir(app)?.join(format!("{}{label}", own_prefix()));
         let lock = std::fs::File::create(base.with_extension("lock")).map_err(|e| e.to_string())?;
         if let Err(e) = lock.try_lock() {
             let _ = std::fs::remove_file(base.with_extension("lock")); // no lock: do not leak the file
@@ -834,7 +839,7 @@ fn candidates(dir: &std::path::Path) -> Vec<(std::fs::File, std::path::PathBuf)>
         let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let ext = p.extension().map(|x| x.to_string_lossy().into_owned()).unwrap_or_default();
         // (this process's: its open windows' (a scan would hold a lock one is just taking))
-        if !name.starts_with("recovery-") || name.starts_with(&format!("recovery-{}-", std::process::id())) {
+        if !name.starts_with("recovery-") || name.starts_with(own_prefix()) {
             continue;
         }
         if name.contains(".nomospice-") && is_stale(&p) {
