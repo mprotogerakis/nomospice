@@ -22,7 +22,7 @@ import { saveRaw } from "./svgExport";
 import { History } from "./History";
 import { mirror, rotate } from "./geom";
 import { ANALYSES, si, tokens } from "./spice";
-import { copySelection, deleteSelection, duplicate, installClipboardEvents, newItem, pasteClipboard, placeFlag, TEXT_FIELD, textField, transform } from "./actions";
+import { copySelection, deleteSelection, duplicate, installClipboardEvents, newItem, PAGE_KEYS, pasteClipboard, placeFlag, TEXT_FIELD, textField, transform } from "./actions";
 import { ContextMenu, openMenu } from "./Menu";
 import { Toolbar, ToolbarButton, ToolbarSeparator, ToolbarSpacer } from "./ui/toolbar";
 import { StatusBar, StatusSegment } from "./ui/status-bar";
@@ -126,6 +126,11 @@ export function installGuards() {
   // the menu bar's commands, for this window when it is the focused one
   void getCurrentWebviewWindow().listen<string>("menu", (e) => command(e.payload));
   listen("libraries-changed", () => void refreshLibrarySymbols().catch(() => {}));
+  // a symbol saved (by any window): this folder's schematic draws and netlists it anew
+  listen<string>("symbols-changed", ({ payload }) => {
+    const { items, path } = useS.getState();
+    if (dirOf(payload) === dirOf(path)) void loadSymbols(items, undefined, { force: true }).catch(() => {}).finally(refreshNets);
+  });
   installClipboardEvents();
   useS.subscribe((s, prev) => {
     // the file open here (opened again from another window: this one comes forward instead)
@@ -315,7 +320,6 @@ async function blockSymbol() {
   } catch (e) {
     return void message(String(e), { title: "No block symbol", kind: "warning" });
   }
-  await loadSymbols(useS.getState().items, undefined, { force: true }).catch(() => {});
   await message(`The block symbol ${name} is written. Place it (Component, ${name}) in a schematic in this folder: it stands for this one, its port labels are the pins.`, { title: "nomospice" });
 }
 
@@ -359,11 +363,8 @@ function command(id: string) {
   if (field && ["duplicate", "delete", "rotate", "mirror"].includes(id)) return; // (⌃R in a field: no part turns)
   const s = useS.getState();
   if (s.menu) useS.setState({ menu: null }); // (clicked in the menu bar)
-  // a dialog open: ⌘W closes it (as Esc); the rest waits (it would replace the dialog and lose its
-  // edits), but for help and about, which go
-  if (s.dialog && s.dialog.k !== "help" && s.dialog.k !== "about") return void (id === "close" && useS.setState({ dialog: null }));
-  if (s.dialog) useS.setState({ dialog: null });
-  if (s.dialog && id === "close") return;
+  // a dialog open: ⌘W closes it (as Esc); the rest waits (it would replace the dialog and lose its edits)
+  if (s.dialog) return void (id === "close" && useS.setState({ dialog: null }));
   if (isSymbolDoc(s.path) && NOT_IN_SYMBOLS.has(id)) return;
   void C[id]?.();
 }
@@ -490,7 +491,7 @@ export function App() {
         // left alone here, the menu bar's keys (macOS) would run it all the same: swallowed, but a
         // text field's own (⌘Z, ⌘A, ⌘X ⌘C ⌘V; letters; ⌃ moves the caret) and the menu's (⌘W ⌘Q ⌘,)
         const letter = key.length === 1 && key !== " " && !e.metaKey && !e.ctrlKey && !(e.target instanceof Element && e.target.closest(`${TEXT_FIELD},select`)); // (a select jumps to what is typed)
-        if ((e.metaKey && (key === "enter" || (key.length === 1 && "nosdfkl=-".includes(key)))) || letter) e.preventDefault();
+        if ((e.metaKey && (key === "enter" || (key.length === 1 && PAGE_KEYS.includes(key)))) || letter) e.preventDefault();
         return;
       }
       const modKey = e.metaKey || e.ctrlKey;

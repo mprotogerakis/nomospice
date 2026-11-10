@@ -130,7 +130,7 @@ async fn path_exists(path: String) -> bool {
 }
 
 #[tauri::command]
-async fn save_asc(path: String, items: Vec<Item>) -> Result<(), String> {
+async fn save_asc(app: tauri::AppHandle, path: String, items: Vec<Item>) -> Result<(), String> {
     // (a symbol's name is how schematics place it: one word, not a built-in symbol's, which wins)
     // (a file there already, opened and edited: written as asked)
     let symbol = schematic::is_symbol(&path);
@@ -145,17 +145,28 @@ async fn save_asc(path: String, items: Vec<Item>) -> Result<(), String> {
     }
     // (a symbol as one; Latin-1 like LTspice, UTF-16 if needed)
     let data = schematic::encode(&if symbol { schematic::write_asy(&items) } else { schematic::write_asc(&items) });
-    tauri::async_runtime::spawn_blocking(move || write_atomic(std::path::Path::new(&path), &data))
+    let at = path.clone();
+    tauri::async_runtime::spawn_blocking(move || write_atomic(std::path::Path::new(&at), &data))
         .await
         .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    if symbol {
+        symbols_changed(&app, &path);
+    }
+    Ok(())
+}
+
+/// A symbol was written (`path`): the windows of its folder draw and netlist it anew.
+fn symbols_changed(app: &tauri::AppHandle, path: &str) {
+    use tauri::Emitter;
+    let _ = app.emit("symbols-changed", path);
 }
 
 /// A block symbol for the schematic at `path` (`<name>.asy` beside it), from its port labels:
 /// placed in another schematic of that folder, it stands for this one. The folder's symbol of that
 /// name (any case) is written over if `replace`; else its file name comes back (None: written).
 #[tauri::command]
-async fn block_symbol(path: String, items: Vec<Item>, replace: bool) -> Result<Option<String>, String> {
+async fn block_symbol(app: tauri::AppHandle, path: String, items: Vec<Item>, replace: bool) -> Result<Option<String>, String> {
     let path = std::path::PathBuf::from(path);
     let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
     if schematic::builtin_symbol(&schematic::sym_key(&stem)) {
@@ -171,7 +182,12 @@ async fn block_symbol(path: String, items: Vec<Item>, replace: bool) -> Result<O
         match there {
             Some(p) if !replace => Ok(Some(p.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default())),
             // (the one there: on a case-sensitive disk another case of it would not be the one used)
-            there => write_atomic(&there.unwrap_or_else(|| path.with_extension("asy")), &data).map(|_| None).map_err(|e| e.to_string()),
+            there => {
+                let to = there.unwrap_or_else(|| path.with_extension("asy"));
+                write_atomic(&to, &data).map_err(|e| e.to_string())?;
+                symbols_changed(&app, &to.to_string_lossy());
+                Ok(None)
+            }
         }
     })
     .await
@@ -220,15 +236,19 @@ fn lib_at<'a>(lib: &'a Lib, dir: Option<&str>) -> std::sync::MutexGuard<'a, Libr
 }
 
 /// A root locus loads one .pz deck after another. A sweep holds this lock for its whole run, so a
-/// simulation (which stops it via SWEEP_GEN) waits for it; traces check the run id instead.
+/// simulation waits for it (one of the same window stops it first, via SWEEP_GEN; another window's
+/// waits for all of it); traces check the run id instead.
 static SWEEP: Mutex<()> = Mutex::new(());
 /// Bumped to stop a running sweep at its next step (a new simulation, or the locus panel's Halt).
 static SWEEP_GEN: Mutex<std::collections::BTreeMap<String, u64>> = Mutex::new(std::collections::BTreeMap::new());
 /// Window `who`'s sweep generation; `bump`: moved on first (its running sweep stops).
 fn sweep_gen(who: &str, bump: bool) -> u64 {
     let Ok(mut g) = SWEEP_GEN.lock() else { return 0 };
+    if !bump {
+        return g.get(who).copied().unwrap_or(0); // (polled during a sweep: no allocation)
+    }
     let n = g.entry(who.to_string()).or_insert(0);
-    *n += bump as u64;
+    *n += 1;
     *n
 }
 
@@ -565,7 +585,8 @@ fn quit_all(app: &tauri::AppHandle) {
         let mut labels: Vec<String> = app.webview_windows().into_keys().collect();
         labels.sort_by_key(|l| Some(l) != first.as_ref());
         let (mut asked, mut mute) = (false, vec![]);
-        for label in labels {
+        for label in &labels {
+            let label = label.clone();
             let (tx, rx) = std::sync::mpsc::channel();
             if let Ok(mut q) = QUIT.lock() {
                 *q = Some((label.clone(), tx));
@@ -601,12 +622,13 @@ fn quit_all(app: &tauri::AppHandle) {
                 None => {} // (closed meanwhile)
             }
         }
-        if asked {
+        // (a window opened meanwhile, a restored one: one more round, so it is asked too)
+        if asked || app.webview_windows().keys().any(|l| !labels.contains(l)) {
             continue;
         }
         if let Ok(held) = OWN.lock() {
             for (label, (_, json)) in held.iter() {
-                if !mute.contains(label) {
+                if labels.contains(label) && !mute.contains(label) {
                     let _ = std::fs::remove_file(json); // (each answered: saved, or not to be kept)
                 }
             }
@@ -650,6 +672,9 @@ fn focused(app: &tauri::AppHandle) -> Option<String> {
 
 /// A window closed: what it held goes.
 fn forget_window(label: &str) {
+    // its simulation or root locus stops (else another window waits for it, with no Halt for it)
+    ngspice::halt(label);
+    sweep_gen(label, true);
     recovery_release(label);
     if let Ok(mut q) = QUIT.lock() {
         if q.as_ref().is_some_and(|(l, _)| l == label) {
@@ -696,8 +721,7 @@ fn recovery_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
     Ok(dir)
 }
 
-/// Window `label`'s recovery file (its lock taken on first use), under the lock held for the
-/// whole save/clear, so the two never interleave.
+/// Window `label`'s recovery file (its lock file taken on first use), and the guard over them all.
 fn own(app: &tauri::AppHandle, label: &str) -> Result<(std::sync::MutexGuard<'static, Held>, std::path::PathBuf), String> {
     let mut held = OWN.lock().map_err(|e| e.to_string())?;
     if !held.contains_key(label) {
@@ -717,8 +741,10 @@ fn own(app: &tauri::AppHandle, label: &str) -> Result<(std::sync::MutexGuard<'st
 #[tauri::command]
 async fn recovery_save(app: tauri::AppHandle, window: tauri::Window, doc: serde_json::Value) -> Result<(), String> {
     // blocking file IO + fsync: keep it off the async workers other commands share
+    // (not under OWN: other windows' saves do not wait for this fsync; a window's own saves and
+    // clears come one after another, see the frontend's mirror)
     tauri::async_runtime::spawn_blocking(move || {
-        let (_held, json) = own(&app, window.label())?;
+        let json = own(&app, window.label())?.1;
         write_atomic(&json, doc.to_string().as_bytes()).map_err(|e| e.to_string())
     })
     .await
@@ -993,7 +1019,12 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::
     use tauri::menu::{Menu, MenuItem, PredefinedMenuItem as P, Submenu, HELP_SUBMENU_ID};
     // the key as the menu shows it; none on Linux, where GTK would take it before the page (typing,
     // a context menu open: the page's own rules), so the page's hotkeys do it as before
-    let it = |id: &str, text: &str, key: Option<&str>| MenuItem::with_id(app, id, text, true, if cfg!(target_os = "linux") { None } else { key });
+    // Windows: shown only (in the label's key column), the page's hotkeys do it; were it registered
+    // too, a key reaching both would run twice
+    let it = |id: &str, text: &str, key: Option<&str>| match key {
+        Some(k) if cfg!(windows) => MenuItem::with_id(app, id, format!("{text}\t{}", k.replace("CmdOrCtrl", "Ctrl")), true, None::<&str>),
+        _ => MenuItem::with_id(app, id, text, true, if cfg!(target_os = "linux") { None } else { key }),
+    };
     let sep = || P::separator(app);
     #[cfg(target_os = "macos")]
     let app_menu = Submenu::with_items(app, "nomospice", true, &[

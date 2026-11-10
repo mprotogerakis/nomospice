@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useS } from "./store";
 import { cn, keys } from "@/lib/utils";
+import { MENU_OWN_KEYS } from "./actions";
 
 export type MenuItem = { label: string; hint?: string; run: () => unknown; disabled?: boolean; danger?: boolean } | "-";
 
@@ -40,7 +41,7 @@ export function ContextMenu() {
     } else if (e.key === "Escape") closeMenu();
     // the app's hotkeys stay out while the menu is open, and the menu bar's keys (macOS) too, but
     // the menu's own (Enter, Space, Tab) and Close, Quit, model libraries
-    else if ((e.key.length === 1 && e.key !== " " && !e.metaKey && !e.ctrlKey) || (e.metaKey && !"wq,".includes(e.key.toLowerCase()))) e.preventDefault();
+    else if ((e.key.length === 1 && e.key !== " " && !e.metaKey && !e.ctrlKey) || (e.metaKey && !MENU_OWN_KEYS.includes(e.key.toLowerCase()))) e.preventDefault();
     e.stopPropagation();
   };
   return (

@@ -91,6 +91,12 @@ export function copySelection(cut = false, to?: DataTransfer) {
   return true;
 }
 
+/** ⌘-keys of the menu bar (see build_menu) the page leaves to it: Close, Quit, model libraries. */
+export const MENU_OWN_KEYS = "wq,";
+/** ⌘-keys of the menu bar the page runs itself, swallowed where it does not (typing, a dialog):
+ *  else the menu bar would run them all the same. */
+export const PAGE_KEYS = "nosdfkl=-";
+
 /** What takes typing (a checkbox or button does not). */
 export const TEXT_FIELD = "input:not([type=checkbox]):not([type=radio]):not([type=button]),textarea";
 /** The focused text field, if one has the focus (its own Undo, Select All, Copy … then). */
