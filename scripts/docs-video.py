@@ -10,9 +10,18 @@ more than its video. A section with text after a picture (the closing summary) i
 over the same picture, its heading spoken first. The spoken text goes into the video as subtitles too, and beside it
 as an .srt file.
 
-Speech: macOS `say` (NOMOSPICE_VOICE picks the voice, e.g. "Samantha"), else espeak-ng.
+Speech: with OPENROUTER_API_KEY set, OpenRouter's text-to-speech (--model, --voice; the voices of a
+model: https://openrouter.ai/api/v1/models?output_modalities=speech), each text spoken once and kept
+in build/videos/.speech/ so a rebuild costs nothing; else macOS `say`, else espeak-ng.
 Needs ffmpeg and ffprobe (e.g. `nix shell nixpkgs#ffmpeg -c scripts/docs-video.py …`).
+
+    OPENROUTER_API_KEY=$(cat key) scripts/docs-video.py docs/tutorial/*.md --model elevenlabs/eleven-v3 --voice george
 """
+import hashlib
+import json
+import time
+import urllib.error
+import urllib.request
 import argparse
 import os
 import pathlib
@@ -82,10 +91,51 @@ def scenes(page: pathlib.Path):
     return title, result
 
 
-def say(text: str, to: pathlib.Path):
+SPEECH = "https://openrouter.ai/api/v1/audio/speech"
+CACHE = pathlib.Path("build/videos/.speech")
+
+
+def openrouter(text: str, model: str, voice: str | None) -> pathlib.Path:
+    """`text` spoken by `model` (an audio file, cached by model, voice and text)."""
+    key = hashlib.sha256(json.dumps([model, voice, text]).encode()).hexdigest()[:24]
+    for done in CACHE.glob(f"{key}.*"):
+        return done
+    body = {"model": model, "input": text, "response_format": "mp3"}
+    if voice:
+        body["voice"] = voice
+    for attempt in range(6):
+        req = urllib.request.Request(SPEECH, data=json.dumps(body).encode(), headers={"Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}", "Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=180) as r:
+                audio, kind = r.read(), r.headers.get("Content-Type", "")
+            break
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode(errors="replace")[:300]
+            if e.code == 400 and body["response_format"] == "mp3":
+                body["response_format"] = "pcm"  # (some models speak PCM only)
+                continue
+            if e.code in (429, 502, 503, 524, 529) and attempt < 5:
+                time.sleep(float(e.headers.get("Retry-After") or 2 ** attempt))
+                continue
+            sys.exit(f"speech ({model}): HTTP {e.code} {detail}")
+    CACHE.mkdir(parents=True, exist_ok=True)
+    if "pcm" in kind:
+        # raw 16-bit samples: a WAV header around them, at the rate the reply names
+        rate = int((re.search(r"rate=(\d+)", kind) or [0, 24000])[1])
+        channels = int((re.search(r"channels=(\d+)", kind) or [0, 1])[1])
+        out = CACHE / f"{key}.wav"
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "s16le", "-ar", str(rate), "-ac", str(channels), "-i", "pipe:0", str(out)], input=audio, check=True)
+    else:
+        out = CACHE / f"{key}.mp3"
+        out.write_bytes(audio)
+    return out
+
+
+def say(text: str, to: pathlib.Path, model: str | None = None, voice: str | None = None):
     """Speech for `text` as a WAV file."""
-    if shutil.which("say"):
-        voice = os.environ.get("NOMOSPICE_VOICE")
+    if os.environ.get("OPENROUTER_API_KEY") and model:
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(openrouter(text, model, voice)), "-ar", "44100", "-ac", "1", str(to)], check=True)
+    elif shutil.which("say"):
         subprocess.run(["say", *(["-v", voice] if voice else []), "-o", str(to), "--data-format=LEI16@22050", text], check=True)
     elif shutil.which("espeak-ng"):
         subprocess.run(["espeak-ng", "-w", str(to), text], check=True)
@@ -103,7 +153,7 @@ def stamp(t: float) -> str:
     return f"{ms // 3600000:02}:{ms // 60000 % 60:02}:{ms // 1000 % 60:02},{ms % 1000:03}"
 
 
-def video(page: pathlib.Path, out: pathlib.Path):
+def video(page: pathlib.Path, out: pathlib.Path, model: str | None = None, voice: str | None = None):
     title, parts = scenes(page)
     tmp = pathlib.Path(tempfile.mkdtemp(prefix="nomospice-video-"))
     try:
@@ -112,7 +162,7 @@ def video(page: pathlib.Path, out: pathlib.Path):
             if not img.exists():
                 sys.exit(f"{page}: {img} is missing (scripts/docs-shots.sh makes it)")
             wav, clip = tmp / f"{k}.wav", tmp / f"{k}.mp4"
-            say(text, wav)
+            say(text, wav, model, voice)
             d = seconds(wav) + PAUSE
             subprocess.run(["ffmpeg", "-v", "error", "-y", "-loop", "1", "-i", str(img), "-i", str(wav),
                             "-vf", "scale=1600:-2,format=yuv420p", "-r", "25", "-c:v", "libx264", "-tune", "stillimage",
@@ -137,11 +187,13 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("pages", nargs="+", type=pathlib.Path)
     ap.add_argument("-o", "--out", type=pathlib.Path, default=pathlib.Path("build/videos"), help="a folder, or one .mp4 for one page")
+    ap.add_argument("--model", default="fish-audio/s2.1-pro-free:free", help="OpenRouter speech model (with OPENROUTER_API_KEY)")
+    ap.add_argument("--voice", default=os.environ.get("NOMOSPICE_VOICE"), help="its voice (default: the model's)")
     a = ap.parse_args()
     for page in a.pages:
         out = a.out if a.out.suffix == ".mp4" else a.out / f"{page.stem}.mp4"
         try:
-            video(page, out)
+            video(page, out, a.model, a.voice)
         except ValueError as e:
             print(e)  # (an overview page among the tutorials)
 
