@@ -2,6 +2,13 @@
 
 In this tutorial you run the RC low-pass for three capacitor values at once and let nomospice measure the corner frequency of each. At the end you see the same idea used for tolerances: a Monte Carlo analysis.
 
+!!! tip "As a video"
+    <video controls preload="none" poster="../img/sweeps/06-measured.png" style="width: 100%">
+      <source src="../videos/sweeps.mp4" type="video/mp4">
+      <track kind="captions" src="../videos/sweeps.vtt" srclang="en" label="English">
+    </video>
+    The same tutorial [on YouTube](https://youtu.be/uqluq9GN9lg). Its narrator's voice is synthetic.
+
 ![The Bode plot of the rc_bode example](../img/sweeps/01-bode.png)
 
 Open the example rc_bode from the start screen and run it. It is the filter of the previous tutorials with an AC analysis.

@@ -2,6 +2,13 @@
 
 In this tutorial you draw an RC low-pass filter, feed it a sine wave and look at what comes out: the two voltages, a current, and the delay between input and output. It takes about ten minutes.
 
+!!! tip "As a video"
+    <video controls preload="none" poster="../img/first-circuit/12-cursors.png" style="width: 100%">
+      <source src="../videos/first-circuit.mp4" type="video/mp4">
+      <track kind="captions" src="../videos/first-circuit.vtt" srclang="en" label="English">
+    </video>
+    The same tutorial [on YouTube](https://youtu.be/-3EyIGVwpOI). Its narrator's voice is synthetic.
+
 ![nomospice at its start: an empty schematic and a list of examples](../img/first-circuit/01-start.png)
 
 When nomospice starts, it shows an empty schematic and a list of examples. You will start from scratch.

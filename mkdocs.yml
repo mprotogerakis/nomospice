@@ -32,6 +32,10 @@ theme:
     - search.suggest
     - content.code.copy
 
+# the tutorials' videos, from build/videos/ into the site (not in git)
+hooks:
+  - scripts/docs_hooks.py
+
 markdown_extensions:
   - admonition
   - attr_list

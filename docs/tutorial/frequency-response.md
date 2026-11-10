@@ -2,6 +2,13 @@
 
 In this tutorial you look at the RC low-pass of the [first tutorial](first-circuit.md) in the frequency domain: its Bode plot, its corner frequency, and its Nyquist plot. You keep the transient analysis as well, each in a result tab of its own.
 
+!!! tip "As a video"
+    <video controls preload="none" poster="../img/frequency-response/06-corner.png" style="width: 100%">
+      <source src="../videos/frequency-response.mp4" type="video/mp4">
+      <track kind="captions" src="../videos/frequency-response.vtt" srclang="en" label="English">
+    </video>
+    The same tutorial [on YouTube](https://youtu.be/yP1TzJxDAVo). Its narrator's voice is synthetic.
+
 ![The source's dialog with an AC amplitude of 1](../img/frequency-response/01-ac-amplitude.png)
 
 Open the filter you saved, or the example rc_transient from the start screen. An AC analysis needs a source that drives it: double-click the source and enter an AC amplitude of 1. The sine stays for the transient analysis; the AC amplitude counts only in AC and noise analyses.

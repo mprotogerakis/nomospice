@@ -51,9 +51,9 @@ Other helpers: `move`, `rightClick`, `type` (into a field by selector), `press` 
 
 With pngquant installed, the pictures are stored with a palette of their own, a quarter of the size. The app runs under its own identifier, so the installed app's settings and recovery files are not touched, and git commits a scene makes are signed by *nomospice docs*. Change the app, run the scenes again, and the pictures are current.
 
-## Videos (experimental)
+## Videos
 
-Every tutorial can be turned into a narrated video. They are not published yet:
+Every tutorial is also a narrated video, shown on its page and published on YouTube:
 
 ```sh
 OPENROUTER_API_KEY=… nix shell nixpkgs#ffmpeg -c scripts/docs-video.py docs/tutorial/*.md   # into build/videos/
@@ -62,5 +62,7 @@ OPENROUTER_API_KEY=… nix shell nixpkgs#ffmpeg -c scripts/docs-video.py docs/tu
 Each picture of the page is shown while the text that follows it is spoken; the page's title and the text before the first picture are spoken over the first one. Code, tables and notes are not spoken, so a page can say more than its video; a heading is spoken only where its section has text before the next picture, such as the closing summary. The spoken text is in the video as subtitles and beside it as an `.srt` file.
 
 The narrator is George of ElevenLabs v4, through [OpenRouter](https://openrouter.ai)'s text-to-speech models (`--model` and `--voice` choose another ; the models and their voices: `https://openrouter.ai/api/v1/models?output_modalities=speech`). Each text is spoken once and kept in `build/videos/.speech/`, so building a video again costs nothing unless its text changed. Without a key the script falls back to macOS `say` or espeak-ng, which sound far worse.
+
+The site serves the videos itself, so watching one sends nothing to a third party: `scripts/docs_hooks.py` copies them from `build/videos/` into the built site, with their subtitles as WebVTT, and `mkdocs gh-deploy` refuses to publish a page whose video is missing. They are not in git. After a tutorial changes, make its video again, upload it to YouTube in place of the old one, and put the new link into the page's *As a video* box.
 
 So write a tutorial as pictures, each followed by a short paragraph that says what to do and what you see.

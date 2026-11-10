@@ -2,6 +2,13 @@
 
 In this tutorial you turn the RC low-pass into a block: a part with its own symbol that stands for its schematic. You place it twice in another schematic to make a second-order filter, look inside it, and open its symbol in the symbol editor.
 
+!!! tip "As a video"
+    <video controls preload="none" poster="../img/blocks/05-cascade.png" style="width: 100%">
+      <source src="../videos/blocks.mp4" type="video/mp4">
+      <track kind="captions" src="../videos/blocks.vtt" srclang="en" label="English">
+    </video>
+    The same tutorial [on YouTube](https://youtu.be/KmB4hxJUSd0). Its narrator's voice is synthetic.
+
 ![The RC filter without a source: R1, C1 and the labels in and out](../img/blocks/01-sheet.png)
 
 Start with the filter alone: the resistor, the capacitor to ground, and the labels in and out, without the source. Save it as rcfilter.asc in a folder of its own. The file name becomes the name of the block.

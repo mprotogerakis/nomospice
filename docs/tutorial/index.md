@@ -7,4 +7,4 @@ Four lessons that build on each other. Do them in order; each takes about ten mi
 3. **[Sweeps and measurements](sweeps.md)**: run the filter for several capacitor values, measure each run, and simulate tolerances.
 4. **[Your own block](blocks.md)**: turn the filter into a block with its own symbol and use it twice.
 
-You need nomospice [installed](../install.md). The tutorials use the macOS keys; on Windows and Linux press ++ctrl++ where they say ++cmd++.
+Each is also a narrated video of a few minutes, on its page and on YouTube. You need nomospice [installed](../install.md). The tutorials use the macOS keys; on Windows and Linux press ++ctrl++ where they say ++cmd++.

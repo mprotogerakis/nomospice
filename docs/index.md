@@ -6,7 +6,7 @@
 
 ## Where to go
 
-- **[Tutorials](tutorial/index.md)**: learn nomospice by doing. Four short lessons, from a first simulation to your own blocks.
+- **[Tutorials](tutorial/index.md)**: learn nomospice by doing. Four short lessons, from a first simulation to your own blocks, each also as a video.
 - **[How-to guides](how-to/index.md)**: recipes for particular tasks, such as using a model library, measuring with cursors, poles and zeros, or several windows.
 - **[Reference](reference/index.md)**: every key and menu item, the analyses and directives, the plot window, files, and the command line.
 - **[Explanation](explanation/index.md)**: how a simulation runs, how blocks become subcircuits, and how nomospice relates to other simulators.

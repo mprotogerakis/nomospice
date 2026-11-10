@@ -63,7 +63,11 @@ Dass dies so bleibt, wird bei jedem Bau automatisch geprüft: Ein Skript
 durchsucht die erzeugten Seiten nach Anfragen an fremde Hosts und lässt den
 Bau scheitern, wenn eine gefunden wird.
 
-Links auf externe Seiten (etwa auf das Quellcode-Repository) sind gewöhnliche
+Die Videos der Tutorials liefert diese Website selbst aus. Die Verweise auf
+dieselben Videos bei YouTube sind, wie die auf das Quellcode-Repository,
+gewöhnliche Links.
+
+Links auf externe Seiten sind gewöhnliche
 Verweise. Sie werden erst aufgerufen, wenn Sie sie anklicken; erst dann
 erfährt der dortige Anbieter etwas von Ihnen.
 
