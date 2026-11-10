@@ -239,6 +239,19 @@ fn lib_at<'a>(lib: &'a Lib, dir: Option<&str>) -> std::sync::MutexGuard<'a, Libr
 /// simulation waits for it (one of the same window stops it first, via SWEEP_GEN; another window's
 /// waits for all of it); traces check the run id instead.
 static SWEEP: Mutex<()> = Mutex::new(());
+
+/// SWEEP, waited for while `stop` says go on (another window's run or sweep may hold it, for
+/// long); None: stopped meanwhile. (Polled by every waiter alike: none waits behind the others.)
+fn sweep_lock(stop: impl Fn() -> bool) -> Option<std::sync::MutexGuard<'static, ()>> {
+    loop {
+        match SWEEP.try_lock() {
+            Ok(g) => return Some(g),
+            Err(std::sync::TryLockError::Poisoned(e)) => return Some(e.into_inner()),
+            Err(std::sync::TryLockError::WouldBlock) if stop() => return None,
+            Err(std::sync::TryLockError::WouldBlock) => std::thread::sleep(std::time::Duration::from_millis(20)),
+        }
+    }
+}
 /// Bumped to stop a running sweep at its next step (a new simulation, or the locus panel's Halt).
 static SWEEP_GEN: Mutex<std::collections::BTreeMap<String, u64>> = Mutex::new(std::collections::BTreeMap::new());
 /// Window `who`'s sweep generation; `bump`: moved on first (its running sweep stops).
@@ -273,14 +286,7 @@ async fn simulate(window: tauri::Window, items: Vec<Item>, dir: Option<String>, 
         let prepared = sim.prepared(dir.as_deref().map(std::path::Path::new), &mut netlist.warnings);
         let simulated = prepared.text().to_string();
         // (waiting for another window's root locus: this window's Halt still ends the wait)
-        let sweep = loop {
-            match SWEEP.try_lock() {
-                Ok(g) => break Some(g),
-                Err(std::sync::TryLockError::Poisoned(e)) => break Some(e.into_inner()),
-                Err(std::sync::TryLockError::WouldBlock) if ngspice::halted_since(&who, op) => break None,
-                Err(std::sync::TryLockError::WouldBlock) => std::thread::sleep(std::time::Duration::from_millis(50)),
-            }
-        };
+        let sweep = sweep_lock(|| ngspice::halted_since(&who, op));
         let res = match &sweep {
             Some(_) => ngspice::run_until(&prepared, &|| ngspice::halted_since(&who, op)),
             None => Err(vec!["Halted before it ran (another window's root locus held ngspice).".into()]),
@@ -340,7 +346,7 @@ async fn root_locus(window: tauri::Window, items: Vec<Item>, dir: Option<String>
         // the user's own .param of that name wins over a part of it; a library's does not
         let own = schematic::sweepable(&sim.text, &[]).iter().any(|n| n.eq_ignore_ascii_case(target.trim()));
         let spans = schematic::vary_spans(deck.text(), &target, own).ok_or_else(|| format!("`{target}` is neither a .param nor an R, C or L with a numeric value in the schematic"))?;
-        let _sweep = SWEEP.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(_sweep) = sweep_lock(&stop) else { return Ok(vec![]) }; // (stopped while another window ran)
         let (mut steps, mut first_error, mut stopped) = (vec![], None, false);
         for &v in &values {
             if stop() {
@@ -904,10 +910,14 @@ async fn recovery_count(app: tauri::AppHandle) -> usize {
 /// still holding the orphan's lock, so no other window or instance can claim it in between.
 #[tauri::command]
 async fn recovery_resolve(app: tauri::AppHandle, window: tauri::Window, keep: bool) -> Result<(), String> {
-    let Some((f, lock)) = CLAIM.lock().map_err(|e| e.to_string())?.remove(window.label()) else { return Ok(()) };
+    // (OWN may be held for another window's write: off the async workers)
+    tauri::async_runtime::spawn_blocking(move || resolve_now(&app, window.label(), keep)).await.map_err(|e| e.to_string())?
+}
+fn resolve_now(app: &tauri::AppHandle, label: &str, keep: bool) -> Result<(), String> {
+    let Some((f, lock)) = CLAIM.lock().map_err(|e| e.to_string())?.remove(label) else { return Ok(()) };
     let json = lock.with_extension("json");
     if keep {
-        let (_held, dest) = own(&app, window.label())?;
+        let (_held, dest) = own(app, label)?;
         std::fs::rename(&json, dest).map_err(|e| e.to_string())?;
     } else {
         let _ = std::fs::remove_file(&json);

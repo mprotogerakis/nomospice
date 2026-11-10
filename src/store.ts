@@ -483,7 +483,6 @@ async function runOnce(): Promise<boolean> {
     if (sim.run && !op) {
       // merge by expr: traces added/removed while refetching must survive
       const fresh = await Promise.all(get().traces.map(fetchTrace));
-      gone = fresh.some((t) => t.error) && (await invoke<number>("run_id")) !== sim.run.id;
       // (only the data: a trace's other settings, e.g. its axis, may have changed meanwhile)
       if (gen === docGen) set({ traces: get().traces.map((t) => { const f = fresh.find((x) => x.expr === t.expr); return f ? { ...t, data: f.data, error: f.error } : t; }) });
     }
@@ -508,6 +507,8 @@ async function runOnce(): Promise<boolean> {
         if (ts.some((t) => !flat(t))) set({ traces: ts.filter((t) => !flat(t)).slice(0, 4) });
       }
     }
+    // (its traces, the auto-plotted too, failed for another window's run since: run once more)
+    if (sim.run && !op && gen === docGen) gone = get().traces.some((t) => t.error) && (await invoke<number>("run_id")) !== sim.run.id;
   } catch (e) {
     // stale cleared so live mode does not retry a hard failure every 350 ms
     if (gen === docGen) set({ shown, sim: { netlist: get().nets ?? { text: "", nets: [], insts: [], probes: [], pin_currents: [], sheets: [], warnings: [] }, simulated: "", run: null, log: [String(e)], sweepable: [] }, panel: "log", stale: false });

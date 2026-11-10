@@ -22,7 +22,7 @@ import { saveRaw } from "./svgExport";
 import { History } from "./History";
 import { mirror, rotate } from "./geom";
 import { ANALYSES, si, tokens } from "./spice";
-import { copySelection, deleteSelection, duplicate, installClipboardEvents, newItem, PAGE_KEYS, pasteClipboard, placeFlag, TEXT_FIELD, textField, transform } from "./actions";
+import { copySelection, deleteSelection, duplicate, installClipboardEvents, newItem, pasteClipboard, placeFlag, swallow, TEXT_FIELD, textField, transform } from "./actions";
 import { ContextMenu, openMenu } from "./Menu";
 import { Toolbar, ToolbarButton, ToolbarSeparator, ToolbarSpacer } from "./ui/toolbar";
 import { StatusBar, StatusSegment } from "./ui/status-bar";
@@ -110,8 +110,8 @@ export function installGuards() {
     if (asking) return void invoke("quit_waiting"); // (asked again: still deciding)
     if (no === refused) return; // (asked again just before this window's Cancel ended that Quit)
     const s = useS.getState();
-    // (asking already, closing it or opening another file: that answer first, the Quit stays)
-    if (prompting) return void invoke("quit_answer", { ok: false, asked: true });
+    // (asking already, closing it or saving: that answer first, the Quit waits for it, asking again)
+    if (prompting) return void invoke("quit_waiting");
     if (!s.dirty || (settled?.no === no && s.items === settled.items)) return void invoke("quit_answer", { ok: true, asked: false });
     asking = true;
     let ok = false;
@@ -136,7 +136,7 @@ export function installGuards() {
   installClipboardEvents();
   useS.subscribe((s, prev) => {
     // the file open here (opened again from another window: this one comes forward instead)
-    if (s.path !== prev.path || s.unwritten !== prev.unwritten) void invoke("doc_path", { path: s.path && s.path !== s.unwritten ? s.path : null }).catch(() => {});
+    if (s.path !== prev.path || s.unwritten !== prev.unwritten) resyncDoc();
     // mirror unsaved work for exits we cannot intercept (Dock > Quit, logout, crashes)
     if (s.items === prev.items && s.dirty === prev.dirty && s.path === prev.path) return;
     clearTimeout(mirrorTimer);
@@ -239,7 +239,7 @@ async function saveNow(as: boolean): Promise<boolean> {
   const bare = !path.toLowerCase().endsWith(`.${ext}`);
   if (bare) path += `.${ext}`;
   // (open in another window: the two would write over each other)
-  if (await elsewhere(path, false)) {
+  if (path !== prev && (await elsewhere(path, false))) {
     await message(`${fileName(path)} is open in another window: close it there first.`, { title: "nomospice" });
     return false;
   }
@@ -502,15 +502,8 @@ export function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const st = useS.getState(), key = e.key.toLowerCase();
-      if (typing(e) || st.dialog || st.menu) {
-        // left alone here, the menu bar's keys (macOS) would run it all the same: swallowed, but a
-        // text field's own (⌘Z, ⌘A, ⌘X ⌘C ⌘V; letters; ⌃ moves the caret) and the menu's (⌘W ⌘Q ⌘,)
-        // (⌃R too; in a text field letters and ⌃-keys are its own, a select jumps to what is typed)
-        const letter = key.length === 1 && key !== " " && !e.metaKey && !(e.target instanceof Element && e.target.closest(`${TEXT_FIELD},select`));
-        if ((e.metaKey && (key === "enter" || (key.length === 1 && PAGE_KEYS.includes(key)))) || letter) e.preventDefault();
-        return;
-      }
+      const st = useS.getState();
+      if (typing(e) || st.dialog || st.menu) return void (swallow(e, !!st.menu) && e.preventDefault());
       const modKey = e.metaKey || e.ctrlKey;
       // plain Space/Enter on a focused button or checkbox operate that control (⌘↵ still runs)
       if (!modKey && (e.key === " " || e.key === "Enter") && e.target instanceof HTMLElement && e.target.closest("button,input,a")) return;

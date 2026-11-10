@@ -97,6 +97,16 @@ export const MENU_OWN_KEYS = "wq,";
  *  else the menu bar would run them all the same. */
 export const PAGE_KEYS = "nosdfkl=+-";
 
+/** Whether a key the page leaves alone (typing, a dialog or `contextMenu` open) must be swallowed,
+ *  else the menu bar's keys (macOS) would run it all the same: in a context menu all but its own
+ *  keys and the menu's (Close, Quit, model libraries); elsewhere the page's ⌘-keys and, outside a
+ *  text field, letters and ⌃-keys (in one they are its own; a select jumps to what is typed). */
+export function swallow(e: KeyboardEvent, contextMenu: boolean) {
+  const key = e.key.toLowerCase();
+  const letter = key.length === 1 && key !== " " && !e.metaKey && !(e.target instanceof Element && e.target.closest(`${TEXT_FIELD},select`));
+  return letter || (e.metaKey && (contextMenu ? !MENU_OWN_KEYS.includes(key) : key === "enter" || (key.length === 1 && PAGE_KEYS.includes(key))));
+}
+
 /** What takes typing (a checkbox or button does not). */
 export const TEXT_FIELD = "input:not([type=checkbox]):not([type=radio]):not([type=button]),textarea";
 /** The focused text field, if one has the focus (its own Undo, Select All, Copy … then). */
