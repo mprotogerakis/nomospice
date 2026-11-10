@@ -215,11 +215,13 @@ async function dropFiles(paths: string[]) {
 
 /** Save (as): true once the file is written. */
 async function saveFile(as = false): Promise<boolean> {
-  prompting++; // (its dialogs open: a Quit waits for them, as for discardOk's)
+  // (a dialog to come: a Quit waits for it, as for discardOk's; a plain save does not stop a Quit)
+  const { path, unwritten } = useS.getState(), asks = as || !path || path === unwritten;
+  if (asks) prompting++;
   try {
     return await saveNow(as);
   } finally {
-    prompting--;
+    if (asks) prompting--;
   }
 }
 async function saveNow(as: boolean): Promise<boolean> {
@@ -504,7 +506,8 @@ export function App() {
       if (typing(e) || st.dialog || st.menu) {
         // left alone here, the menu bar's keys (macOS) would run it all the same: swallowed, but a
         // text field's own (⌘Z, ⌘A, ⌘X ⌘C ⌘V; letters; ⌃ moves the caret) and the menu's (⌘W ⌘Q ⌘,)
-        const letter = key.length === 1 && key !== " " && !e.metaKey && !e.ctrlKey && !(e.target instanceof Element && e.target.closest(`${TEXT_FIELD},select`)); // (a select jumps to what is typed)
+        // (⌃R too; in a text field letters and ⌃-keys are its own, a select jumps to what is typed)
+        const letter = key.length === 1 && key !== " " && !e.metaKey && !(e.target instanceof Element && e.target.closest(`${TEXT_FIELD},select`));
         if ((e.metaKey && (key === "enter" || (key.length === 1 && PAGE_KEYS.includes(key)))) || letter) e.preventDefault();
         return;
       }

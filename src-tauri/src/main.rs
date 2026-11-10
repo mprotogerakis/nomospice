@@ -272,8 +272,20 @@ async fn simulate(window: tauri::Window, items: Vec<Item>, dir: Option<String>, 
     tauri::async_runtime::spawn_blocking(move || {
         let prepared = sim.prepared(dir.as_deref().map(std::path::Path::new), &mut netlist.warnings);
         let simulated = prepared.text().to_string();
-        let _sweep = SWEEP.lock().unwrap_or_else(|e| e.into_inner());
-        let res = ngspice::run_until(&prepared, &|| ngspice::halted_since(&who, op));
+        // (waiting for another window's root locus: this window's Halt still ends the wait)
+        let sweep = loop {
+            match SWEEP.try_lock() {
+                Ok(g) => break Some(g),
+                Err(std::sync::TryLockError::Poisoned(e)) => break Some(e.into_inner()),
+                Err(std::sync::TryLockError::WouldBlock) if ngspice::halted_since(&who, op) => break None,
+                Err(std::sync::TryLockError::WouldBlock) => std::thread::sleep(std::time::Duration::from_millis(50)),
+            }
+        };
+        let res = match &sweep {
+            Some(_) => ngspice::run_until(&prepared, &|| ngspice::halted_since(&who, op)),
+            None => Err(vec!["Halted before it ran (another window's root locus held ngspice).".into()]),
+        };
+        drop(sweep);
         // for the s-plane view's root locus; from the user's deck, not the libraries
         let pz = res.as_ref().is_ok_and(|r| r.plot.starts_with("pz"));
         // (with the parameters only a .step sets: the locus runs on the first step's deck, where they are)
@@ -370,6 +382,7 @@ async fn folder_symbols(app: tauri::AppHandle, from: String, to: String, names: 
         let (new, new_sheets) = schematic::folder_contents(std::path::Path::new(&to));
         let (mut out, mut failed): (Vec<(String, bool)>, Vec<String>) = (vec![], vec![]);
         let mut seen = std::collections::HashSet::new(); // (many parts share a symbol)
+        let mut copied = None;
         // (a block's schematic goes along with its symbol, and the symbols it uses with it)
         let mut files: Vec<(std::path::PathBuf, Option<&std::path::PathBuf>)> = vec![];
         let mut queue: std::collections::VecDeque<String> = names.into();
@@ -408,15 +421,16 @@ async fn folder_symbols(app: tauri::AppHandle, from: String, to: String, names: 
                 None => {
                     // every file tried: one that fails does not keep the others back
                     if copy {
-                        if let Err(e) = std::fs::copy(src, std::path::Path::new(&to).join(&file)) {
-                            failed.push(format!("{file}: {e}"));
+                        match std::fs::copy(src, std::path::Path::new(&to).join(&file)) {
+                            Ok(_) => copied = Some(file.clone()),
+                            Err(e) => failed.push(format!("{file}: {e}")),
                         }
                     }
                     out.push((file, false));
                 }
             }
         }
-        if let Some((file, _)) = out.iter().find(|(_, there)| copy && !there) {
+        if let Some(file) = copied {
             symbols_changed(&app, &std::path::Path::new(&to).join(file).to_string_lossy()); // (that folder's windows)
         }
         if failed.is_empty() { Ok(out) } else { Err(failed.join("; ")) }
@@ -577,6 +591,8 @@ fn doc_window_now(app: &tauri::AppHandle, own: &str, path: String, focus: bool, 
 /// load) is passed over, its recovery copy kept for the next start.
 static QUIT: Mutex<Option<(String, std::sync::mpsc::Sender<Option<(bool, bool)>>)>> = Mutex::new(None);
 static QUITTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Quit cleared the recovery copies and ends the app: a mirror write still on its way is dropped.
+static EXITING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// Which Quit it is (a window's "Don't Save" holds for its own Quit only).
 static QUIT_NO: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
@@ -644,6 +660,7 @@ fn quit_all(app: &tauri::AppHandle) {
             continue;
         }
         if let Ok(held) = OWN.lock() {
+            EXITING.store(true, SeqCst);
             for (label, (_, json)) in held.iter() {
                 if labels.contains(label) && !mute.contains(label) {
                     let _ = std::fs::remove_file(json); // (each answered: saved, or not to be kept)
@@ -765,6 +782,9 @@ async fn recovery_save(app: tauri::AppHandle, window: tauri::Window, doc: serde_
     // for each other on SAVES anyway)
     tauri::async_runtime::spawn_blocking(move || {
         let (_held, json) = own(&app, window.label())?;
+        if EXITING.load(std::sync::atomic::Ordering::SeqCst) {
+            return Ok(()); // (after Quit cleared them: not written again)
+        }
         write_atomic(&json, doc.to_string().as_bytes()).map_err(|e| e.to_string())
     })
     .await
@@ -773,11 +793,16 @@ async fn recovery_save(app: tauri::AppHandle, window: tauri::Window, doc: serde_
 
 #[tauri::command]
 async fn recovery_clear(window: tauri::Window) -> Result<(), String> {
-    let held = OWN.lock().map_err(|e| e.to_string())?;
-    match held.get(window.label()) {
-        Some((_, path)) if path.exists() => std::fs::remove_file(path).map_err(|e| e.to_string()),
-        _ => Ok(()), // never saved anything: nothing to create or remove
-    }
+    // (OWN may be held for another window's write: off the async workers)
+    tauri::async_runtime::spawn_blocking(move || {
+        let held = OWN.lock().map_err(|e| e.to_string())?;
+        match held.get(window.label()) {
+            Some((_, path)) if path.exists() => std::fs::remove_file(path).map_err(|e| e.to_string()),
+            _ => Ok(()), // never saved anything: nothing to create or remove
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// A closed window lets go of its recovery file: unlocked, so unsaved work it left (closed
