@@ -49,6 +49,6 @@ Every tutorial can be turned into a narrated video:
 nix shell nixpkgs#ffmpeg -c scripts/docs-video.py docs/tutorial/*.md    # into build/videos/
 ```
 
-Each picture of the page is shown while the text that follows it is spoken; the page's title and the text before the first picture are spoken over the first one. Headings, code, tables and notes are not spoken, so a page can say more than its video. The spoken text is in the video as subtitles and beside it as an `.srt` file. The speech comes from macOS `say` (`NOMOSPICE_VOICE` picks a voice) or from espeak-ng.
+Each picture of the page is shown while the text that follows it is spoken; the page's title and the text before the first picture are spoken over the first one. Code, tables and notes are not spoken, so a page can say more than its video; a heading is spoken only where its section has text before the next picture, such as the closing summary. The spoken text is in the video as subtitles and beside it as an `.srt` file. The speech comes from macOS `say` (`NOMOSPICE_VOICE` picks a voice) or from espeak-ng.
 
 So write a tutorial as pictures, each followed by a short paragraph that says what to do and what you see.

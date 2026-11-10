@@ -5,8 +5,9 @@
     scripts/docs-video.py docs/tutorial/*.md -o build/videos
 
 The page's title and the text before its first picture are spoken over that picture. A picture's
-text runs until the next picture; headings, code, notes (!!!) and tables are not spoken, so a page
-can say more than its video. The spoken text goes into the video as subtitles too, and beside it
+text runs until the next picture; code, notes (!!!) and tables are not spoken, so a page can say
+more than its video. A section with text after a picture (the closing summary) is a cue of its own,
+over the same picture, its heading spoken first. The spoken text goes into the video as subtitles too, and beside it
 as an .srt file.
 
 Speech: macOS `say` (NOMOSPICE_VOICE picks the voice, e.g. "Samantha"), else espeak-ng.
@@ -60,21 +61,22 @@ def scenes(page: pathlib.Path):
             title = line[2:].strip()
             continue
         if line.startswith("#") and text is not None:
-            # (a section after a picture: its text a cue of its own, over the same picture)
+            # (a section after a picture: its heading and text a cue of its own, over the same
+            # picture; one with no text before the next picture says nothing)
             text = []
-            out.append((out[-1][0], text))
+            out.append((out[-1][0], text, line.lstrip("#").strip()))
             continue
         if line.startswith("#") or line.lstrip().startswith("|"):
             continue
         m = re.match(r"\s*!\[[^\]]*\]\(([^)]+)\)\s*$", line)
         if m:
             text = []
-            out.append(((page.parent / m.group(1)).resolve(), text))
+            out.append(((page.parent / m.group(1)).resolve(), text, ""))
             continue
         (intro if text is None else text).append(line)
     if not out:
-        sys.exit(f"{page}: no pictures")
-    result = [(img, spoken(" ".join(t))) for img, t in out]
+        raise ValueError(f"{page}: no pictures, no video")
+    result = [(img, spoken(f"{h}: {' '.join(t)}" if h and "".join(t).strip() else " ".join(t))) for img, t, h in out]
     result = [r for k, r in enumerate(result) if r[1] or k == 0]
     result[0] = (result[0][0], spoken(f"{title}. {' '.join(intro)}") + " " + result[0][1])
     return title, result
@@ -138,7 +140,10 @@ def main():
     a = ap.parse_args()
     for page in a.pages:
         out = a.out if a.out.suffix == ".mp4" else a.out / f"{page.stem}.mp4"
-        video(page, out)
+        try:
+            video(page, out)
+        except ValueError as e:
+            print(e)  # (an overview page among the tutorials)
 
 
 if __name__ == "__main__":
