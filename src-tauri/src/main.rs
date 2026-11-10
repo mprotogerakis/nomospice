@@ -566,15 +566,18 @@ async fn doc_window(app: tauri::AppHandle, window: tauri::Window, path: String, 
 }
 fn doc_window_now(app: &tauri::AppHandle, own: &str, path: String, focus: bool, claim: bool) -> Option<String> {
     use tauri::Manager;
+    // (its links resolved: a claim is written under this name, so two windows claiming it at once,
+    // one through a link, meet in the check under the lock too)
+    let real = std::fs::canonicalize(&path).map_or_else(|_| path.clone(), |p| p.to_string_lossy().into_owned());
     // (compared without holding DOCS: the main thread's doc_path waits for no disk)
     let docs = DOCS.lock().ok()?.clone();
-    let found = docs.iter().find(|(_, p)| **p == path || same_file(std::path::Path::new(p.as_str()), std::path::Path::new(&path))).map(|(l, _)| l.clone());
+    let found = docs.iter().find(|(_, p)| **p == path || **p == real || same_file(std::path::Path::new(p.as_str()), std::path::Path::new(&path))).map(|(l, _)| l.clone());
     let Some(label) = found.or_else(|| {
-        // none: claimed, unless a window claimed the same path meanwhile
+        // none: claimed, unless a window claimed the same file meanwhile
         let mut docs = DOCS.lock().ok()?;
-        let other = docs.iter().find(|(_, p)| **p == path).map(|(l, _)| l.clone());
+        let other = docs.iter().find(|(_, p)| **p == path || **p == real).map(|(l, _)| l.clone());
         if other.is_none() && claim {
-            docs.insert(own.to_string(), path);
+            docs.insert(own.to_string(), real);
         }
         other
     }) else {
