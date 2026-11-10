@@ -216,6 +216,9 @@ function ExportSvg({ items, lib }: { items: Item[]; lib: Record<string, SymbolDe
 }
 
 /** Standalone SVG of the whole schematic in the light theme, cropped to its content. */
+/** The schematic as an SVG file (asked where); nothing drawn: nothing. */
+export const exportSchematic = () => ((s) => void (s.items.some(isShape) && saveSvg(schematicSvg(s.items, s.lib), "")))(useS.getState());
+
 export function schematicSvg(items: Item[], lib: Record<string, SymbolDef>): string {
   const host = document.createElement("div");
   host.style.cssText = "position:fixed;left:-100000px;top:0";
@@ -358,8 +361,8 @@ export const Schematic = memo(function Schematic() {
       autoFit.current = false;
       frame(its, Math.max(view.k, 1)); // (zoomed in further already: kept, if they fit)
     };
-    // (the menu's Zoom In / Out: about the middle, as the corner's buttons)
-    const onZoom = (e: Event) => zoomAt(view.k * ZOOM_STEP ** (e as CustomEvent<number>).detail, size.w / 2, size.h / 2);
+    // (the menu's Zoom In / Out: as the corner's buttons)
+    const onZoom = (e: Event) => zoomBy(ZOOM_STEP ** (e as CustomEvent<number>).detail);
     window.addEventListener("nomospice:fit", onFit);
     window.addEventListener("nomospice:show", onShow);
     window.addEventListener("nomospice:zoom", onZoom);
@@ -395,6 +398,8 @@ export const Schematic = memo(function Schematic() {
     const r = svgRef.current!.getBoundingClientRect();
     return [(e.clientX - r.left - view.x) / view.k, (e.clientY - r.top - view.y) / view.k];
   };
+  /** Zoomed by factor `f` about the middle. */
+  const zoomBy = (f: number) => zoomAt(view.k * f, size.w / 2, size.h / 2);
   const zoomAt = (k: number, sx: number, sy: number) => {
     autoFit.current = false;
     setView((v) => {
@@ -629,7 +634,7 @@ export const Schematic = memo(function Schematic() {
       { label: "Find…", hint: "⌘F", run: () => set({ dialog: { k: "find" } }) },
       { label: "Fit view", hint: "Space", run: fit },
       "-",
-      { label: "Export schematic as SVG…", disabled: !items.some(isShape), run: () => void saveSvg(schematicSvg(items, lib), "") },
+      { label: "Export schematic as SVG…", disabled: !items.some(isShape), run: exportSchematic },
       // (hierarchy: this schematic as a block of others in its folder; back to the one it was opened from)
       { label: "Create block symbol…", run: () => window.dispatchEvent(new Event("nomospice:block-symbol")) },
       { label: "New symbol", run: () => window.dispatchEvent(new Event("nomospice:new-symbol")) },
@@ -798,7 +803,7 @@ export const Schematic = memo(function Schematic() {
           Schematic changed since last run
         </div>
       )}
-      <Controls view={view} onZoom={(f) => zoomAt(view.k * f, size.w / 2, size.h / 2)} onReset={() => zoomAt(1, size.w / 2, size.h / 2)} onFit={fit} />
+      <Controls view={view} onZoom={zoomBy} onReset={() => zoomAt(1, size.w / 2, size.h / 2)} onFit={fit} />
       <MiniMap items={items} lib={lib} view={view} size={size} onCenter={centerAt} />
     </div>
   );

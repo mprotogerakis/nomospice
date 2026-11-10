@@ -11,16 +11,16 @@ import {
   CircleHelp, Info, Plus, Scissors, X, ScrollText, SlidersHorizontal, Spline, Square, Sun, Tag, Type, Undo2, Zap,
 } from "lucide-react";
 import type { Item } from "./types";
-import { Schematic, schematicSvg } from "./Schematic";
+import { exportSchematic, Schematic } from "./Schematic";
 import { Measurements, Waveform } from "./Waveform";
 import { PoleZero } from "./PoleZero";
 import { checkForUpdate, installUpdate, useUpdate } from "./updater";
 import { Dialogs } from "./Dialogs";
 import { Boundary } from "./Boundary";
 import { analysesOf, closeTab, currentTab, dirOf, fileName, docId, isSymbolDoc, viewOf, loadDoc, loadSymbols, placeSymbol, plotKind, probeMode, redo, refreshGit, refreshLibrarySymbols, refreshNets, relToDoc, selectTab, simulate, undo, useS, useStatus } from "./store";
-import { saveRaw, saveSvg } from "./svgExport";
+import { saveRaw } from "./svgExport";
 import { History } from "./History";
-import { isShape, mirror, rotate } from "./geom";
+import { mirror, rotate } from "./geom";
 import { ANALYSES, si, tokens } from "./spice";
 import { copySelection, deleteSelection, duplicate, installClipboardEvents, newItem, pasteClipboard, placeFlag, textField, transform } from "./actions";
 import { ContextMenu, openMenu } from "./Menu";
@@ -97,8 +97,18 @@ export function installGuards() {
   getCurrentWindow().onCloseRequested(async (e) => {
     if (!(await leave())) e.preventDefault();
   });
-  // Quit: every window asks about its own unsaved changes and closes; the last one ends the app
-  listen("quit-requested", async () => void ((await leave()) && (await getCurrentWindow().destroy())));
+  // Quit asks the windows in turn (see quit_all): this one's unsaved changes, in front if it has any
+  let asking = false; // (asked again: Quit chosen again while its question is open)
+  void getCurrentWebviewWindow().listen("quit-ask", async () => {
+    if (asking) return;
+    asking = true;
+    try {
+      if (useS.getState().dirty) await getCurrentWindow().setFocus().catch(() => {});
+      await invoke("quit_answer", { ok: await discardOk() });
+    } finally {
+      asking = false;
+    }
+  });
   // the menu bar's commands, for this window when it is the focused one
   void getCurrentWebviewWindow().listen<string>("menu", (e) => command(e.payload));
   listen("libraries-changed", () => void refreshLibrarySymbols().catch(() => {}));
@@ -129,8 +139,11 @@ async function openFile(path?: string) {
     if (typeof picked !== "string") return;
     path = picked;
   }
-  if (await invoke<boolean>("focus_doc", { path }).catch(() => false)) return;
-  if (!untouched()) return void newWindow([path]);
+  // (this window's own file: read again, as asked)
+  const at = await invoke<string | null>("focus_doc", { path }).catch(() => null);
+  if (at && at !== getCurrentWindow().label) return;
+  if (!at && !untouched()) return void newWindow([path]);
+  if (at && !(await discardOk())) return;
   try {
     await openPath(path);
   } catch (e) {
@@ -252,7 +265,7 @@ async function newSymbol(dir = dirOf(useS.getState().path)) {
 
 /** A block's schematic in place of this one (`up`: the one above); the way back is kept. */
 async function openSheet(path: string, up = false) {
-  if (await invoke<boolean>("focus_doc", { path }).catch(() => false)) return; // (open in another window: there)
+  if (((at) => at && at !== getCurrentWindow().label)(await invoke<string | null>("focus_doc", { path }).catch(() => null))) return; // (open in another window: there)
   if (!(await discardOk())) return;
   // (after the save it may have asked for: where it went; a never written document has no way back)
   const { path: from, parents, unwritten } = useS.getState();
@@ -288,7 +301,7 @@ async function blockSymbol() {
 const C: Record<string, () => unknown> = {
   open: () => openFile(), close: closeDoc, save: () => saveFile(), "save-as": () => saveFile(true),
   "new-symbol": () => newSymbol(), "block-symbol": blockSymbol,
-  "export-svg": () => ((s) => s.items.some(isShape) && saveSvg(schematicSvg(s.items, s.lib), ""))(useS.getState()),
+  "export-svg": () => exportSchematic(),
   "export-plot": () => window.dispatchEvent(new Event("nomospice:export-plot")),
   "export-raw": () => useS.getState().sim?.run && saveRaw(),
   libraries: () => openLibraries(), "check-updates": () => checkForUpdate(true),
@@ -316,11 +329,15 @@ function command(id: string) {
   const field = textField();
   if (field && (id === "undo" || id === "redo")) return void document.execCommand(id);
   if (field && id === "select-all") return field.select();
+  // typing: its keys (⌘D, ⌃R …) edit no part
+  if (field && ["duplicate", "delete", "rotate", "mirror"].includes(id)) return;
   const s = useS.getState();
+  // a context menu open: the keys are its own (as the page's); it goes
+  if (s.menu) return void useS.setState({ menu: null });
   // a dialog open: ⌘W closes it (as Esc); the rest waits (it would replace the dialog and lose its
   // edits), but for help and about, which go
   if (s.dialog && s.dialog.k !== "help" && s.dialog.k !== "about") return void (id === "close" && useS.setState({ dialog: null }));
-  if (s.dialog || s.menu) useS.setState({ dialog: null, menu: null });
+  if (s.dialog) useS.setState({ dialog: null });
   if (s.dialog && id === "close") return;
   if (isSymbolDoc(s.path) && NOT_IN_SYMBOLS.has(id)) return;
   void C[id]?.();
@@ -380,7 +397,8 @@ export function App() {
           const unwritten = !!rec!.path && (rec!.unwritten === rec!.path || !(await invoke<boolean>("path_exists", { path: rec!.path })));
           await loadDoc(rec!.items, rec!.path, unwritten);
           useS.setState({ dirty: true });
-          if (file) void newWindow([file]); // (the file asked for: in a window of its own)
+          // (the file asked for: in a window of its own, unless it is the one restored)
+          if (file && !(await invoke<string | null>("focus_doc", { path: file }).catch(() => null))) void newWindow([file, ...args.filter((a) => a === "--run")]);
         } else if (!main) return void getCurrentWindow().destroy(); // (opened only for it)
         // more unsaved work (several windows were open): each in a window of its own, asked there
         if (main) for (let k = await invoke<number>("recovery_count").catch(() => 0); k > 0; k--) void newWindow(["--restore"]);
@@ -452,26 +470,26 @@ export function App() {
       // deferred: a dialog opened by this key must not receive the same keystroke
       const run = (f: () => unknown) => (e.preventDefault(), setTimeout(f));
       if (mod) {
-        if (k === "z") return run(() => (e.shiftKey ? redo() : undo()));
-        if (k === "y") return run(redo);
-        if (k === "r") return run(() => transform(rotate));
-        if (k === "e") return run(() => transform(mirror));
-        if (k === "a") return run(() => useS.setState({ sel: useS.getState().items.flatMap((it, i) => (it.t === "raw" ? [] : [i])) }));
-        if (k === "d") return run(duplicate);
+        if (k === "z") return run(e.shiftKey ? C.redo : C.undo);
+        if (k === "y") return run(C.redo);
+        if (k === "r") return run(C.rotate);
+        if (k === "e") return run(C.mirror);
+        if (k === "a") return run(C["select-all"]);
+        if (k === "d") return run(C.duplicate);
         // copy, cut, paste of items, by key (WebKit sends no copy event without a text selection);
         // selected text anywhere (the log, the netlist): its own copy
         const text = !!sel?.toString();
         if ((k === "c" || k === "x") && !text) return void (copySelection(k === "x") && e.preventDefault());
         if (k === "v") return e.preventDefault(), pasteClipboard(); // (a selection does not matter: typing does, see above)
-        if (k === "s") return run(() => saveFile(e.shiftKey));
-        if (k === "o") return run(openFile);
+        if (k === "s") return run(e.shiftKey ? C["save-as"] : C.save);
+        if (k === "o") return run(C.open);
         if (k === "n") return run(newWindow);
-        if (k === "k") return run(() => !isSymbolDoc(useS.getState().path) && useS.setState({ dialog: { k: "parts" } }));
-        if (k === "f" && !e.shiftKey && !e.altKey) return run(() => useS.setState({ dialog: { k: "find" } }));
-        if (k === ",") return run(openLibraries); // macOS: the app menu's item has it
-        if (k === "w" && !MAC) return run(closeDoc); // Ctrl+W closes the window (macOS: File → Close takes ⌘W)
-        if (k === "l") return run(togglePanel);
-        if (k === "enter") return run(simulate);
+        if (k === "k") return run(() => !isSymbolDoc(useS.getState().path) && C.component());
+        if (k === "f" && !e.shiftKey && !e.altKey) return run(C.find);
+        if (k === ",") return run(C.libraries);
+        if (k === "w" && !MAC) return run(C.close); // Ctrl+W closes the window (macOS: File → Close takes ⌘W)
+        if (k === "l") return run(C.panel);
+        if (k === "enter") return run(C.run);
         return;
       }
       const map: Record<string, () => unknown> = {

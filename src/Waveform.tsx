@@ -450,8 +450,9 @@ export const Waveform = memo(function Waveform() {
   }, [size, panes.length]);
 
   // the menu's Export Plot as SVG (as the plot's own menu: the Bode panes, not Nyquist or Nichols)
+  const exportPlot = () => void (panes.length && !polarOn && saveSvg(plotSvg(plots.current, panes, useS.getState().plot), "-plot"));
   useEffect(() => {
-    const exp = () => void (panes.length && !polarOn && saveSvg(plotSvg(plots.current, panes, useS.getState().plot), "-plot"));
+    const exp = () => exportPlot();
     window.addEventListener("nomospice:export-plot", exp);
     return () => window.removeEventListener("nomospice:export-plot", exp);
   }, [panes, polarOn]);
@@ -488,7 +489,7 @@ export const Waveform = memo(function Waveform() {
           ] : []),
           "-",
           { label: "Copy data as CSV", hint: polarOn ? "Bode plot only" : undefined, disabled: !panes.length || polarOn, run: () => navigator.clipboard.writeText(csv(xs, xUnit, panes, run?.steps ?? [])) },
-          { label: "Export plot as SVG…", hint: polarOn ? "Bode plot only" : undefined, disabled: !panes.length || polarOn, run: () => void saveSvg(plotSvg(plots.current, panes, useS.getState().plot), "-plot") },
+          { label: "Export plot as SVG…", hint: polarOn ? "Bode plot only" : undefined, disabled: !panes.length || polarOn, run: exportPlot },
           { label: "Export results as .raw…", hint: "all vectors", disabled: !run, run: () => void saveRaw() },
           { label: "Remove all traces", danger: true, disabled: !traces.length, run: () => useS.setState({ traces: [] }) },
         ]);

@@ -505,16 +505,67 @@ fn doc_path(window: tauri::Window, path: Option<String>) {
     }
 }
 
-/// The window that has `path` open comes to the front: true; none has it: false.
+/// The window that has `path` open comes to the front: its label; none has it: None.
 #[tauri::command]
-fn focus_doc(app: tauri::AppHandle, path: String) -> bool {
+fn focus_doc(app: tauri::AppHandle, path: String) -> Option<String> {
     use tauri::Manager;
     let docs = DOCS.lock().map(|d| d.clone()).unwrap_or_default();
-    let Some(label) = docs.iter().find(|(_, p)| *p == &path || same_file(std::path::Path::new(p.as_str()), std::path::Path::new(&path))).map(|(l, _)| l.clone()) else { return false };
-    let Some(w) = app.get_webview_window(&label) else { return false };
+    let label = docs.iter().find(|(_, p)| *p == &path || same_file(std::path::Path::new(p.as_str()), std::path::Path::new(&path)))?.0.clone();
+    let w = app.get_webview_window(&label)?;
     let _ = w.unminimize();
     let _ = w.set_focus();
-    true
+    Some(label)
+}
+
+/// Quit: each window in turn (the focused one first) asks about its unsaved changes; one
+/// cancelled, the app stays as it is; all answered, it ends (their recovery copies with it).
+/// The window asked and where its answer goes; a window that closes meanwhile answers yes.
+static QUIT: Mutex<Option<(String, std::sync::mpsc::Sender<bool>)>> = Mutex::new(None);
+static QUITTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn quit_all(app: &tauri::AppHandle) {
+    use std::sync::atomic::Ordering::SeqCst;
+    use tauri::{Emitter, Manager};
+    let ask = |app: &tauri::AppHandle, label: &str| app.emit_to(tauri::EventTarget::webview_window(label), "quit-ask", ());
+    if QUITTING.swap(true, SeqCst) {
+        // asked again while a window has not answered (its page missed it, reloading): ask it again
+        if let Some(label) = QUIT.lock().ok().and_then(|q| q.as_ref().map(|(l, _)| l.clone())) {
+            let _ = ask(app, &label);
+        }
+        return;
+    }
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let first = focused(&app);
+        let mut labels: Vec<String> = app.webview_windows().into_keys().collect();
+        labels.sort_by_key(|l| Some(l) != first.as_ref());
+        for label in labels {
+            let (tx, rx) = std::sync::mpsc::channel();
+            if let Ok(mut q) = QUIT.lock() {
+                *q = Some((label.clone(), tx));
+            }
+            if app.get_webview_window(&label).is_some() && ask(&app, &label).is_ok() && rx.recv() == Ok(false) {
+                QUIT.lock().map(|mut q| q.take()).ok();
+                QUITTING.store(false, SeqCst);
+                return;
+            }
+        }
+        if let Ok(held) = OWN.lock() {
+            for (_, json) in held.values() {
+                let _ = std::fs::remove_file(json); // (each answered: saved, or not to be kept)
+            }
+        }
+        app.exit(0);
+    });
+}
+
+/// A window's answer to Quit: true, go on (saved, or not to be kept); false, stay.
+#[tauri::command]
+fn quit_answer(window: tauri::Window, ok: bool) {
+    let Ok(mut q) = QUIT.lock() else { return };
+    if q.as_ref().is_some_and(|(l, _)| l == window.label()) {
+        let _ = q.take().unwrap().1.send(ok);
+    }
 }
 
 /// The window menu commands go to: the focused one, else the one focused last, else any.
@@ -528,6 +579,11 @@ fn focused(app: &tauri::AppHandle) -> Option<String> {
 /// A window closed: what it held goes.
 fn forget_window(label: &str) {
     recovery_release(label);
+    if let Ok(mut q) = QUIT.lock() {
+        if q.as_ref().is_some_and(|(l, _)| l == label) {
+            q.take(); // (closed while asked by Quit: its answer is yes)
+        }
+    }
     DOCS.lock().map(|mut d| d.remove(label)).ok();
     PENDING.lock().map(|mut p| p.remove(label)).ok();
 }
@@ -553,6 +609,9 @@ fn halt() {
 type Held = std::collections::BTreeMap<String, (std::fs::File, std::path::PathBuf)>;
 static OWN: Mutex<Held> = Mutex::new(Held::new());
 static CLAIM: Mutex<Held> = Mutex::new(Held::new());
+/// One scan for orphans at a time: a scan locks every candidate while it looks, and windows
+/// restoring at the same time would otherwise find each other's held.
+static SCAN: Mutex<()> = Mutex::new(());
 const STALE: std::time::Duration = std::time::Duration::from_secs(60);
 
 fn recovery_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
@@ -668,6 +727,7 @@ fn orphans(dir: &std::path::Path, limit: usize) -> Vec<(std::fs::File, std::path
 /// stays on disk, locked by us, until `recovery_resolve`.
 #[tauri::command]
 async fn recovery_take(app: tauri::AppHandle, window: tauri::Window) -> Option<serde_json::Value> {
+    let _scan = SCAN.lock().ok()?;
     let (f, lock, doc) = orphans(&recovery_dir(&app).ok()?, 1).pop()?;
     CLAIM.lock().ok()?.insert(window.label().to_string(), (f, lock));
     Some(doc)
@@ -676,6 +736,7 @@ async fn recovery_take(app: tauri::AppHandle, window: tauri::Window) -> Option<s
 /// How many more unsaved documents wait to be restored (each in a window of its own).
 #[tauri::command]
 async fn recovery_count(app: tauri::AppHandle) -> usize {
+    let _scan = SCAN.lock();
     recovery_dir(&app).map_or(0, |d| orphans(&d, usize::MAX).len())
 }
 
@@ -835,10 +896,11 @@ async fn git_init(path: String) -> Result<(), String> {
 /// The menu bar: the commands of the toolbar, hotkeys and context menus, each sent to the focused
 /// window as a "menu" event (its id; New and Quit are handled here). A key shown in a menu is the
 /// page's first (its hotkeys); one the page leaves (a dialog open, typing) reaches the menu, which
-/// then decides as the page would. macOS: Quit asks every window about unsaved changes first (the
-/// system's Quit cannot be vetoed); Undo, Redo and Select All are the page's (the schematic's, or
-/// a text field's), Cut, Copy and Paste the system's (a text field's; the schematic's by key).
-/// Windows: the system's edit items press their keys (Ctrl+C …) into the page.
+/// then decides as the page would. Quit asks every window about unsaved changes first (macOS: the
+/// system's Quit cannot be vetoed). Undo, Redo and Select All are the page's (the schematic's, or
+/// a text field's), Cut, Copy and Paste the system's (a text field's; the schematic's by key or
+/// by the page's copy events). Windows: the system's edit items press their keys (Ctrl+C …)
+/// into the page.
 fn build_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     use tauri::menu::{Menu, MenuItem, PredefinedMenuItem as P, Submenu, HELP_SUBMENU_ID};
     let it = |id: &str, text: &str, key: Option<&str>| MenuItem::with_id(app, id, text, true, key);
@@ -884,23 +946,23 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::
         &it("quit", "Exit", None)?,
     ])?;
     let edit = Submenu::with_items(app, "Edit", true, &[
-        #[cfg(target_os = "macos")]
+        #[cfg(not(windows))]
         &it("undo", "Undo", Some("CmdOrCtrl+Z"))?,
-        #[cfg(target_os = "macos")]
+        #[cfg(not(windows))]
         &it("redo", "Redo", Some("CmdOrCtrl+Shift+Z"))?,
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(windows)]
         &P::undo(app, None)?,
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(windows)]
         &P::redo(app, None)?,
         &sep()?,
         &P::cut(app, None)?,
         &P::copy(app, None)?,
         &P::paste(app, None)?,
         &it("duplicate", "Duplicate", Some("CmdOrCtrl+D"))?,
-        &it("delete", "Delete", key(if cfg!(target_os = "macos") { "Backspace" } else { "Delete" }))?,
-        #[cfg(target_os = "macos")]
+        &it("delete", "Delete", None)?, // (its keys are the page's: the log's selected text has them too)
+        #[cfg(not(windows))]
         &it("select-all", "Select All", Some("CmdOrCtrl+A"))?,
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(windows)]
         &P::select_all(app, None)?,
         &sep()?,
         &it("rotate", "Rotate", Some("Ctrl+R"))?,
@@ -987,8 +1049,7 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::
 fn on_menu(app: &tauri::AppHandle, id: &str) {
     use tauri::Emitter;
     match id {
-        // every window asks about its unsaved changes and closes; the last one ends the app
-        "quit" => drop(app.emit("quit-requested", ())),
+        "quit" => quit_all(app),
         "new" => {
             let app = app.clone();
             tauri::async_runtime::spawn(async move { open_window(&app, vec![]) });
@@ -1050,7 +1111,7 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![symbols, examples, path_exists, open_asc, save_asc, block_symbol, export_svg, export_raw, netlist, simulate, root_locus, cancel_locus, folder_symbols, trace, run_id, halt, cli_args, recovery_save, recovery_take, recovery_count, recovery_resolve, recovery_clear,
-            new_window, window_count, doc_path, focus_doc,
+            new_window, window_count, doc_path, focus_doc, quit_answer,
             library_sources, library_set_sources, library_search, library_text, library_fetch_microcap,
             git_status, git_log, git_show, git_commit, git_init])
         .setup(|app| {
