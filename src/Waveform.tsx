@@ -209,14 +209,15 @@ export const Waveform = memo(function Waveform() {
   const linear = xs.length > 2 && Math.abs(xs[2] - 2 * xs[1] + xs[0]) <= 1e-9 * Math.abs(xs[1] - xs[0]);
   const logX = freq && xs[0] > 0 && (!linear || spec);
   const panes = useMemo<Pane[]>(() => {
-    if (!shown.length || zero) return [];
+    if (!shown.length || (zero && !lines.length)) return [];
     const split = (t: Trace, y: (number | null)[], u: string, r: boolean): Series[] => {
       const n = Math.max(1, Math.floor(y.length / seg));
       return Array.from({ length: n }, (_, k) => ({ t, y: y.slice(k * seg, (k + 1) * seg), k, n, u, r }));
     };
     // complex vectors (.ac, AC .sens) -> magnitude (dB) + phase panes; real ones (db(), ph() ...) as they are
-    const cplx = signals.filter((t) => t.data!.im);
-    const real = signals.filter((t) => !t.data!.im);
+    // (all of them 0 in an .ac: nothing of theirs to draw, only the reference lines, the notice over them)
+    const cplx = zero ? [] : signals.filter((t) => t.data!.im);
+    const real = zero ? [] : signals.filter((t) => !t.data!.im);
     const panes: Pane[] = [];
     if (cplx.length) panes.push({ unit: "dB", unit2: "", series: cplx.flatMap((t) => split(t, mag(t), "dB", !!t.right)) }, { unit: "°", unit2: "", series: cplx.flatMap((t) => split(t, phase(t, seg), "°", !!t.right)) });
     // a trace moved to another unit's pane goes there while that pane has traces of its own
@@ -496,8 +497,8 @@ export const Waveform = memo(function Waveform() {
       }}>
         {polarOn ? <Polar key={`${polar}${fitted}`} curves={curves} freqs={xs} mode={polar!} onHover={hoverAt} others={realLabels} />
           : panes.map((p, i) => <div key={`${p.unit}-${i}`} ref={(el) => { paneEls.current[i] = el; }} />)}
-        {!panes.length && (
-          <div className="absolute inset-0 flex items-center justify-center text-xs text-text-tertiary">
+        {(!panes.length || zero) && (
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-xs text-text-tertiary">
             {!run ? `Run a simulation (${keys("⌘↵")}).` : zero ? "All AC results are 0: no source has an AC amplitude. Give the input source one, e.g. AC 1." : run.plot.startsWith("noise") ? "Add a trace: onoise_spectrum or inoise_spectrum." : run.plot.startsWith("sens") ? "Add a trace: the sensitivity of a part, e.g. r1." : "Click a wire to plot its voltage, a component to plot its current."}
           </div>
         )}

@@ -455,7 +455,8 @@ export function App() {
         if (restore) return;
       }
       // (unless another window has the file by now: that one comes forward, one opened for it closes)
-      if (file && (await docWindow(file, true, true))) return void (!main && getCurrentWindow().destroy());
+      // (this window's own claim, from before a reload of its page: opened here all the same)
+      if (file && ((at) => at && at !== getCurrentWindow().label)(await docWindow(file, true, true))) return void (!main && getCurrentWindow().destroy());
       try {
         if (file) await openPath(file);
         if (args.includes("--run")) await simulate();

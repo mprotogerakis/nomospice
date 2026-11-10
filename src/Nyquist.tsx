@@ -154,7 +154,8 @@ export const Polar = memo(function Polar({ curves, freqs, mode, onHover, others 
   const marks = useMemo(() => {
     const at = (f: number | null) => {
       if (f == null || freqs.length < 2 || f < freqs[0] || f > freqs[freqs.length - 1]) return null;
-      const i = Math.max(0, Math.min(freqs.length - 2, freqs.findIndex((x) => x > f) - 1));
+      const k = freqs.findIndex((x) => x > f); // (none above: the last frequency itself, the last interval)
+      const i = k < 0 ? freqs.length - 2 : Math.max(0, k - 1);
       return { i, t: freqs[i + 1] === freqs[i] ? 0 : (f - freqs[i]) / (freqs[i + 1] - freqs[i]) };
     };
     return ([["A", at(fa)], ["B", at(fb)]] as const).flatMap(([name, p]) => (p ? [{ name, ...p }] : []));

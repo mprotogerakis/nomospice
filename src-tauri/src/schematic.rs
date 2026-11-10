@@ -874,7 +874,9 @@ impl Hier {
             return n.clone();
         }
         let base = format!("sheet_{}", net_name(sym));
-        let name = (1..).map(|k| if k == 1 { base.clone() } else { format!("{base}_{k}") }).find(|n| !self.names.values().any(|v| v.eq_ignore_ascii_case(n))).unwrap();
+        // (nor a .subckt of the top schematic's own: a call would find that one. ponytail: a library's
+        // of that name is not looked for; `sheet_` names are nomospice's)
+        let name = (1..).map(|k| if k == 1 { base.clone() } else { format!("{base}_{k}") }).find(|n| !self.names.values().any(|v| v.eq_ignore_ascii_case(n)) && !self.top_defs.contains(&n.to_lowercase())).unwrap();
         self.names.insert(sym.to_string(), name.clone());
         name
     }
@@ -3310,6 +3312,9 @@ SYMBOL half 400 300 R0\nSYMATTR InstName U4\nSYMATTR Value R=3k\nFLAG 352 300 a\
         assert!(nl.warnings.iter().any(|w| w.starts_with("XU3 passes no r")), "a sheet's include is its own: {:?}", nl.warnings);
         let nl = netlist(&parse_asc("Version 4\nSYMBOL div 0 0 R0\nSYMATTR InstName U1\n"), &mut lib);
         assert!(!nl.warnings.iter().any(|w| w.contains("no ground")), "grounded in its sheet: {:?}", nl.warnings);
+        // (the top's own .subckt of the name a block would get: the block takes another)
+        let t = netlist(&parse_asc("Version 4\nSYMBOL div 0 0 R0\nSYMATTR InstName U1\nTEXT 0 0 Left 2 !.subckt sheet_div a b\nR1 a b 1\n.ends\n"), &mut lib).text;
+        assert!(t.contains(".subckt sheet_div_2 ") && t.contains("XU1 ") && t.lines().any(|l| l.starts_with("XU1 ") && l.contains(" sheet_div_2")), "{t}");
         // (a model inside a .subckt of the top's own is no sheet's: the library's is pulled)
         let t = netlist(&parse_asc("Version 4\nSYMBOL half 0 0 R0\nSYMATTR InstName U1\nTEXT 0 0 Left 2 !.subckt mysub a\\n.model 1N4148 D\\n.ends\n"), &mut lib).text;
         assert!(t.contains(".model 1N4148 D(IS="), "{t}");
