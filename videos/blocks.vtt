@@ -1,0 +1,37 @@
+WEBVTT
+
+1
+00:00:00.000 --> 00:00:33.040
+Your own block. In this tutorial you turn the RC low-pass into a block: a part with its own symbol that stands for its schematic. You place it twice in another schematic to make a second-order filter, look inside it, and open its symbol in the symbol editor. Start with the filter alone: the resistor, the capacitor to ground, and the labels in and out, without the source. Save it as rcfilter.asc in a folder of its own. The file name becomes the name of the block.
+
+2
+00:00:33.840 --> 00:00:48.400
+The labels are how the block connects to the outside. Double-click the label in and set its Port to input. Set the port of out to output in the same way. Ports are drawn as hexagons. Save the schematic.
+
+3
+00:00:49.200 --> 00:01:03.280
+Right-click an empty spot of the canvas and choose Create block symbol. nomospice writes rcfilter.asy beside the schematic: a box with the inputs on the left and the outputs on the right.
+
+4
+00:01:04.080 --> 00:01:24.800
+Make a new schematic with Command N and save it in the same folder: a block is found beside the schematic that uses it. Press P for the component library. Search for rcfilter: it is listed as a block of rcfilter.asc, with its pins in and out. Place it like any other part.
+
+5
+00:01:25.600 --> 00:01:43.840
+Here two blocks are placed in series and driven by an AC source. Each block runs as a subcircuit of its schematic. The output falls off twice as steeply as one filter alone, 40 decibels per decade, and the label mid shows how the second filter loads the first.
+
+6
+00:01:44.640 --> 00:01:50.160
+Right-click a block. Its menu can open the block's schematic and edit its symbol.
+
+7
+00:01:50.960 --> 00:02:02.480
+Open its schematic: nomospice shows rcfilter.asc in place of the schematic above, and the status bar shows the way back up. Click it to return.
+
+8
+00:02:03.280 --> 00:02:21.760
+Edit its symbol: the symbol opens on the canvas. Draw lines with the wire tool, add pins with the label tool, move and delete them like parts, and set the symbol's attributes from the canvas menu. Saved, the symbol is redrawn in every schematic of its folder.
+
+9
+00:02:22.560 --> 00:02:44.160
+What you have done: marked labels as ports and made a block symbol from a schematic; placed the block twice and simulated the hierarchy; opened a block's schematic and its symbol. That is the end of the tutorials. The how-to guides show how to do particular tasks, and the reference lists every key, menu and directive.

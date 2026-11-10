@@ -1200,9 +1200,9 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#videos-experimental" class="md-nav__link">
+  <a href="#videos" class="md-nav__link">
     <span class="md-ellipsis">
-      Videos (experimental)
+      Videos
     </span>
   </a>
   
@@ -1367,9 +1367,9 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#videos-experimental" class="md-nav__link">
+  <a href="#videos" class="md-nav__link">
     <span class="md-ellipsis">
-      Videos (experimental)
+      Videos
     </span>
   </a>
   
@@ -1423,13 +1423,13 @@ scripts/docs-shots.sh<span class="w"> </span>first-circuit<span class="w">      
 </code></pre></div>
 <p>Other helpers: <code>move</code>, <code>rightClick</code>, <code>type</code> (into a field by selector), <code>press</code> (a button, tab or menu item by its text), <code>clickAt</code> and <code>menuAt</code> (an element by selector), <code>load</code> (a schematic as items, saved in the scene's own folder), <code>example</code> (one of the app's examples), <code>command</code> (a menu bar command by its id), <code>setPlot</code> (cursors, zoom), <code>useS</code> (the app's state) and <code>invoke</code> (a backend command). See <code>src/scenes.ts</code>.</p>
 <p>With pngquant installed, the pictures are stored with a palette of their own, a quarter of the size. The app runs under its own identifier, so the installed app's settings and recovery files are not touched, and git commits a scene makes are signed by <em>nomospice docs</em>. Change the app, run the scenes again, and the pictures are current.</p>
-<h2 id="videos-experimental">Videos (experimental)<a class="headerlink" href="#videos-experimental" title="Permanent link">&para;</a></h2>
-<p>Every tutorial can be turned into a narrated video. They are not published yet:</p>
-<div class="highlight"><pre><span></span><code><span class="nv">OPENROUTER_API_KEY</span><span class="o">=</span>…<span class="w"> </span>nix<span class="w"> </span>shell<span class="w"> </span>nixpkgs#ffmpeg<span class="w"> </span>-c<span class="w"> </span>scripts/docs-video.py<span class="w"> </span>docs/tutorial/*.md<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>--model<span class="w"> </span>elevenlabs/eleven-v4<span class="w"> </span>--voice<span class="w"> </span>george<span class="w">             </span><span class="c1"># into build/videos/</span>
+<h2 id="videos">Videos<a class="headerlink" href="#videos" title="Permanent link">&para;</a></h2>
+<p>Every tutorial is also a narrated video, shown on its page and published on YouTube:</p>
+<div class="highlight"><pre><span></span><code><span class="nv">OPENROUTER_API_KEY</span><span class="o">=</span>…<span class="w"> </span>nix<span class="w"> </span>shell<span class="w"> </span>nixpkgs#ffmpeg<span class="w"> </span>-c<span class="w"> </span>scripts/docs-video.py<span class="w"> </span>docs/tutorial/*.md<span class="w">   </span><span class="c1"># into build/videos/</span>
 </code></pre></div>
 <p>Each picture of the page is shown while the text that follows it is spoken; the page's title and the text before the first picture are spoken over the first one. Code, tables and notes are not spoken, so a page can say more than its video; a heading is spoken only where its section has text before the next picture, such as the closing summary. The spoken text is in the video as subtitles and beside it as an <code>.srt</code> file.</p>
-<p>The voice comes from <a href="https://openrouter.ai">OpenRouter</a>'s text-to-speech models (the models and their voices: <code>https://openrouter.ai/api/v1/models?output_modalities=speech</code>). Each text is spoken once and kept in <code>build/videos/.speech/</code>, so building a video again costs nothing unless its text changed. Without a key the script falls back to macOS <code>say</code> or espeak-ng, which sound far worse.</p>
+<p>The narrator is George of ElevenLabs v4, through <a href="https://openrouter.ai">OpenRouter</a>'s text-to-speech models (<code>--model</code> and <code>--voice</code> choose another ; the models and their voices: <code>https://openrouter.ai/api/v1/models?output_modalities=speech</code>). Each text is spoken once and kept in <code>build/videos/.speech/</code>, so building a video again costs nothing unless its text changed. Without a key the script falls back to macOS <code>say</code> or espeak-ng, which sound far worse.</p>
+<p>The site serves the videos itself, so watching one sends nothing to a third party: <code>scripts/docs_hooks.py</code> copies them from <code>build/videos/</code> into the built site, with their subtitles as WebVTT, and <code>mkdocs gh-deploy</code> refuses to publish a page whose video is missing. They are not in git. After a tutorial changes, make its video again, upload it to YouTube in place of the old one, and put the new link into the page's <em>As a video</em> box.</p>
 <p>So write a tutorial as pictures, each followed by a short paragraph that says what to do and what you see.</p>
 
 

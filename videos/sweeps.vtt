@@ -1,0 +1,33 @@
+WEBVTT
+
+1
+00:00:00.000 --> 00:00:25.280
+Sweeps and measurements. In this tutorial you run the RC low-pass for three capacitor values at once and let nomospice measure the corner frequency of each. At the end you see the same idea used for tolerances: a Monte Carlo analysis. Open the example rcbode from the start screen and run it. It is the filter of the previous tutorials with an AC analysis.
+
+2
+00:00:26.080 --> 00:00:39.120
+Right-click the capacitor and choose Edit. Instead of a number, give it the value C in curly braces. The braces tell SPICE that this is an expression, here a parameter named C.
+
+3
+00:00:39.920 --> 00:00:55.200
+Press S for a SPICE directive, and type a step command: dot step, param C, list 47n 100n 220n. Click OK and place it under the other directives.
+
+4
+00:00:56.000 --> 00:01:05.840
+Run it. The analysis now runs once for each value, and every trace becomes a family of curves. The table beside the plot lists the steps.
+
+5
+00:01:06.640 --> 00:01:26.080
+Press S again and choose the Measurement tab. Name the result fc, and measure where a signal reaches a value: the output in decibels, vdb of out, reaching −3. The line below shows the dot meas command the form writes. Click OK and place it.
+
+6
+00:01:26.880 --> 00:01:45.360
+Run once more. The measurements appear beside the plot, one per step: 3.38 kilohertz for 47 nanofarads, 1.59 kilohertz for 100, and 722 hertz for 220, as 1 over 2π R C predicts.
+
+7
+00:01:46.160 --> 00:02:12.000
+The same mechanism handles tolerances. Open the example montecarlo: its resistor is mc of 1k and 0.05, a value drawn anew within 5 percent in every run, and its capacitor varies by 20 percent. A step over a dummy parameter, run 1 to 20, repeats the analysis twenty times, and the measurement gives the spread of the corner frequency.
+
+8
+00:02:12.800 --> 00:02:37.200
+What you have done: used a parameter in curly braces as a part's value; swept it with a step directive into a family of curves; measured a quantity per step with a meas directive, written by a form; seen tolerances simulated as a Monte Carlo analysis. Next: Your own block turns the filter into a part you can place in other schematics.

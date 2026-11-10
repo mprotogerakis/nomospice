@@ -1,0 +1,53 @@
+WEBVTT
+
+1
+00:00:00.000 --> 00:00:22.880
+Your first simulation. In this tutorial you draw an RC low-pass filter, feed it a sine wave and look at what comes out: the two voltages, a current, and the delay between input and output. It takes about ten minutes. When nomospice starts, it shows an empty schematic and a list of examples. You will start from scratch.
+
+2
+00:00:23.680 --> 00:00:29.440
+Press V to pick up a voltage source. It follows the mouse. Click to put it down.
+
+3
+00:00:30.240 --> 00:00:49.920
+Press R for a resistor, and Control R to turn it on its side before you click. Then press C for a capacitor. Press Escape when you are done placing, and the space bar to fit the view. nomospice names the parts V1, R1 and C1 and gives each a default value.
+
+4
+00:00:50.720 --> 00:01:07.760
+Press W for the wire tool. Click the top of the source, click again where the wire turns the corner, and click the left end of the resistor. The wire ends there because it reached a pin. Draw the second wire from the right end of the resistor to the top of the capacitor.
+
+5
+00:01:08.560 --> 00:01:22.320
+A circuit needs a ground. Press G and click under the source and under the capacitor. Then press N to name a net: enter the name in, click OK, and click the wire at the top of the source.
+
+6
+00:01:23.120 --> 00:01:31.200
+Name the other net out in the same way. Named nets are easier to find in the results, and the first run plots them for you.
+
+7
+00:01:32.000 --> 00:01:41.840
+Double-click the capacitor and type 100n. Next to the field, nomospice shows how SPICE reads it: 100 nanofarads.
+
+8
+00:01:42.640 --> 00:01:54.480
+Double-click the source and choose Sine: an amplitude of 1 volt at 1 kilohertz. The preview shows the waveform, and the line below it shows the SPICE text the form writes.
+
+9
+00:01:55.280 --> 00:02:08.880
+Click the sliders in the toolbar to edit the simulation command. Choose Transient and a stop time of 3m, three milliseconds. Click OK, then click into the schematic to place the directive.
+
+10
+00:02:09.680 --> 00:02:21.360
+Press Command Return to run. The plot opens above the schematic with the voltages of the two named nets: the input sine, and the output, smaller and a little later.
+
+11
+00:02:22.160 --> 00:02:33.040
+Click the capacitor. Its current is added to the plot, in a pane of its own because it is a current, not a voltage. Clicking a wire plots its voltage the same way.
+
+12
+00:02:33.840 --> 00:02:54.720
+Click the plot to set cursor A, and shift-click to set cursor B. The table beside the plot shows each trace at both cursors and the difference between them. Here the output peaks 89 microseconds after the input: a phase of 32 degrees, just as the arctangent of 2πfRC predicts.
+
+13
+00:02:55.520 --> 00:03:29.040
+What you have done: placed parts with single keys, turned one with Control R, and wired them; named nets and set values in forms that show the SPICE text they write; run a transient analysis, probed a current by clicking a part, and measured with cursors. Press Command S to save the schematic as an dot asc file. On Windows and Linux, use Control wherever this guide says Command. Next: Frequency response looks at the same filter in the frequency domain.
