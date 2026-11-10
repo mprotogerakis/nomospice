@@ -223,12 +223,20 @@ fn lib_at<'a>(lib: &'a Lib, dir: Option<&str>) -> std::sync::MutexGuard<'a, Libr
 /// simulation (which stops it via SWEEP_GEN) waits for it; traces check the run id instead.
 static SWEEP: Mutex<()> = Mutex::new(());
 /// Bumped to stop a running sweep at its next step (a new simulation, or the locus panel's Halt).
-static SWEEP_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static SWEEP_GEN: Mutex<std::collections::BTreeMap<String, u64>> = Mutex::new(std::collections::BTreeMap::new());
+/// Window `who`'s sweep generation; `bump`: moved on first (its running sweep stops).
+fn sweep_gen(who: &str, bump: bool) -> u64 {
+    let Ok(mut g) = SWEEP_GEN.lock() else { return 0 };
+    let n = g.entry(who.to_string()).or_insert(0);
+    *n += bump as u64;
+    *n
+}
 
 /// `dir`: folder of the .asc, for relative `.include`/`.lib` paths.
 #[tauri::command]
-async fn simulate(items: Vec<Item>, dir: Option<String>, lib: tauri::State<'_, Lib>) -> Result<Sim, String> {
-    let op = ngspice::begin(); // a Halt pressed from here on (netlisting, include expansion) still counts
+async fn simulate(window: tauri::Window, items: Vec<Item>, dir: Option<String>, lib: tauri::State<'_, Lib>) -> Result<Sim, String> {
+    let who = window.label().to_string();
+    let op = ngspice::begin(&who); // a Halt pressed from here on (netlisting, include expansion) still counts
     // the UI gets the clean netlist (same nets/insts/probes); the one with current sensors runs
     // both netlists from one state of the library (the UI's nets, insts, probes match what runs)
     let (mut netlist, sim, symbols) = {
@@ -238,13 +246,14 @@ async fn simulate(items: Vec<Item>, dir: Option<String>, lib: tauri::State<'_, L
         lib.reread_sheets();
         (schematic::netlist(&items, &mut lib), schematic::netlist_for_sim(&items, &mut lib), symbols)
     };
-    // the newer request wins: a running root locus stops at its next step, then this runs
-    SWEEP_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    // the newer request wins: this window's running root locus stops at its next step, then this
+    // runs (another window's: this one waits for it)
+    sweep_gen(&who, true);
     tauri::async_runtime::spawn_blocking(move || {
         let prepared = sim.prepared(dir.as_deref().map(std::path::Path::new), &mut netlist.warnings);
         let simulated = prepared.text().to_string();
         let _sweep = SWEEP.lock().unwrap_or_else(|e| e.into_inner());
-        let res = ngspice::run_until(&prepared, &|| ngspice::halted_since(op));
+        let res = ngspice::run_until(&prepared, &|| ngspice::halted_since(&who, op));
         // for the s-plane view's root locus; from the user's deck, not the libraries
         let pz = res.as_ref().is_ok_and(|r| r.plot.starts_with("pz"));
         // (with the parameters only a .step sets: the locus runs on the first step's deck, where they are)
@@ -269,16 +278,17 @@ async fn simulate(items: Vec<Item>, dir: Option<String>, lib: tauri::State<'_, L
 /// R/C/L instance). Per step: the (re, im) of every pole, or None where `.pz` failed
 /// (it often does near a pole crossing; the view leaves a gap). Halt stops after the current step.
 #[tauri::command]
-async fn root_locus(items: Vec<Item>, dir: Option<String>, target: String, values: Vec<f64>, lib: tauri::State<'_, Lib>) -> Result<Vec<Option<Vec<(f64, f64)>>>, String> {
-    let op = ngspice::begin();
-    let gen = SWEEP_GEN.load(std::sync::atomic::Ordering::SeqCst); // at once: a cancel while netlisting counts
+async fn root_locus(window: tauri::Window, items: Vec<Item>, dir: Option<String>, target: String, values: Vec<f64>, lib: tauri::State<'_, Lib>) -> Result<Vec<Option<Vec<(f64, f64)>>>, String> {
+    let who = window.label().to_string();
+    let op = ngspice::begin(&who);
+    let gen = sweep_gen(&who, false); // at once: a cancel while netlisting counts
     let sim = {
         let mut lib = lib_at(&lib, dir.as_deref());
         lib.reread_sheets(); // (a run reads the blocks' schematics again)
         schematic::netlist_for_sim(&items, &mut lib)
     };
     // Halt, a new simulation or the panel's Halt: also mid-step (bg_halt)
-    let stop = move || ngspice::halted_since(op) || SWEEP_GEN.load(std::sync::atomic::Ordering::SeqCst) != gen;
+    let stop = move || ngspice::halted_since(&who, op) || sweep_gen(&who, false) != gen;
     tauri::async_runtime::spawn_blocking(move || {
         let deck = sim.prepared(dir.as_deref().map(std::path::Path::new), &mut vec![]);
         // (a .step deck: its first step, so a parameter only .step defines is there; one .pz per locus step)
@@ -402,10 +412,11 @@ fn same_file(a: &std::path::Path, b: &std::path::Path) -> bool {
     matches!((canon(a), canon(b)), (Ok(x), Ok(y)) if x == y)
 }
 
-/// Stops a running root locus at its next step (its panel's Halt; the toolbar Halt stops everything).
+/// Stops this window's running root locus at its next step (its panel's Halt; the toolbar Halt
+/// stops everything of the window).
 #[tauri::command]
-fn cancel_locus() {
-    SWEEP_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+fn cancel_locus(window: tauri::Window) {
+    sweep_gen(window.label(), true);
 }
 
 /// The results of run `run` as a .raw file.
@@ -528,9 +539,10 @@ fn doc_window(app: tauri::AppHandle, window: tauri::Window, path: String, focus:
 /// Quit: each window in turn (the focused one first) asks about its unsaved changes; one
 /// cancelled, the app stays as it is. Rounds until no window had anything new to ask about (one
 /// edited or opened while another asked is asked too); then it ends, their recovery copies with it.
-/// The window asked and where its answer goes, (go on, asked the user); a window that closes
-/// meanwhile answers go on.
-static QUIT: Mutex<Option<(String, std::sync::mpsc::Sender<(bool, bool)>)>> = Mutex::new(None);
+/// The window asked and where its answer goes: (go on, asked the user), or None: still asking. A
+/// window that closes meanwhile answers go on; one whose page answers nothing at all (it failed to
+/// load) is passed over, its recovery copy kept for the next start.
+static QUIT: Mutex<Option<(String, std::sync::mpsc::Sender<Option<(bool, bool)>>)>> = Mutex::new(None);
 static QUITTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// Which Quit it is (a window's "Don't Save" holds for its own Quit only).
 static QUIT_NO: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -552,7 +564,7 @@ fn quit_all(app: &tauri::AppHandle) {
         let first = focused(&app);
         let mut labels: Vec<String> = app.webview_windows().into_keys().collect();
         labels.sort_by_key(|l| Some(l) != first.as_ref());
-        let mut asked = false;
+        let (mut asked, mut mute) = (false, vec![]);
         for label in labels {
             let (tx, rx) = std::sync::mpsc::channel();
             if let Ok(mut q) = QUIT.lock() {
@@ -561,12 +573,22 @@ fn quit_all(app: &tauri::AppHandle) {
             if app.get_webview_window(&label).is_none() || ask(&app, &label).is_err() {
                 continue;
             }
-            // (no answer: its page may have missed the question, loading still: asked again, which a
-            // page already asking ignores)
+            // (no answer: its page may have missed the question, loading still: asked again; a page
+            // asking already says so)
+            let mut silent = 0;
             let answer = loop {
                 match rx.recv_timeout(std::time::Duration::from_secs(2)) {
-                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) if app.get_webview_window(&label).is_some() => drop(ask(&app, &label)),
-                    a => break a.ok(),
+                    Ok(Some(a)) => break Some(a),
+                    Ok(None) => silent = 0,
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) if silent < 5 && app.get_webview_window(&label).is_some() => {
+                        silent += 1;
+                        let _ = ask(&app, &label);
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        mute.push(label.clone()); // (its page answers nothing: passed over)
+                        break None;
+                    }
+                    Err(_) => break None, // (closed meanwhile)
                 }
             };
             match answer {
@@ -583,8 +605,10 @@ fn quit_all(app: &tauri::AppHandle) {
             continue;
         }
         if let Ok(held) = OWN.lock() {
-            for (_, json) in held.values() {
-                let _ = std::fs::remove_file(json); // (each answered: saved, or not to be kept)
+            for (label, (_, json)) in held.iter() {
+                if !mute.contains(label) {
+                    let _ = std::fs::remove_file(json); // (each answered: saved, or not to be kept)
+                }
             }
         }
         app.exit(0);
@@ -604,7 +628,15 @@ fn unsaved_windows() -> usize {
 fn quit_answer(window: tauri::Window, ok: bool, asked: bool) {
     let Ok(mut q) = QUIT.lock() else { return };
     if q.as_ref().is_some_and(|(l, _)| l == window.label()) {
-        let _ = q.take().unwrap().1.send((ok, asked));
+        let _ = q.take().unwrap().1.send(Some((ok, asked)));
+    }
+}
+
+/// A window asked by Quit again while its question is still open: it is there, deciding.
+#[tauri::command]
+fn quit_waiting(window: tauri::Window) {
+    if let Some((_, tx)) = QUIT.lock().ok().as_ref().and_then(|q| q.as_ref()).filter(|(l, _)| l == window.label()) {
+        let _ = tx.send(None);
     }
 }
 
@@ -635,8 +667,8 @@ fn run_id() -> u64 {
 }
 
 #[tauri::command]
-fn halt() {
-    ngspice::halt();
+fn halt(window: tauri::Window) {
+    ngspice::halt(window.label());
 }
 
 // Crash/quit recovery: each window mirrors its unsaved work to recovery-<id>.json, because some
@@ -1177,7 +1209,7 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![symbols, examples, path_exists, open_asc, save_asc, block_symbol, export_svg, export_raw, netlist, simulate, root_locus, cancel_locus, folder_symbols, trace, run_id, halt, cli_args, recovery_save, recovery_take, recovery_count, recovery_resolve, recovery_clear,
-            new_window, window_count, doc_path, doc_window, quit_answer, unsaved_windows,
+            new_window, window_count, doc_path, doc_window, quit_answer, quit_waiting, unsaved_windows,
             library_sources, library_set_sources, library_search, library_text, library_fetch_microcap,
             git_status, git_log, git_show, git_commit, git_init])
         .setup(|app| {

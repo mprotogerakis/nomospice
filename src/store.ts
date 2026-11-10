@@ -449,16 +449,24 @@ useS.subscribe((s, prev) => {
 /** A symbol (.asy) is open: drawn on the canvas, nothing to simulate. */
 export const isSymbolDoc = (path: string | null) => !!path && /\.asy$/i.test(path);
 
+/** Run the simulation; once more if another window's run took its results before they were read
+ *  (all windows share the one ngspice, which holds the latest run's results only). */
 export async function simulate() {
-  if (get().running || isSymbolDoc(get().path)) return;
+  if (await runOnce()) await runOnce();
+}
+
+/** One run; true: its results were gone before its traces were read. */
+async function runOnce(): Promise<boolean> {
+  if (get().running || isSymbolDoc(get().path)) return false;
   const { items, path, tab } = get();
   const opts = analysesOf(items), deck = simDeck(items, tab, opts), shown = currentTab(get(), opts); // the tab these results are for
   const gen = docGen;
   runSeq++;
   set({ running: true });
+  let gone = false;
   try {
     const sim = await invoke<Sim>("simulate", { items: deck, dir: dirOf(path) });
-    if (gen !== docGen) return; // another document was opened meanwhile
+    if (gen !== docGen) return false; // another document was opened meanwhile
     // edited next to the schematic: reloaded for the folder current when the request runs (a
     // document loaded meanwhile must not get the old folder back)
     if (sim.symbols) void loadSymbols(get().items, undefined, { force: true }).catch(() => {});
@@ -475,6 +483,7 @@ export async function simulate() {
     if (sim.run && !op) {
       // merge by expr: traces added/removed while refetching must survive
       const fresh = await Promise.all(get().traces.map(fetchTrace));
+      gone = fresh.some((t) => t.error) && (await invoke<number>("run_id")) !== sim.run.id;
       // (only the data: a trace's other settings, e.g. its axis, may have changed meanwhile)
       if (gen === docGen) set({ traces: get().traces.map((t) => { const f = fresh.find((x) => x.expr === t.expr); return f ? { ...t, data: f.data, error: f.error } : t; }) });
     }
@@ -505,6 +514,7 @@ export async function simulate() {
   } finally {
     set({ running: false });
   }
+  return gone && gen === docGen;
 }
 
 export const idle = () =>

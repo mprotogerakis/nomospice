@@ -22,7 +22,7 @@ import { saveRaw } from "./svgExport";
 import { History } from "./History";
 import { mirror, rotate } from "./geom";
 import { ANALYSES, si, tokens } from "./spice";
-import { copySelection, deleteSelection, duplicate, installClipboardEvents, newItem, pasteClipboard, placeFlag, textField, transform } from "./actions";
+import { copySelection, deleteSelection, duplicate, installClipboardEvents, newItem, pasteClipboard, placeFlag, TEXT_FIELD, textField, transform } from "./actions";
 import { ContextMenu, openMenu } from "./Menu";
 import { Toolbar, ToolbarButton, ToolbarSeparator, ToolbarSpacer } from "./ui/toolbar";
 import { StatusBar, StatusSegment } from "./ui/status-bar";
@@ -53,9 +53,8 @@ const NETLIST = new RegExp(`\\.(${NETLIST_EXT.join("|")})$`, "i");
 const OPEN_FILTERS = [{ name: "Schematic, netlist or symbol", extensions: ["asc", ...NETLIST_EXT, "asy"] }, { name: "LTspice schematic", extensions: ["asc"] }, { name: "SPICE netlist", extensions: NETLIST_EXT }, { name: "Symbol", extensions: ["asy"] }];
 /** What a document saves as: a symbol as a symbol, else a schematic. */
 const saveAs = (symbol: boolean) => (symbol ? { ext: "asy", filters: [{ name: "Symbol", extensions: ["asy"] }] } : { ext: "asc", filters: [{ name: "LTspice schematic", extensions: ["asc"] }] });
-/** Typing into a text field (a focused checkbox or button must not swallow the hotkeys). */
-const typing = (e: KeyboardEvent) =>
-  e.target instanceof HTMLElement && e.target.closest("input:not([type=checkbox]):not([type=radio]):not([type=button]),textarea,select,dialog") !== null;
+/** Typing into a text field, or in a dialog (a focused checkbox or button must not swallow the hotkeys). */
+const typing = (e: KeyboardEvent) => e.target instanceof HTMLElement && e.target.closest(`${TEXT_FIELD},select,dialog`) !== null;
 
 /** Unsaved-changes guard for everything that closes the document (or quits): save, don't, or stay.
  *  (custom buttons answer with their label; some platforms with Yes/No) */
@@ -108,7 +107,7 @@ export function installGuards() {
   // it has any; not again in the same Quit about the same ones (Don't Save) unless edited since
   let asking = false, settled: { no: number; items: unknown } | null = null; // (asking: asked again meanwhile)
   void getCurrentWebviewWindow().listen<number>("quit-ask", async ({ payload: no }) => {
-    if (asking) return;
+    if (asking) return void invoke("quit_waiting"); // (asked again: still deciding)
     const s = useS.getState();
     // (asking already, closing it or opening another file: that answer first, the Quit stays)
     if (prompting) return void invoke("quit_answer", { ok: false, asked: true });
@@ -348,6 +347,9 @@ const C: Record<string, () => unknown> = {
 /** Commands a symbol has no use for (no parts, directives or analyses; drawn upright). */
 const NOT_IN_SYMBOLS = new Set(["component", "directive", "ground", "res", "cap", "ind", "diode", "voltage", "current", "rotate", "mirror", "run", "sim-command", "live", "add-trace", "export-plot", "export-raw", "block-symbol"]);
 
+/** A hotkey: the menu bar's command `id`, by the same rules. */
+const go = (id: string) => () => command(id);
+
 /** A menu bar command for this window. Undo, Redo, Select All (Linux: Cut, Copy, Paste) in a text
  *  field are its own. (Its keys reach it only where the page lets them: see the keydown handler.) */
 function command(id: string) {
@@ -486,8 +488,9 @@ export function App() {
       const st = useS.getState(), key = e.key.toLowerCase();
       if (typing(e) || st.dialog || st.menu) {
         // left alone here, the menu bar's keys (macOS) would run it all the same: swallowed, but a
-        // text field's own (⌘Z, ⌘A, ⌘X ⌘C ⌘V; ⌃ moves the caret) and the menu's (⌘W, ⌘Q, ⌘,)
-        if ((e.metaKey && (key === "enter" || (key.length === 1 && "nosdfkl=-".includes(key)))) || (st.menu && !e.metaKey && !e.ctrlKey && key.length === 1)) e.preventDefault();
+        // text field's own (⌘Z, ⌘A, ⌘X ⌘C ⌘V; letters; ⌃ moves the caret) and the menu's (⌘W ⌘Q ⌘,)
+        const letter = key.length === 1 && key !== " " && !e.metaKey && !e.ctrlKey && !(e.target instanceof Element && e.target.closest(`${TEXT_FIELD},select`)); // (a select jumps to what is typed)
+        if ((e.metaKey && (key === "enter" || (key.length === 1 && "nosdfkl=-".includes(key)))) || letter) e.preventDefault();
         return;
       }
       const modKey = e.metaKey || e.ctrlKey;
@@ -504,41 +507,41 @@ export function App() {
       // deferred: a dialog opened by this key must not receive the same keystroke
       const run = (f: () => unknown) => (e.preventDefault(), setTimeout(f));
       if (mod) {
-        if (k === "z") return run(e.shiftKey ? C.redo : C.undo);
-        if (k === "y") return run(C.redo);
-        if (k === "r") return run(C.rotate);
-        if (k === "e") return run(C.mirror);
-        if (k === "a") return run(C["select-all"]);
-        if (k === "d") return run(C.duplicate);
+        if (k === "z") return run(go(e.shiftKey ? "redo" : "undo"));
+        if (k === "y") return run(go("redo"));
+        if (k === "r") return run(go("rotate"));
+        if (k === "e") return run(go("mirror"));
+        if (k === "a") return run(go("select-all"));
+        if (k === "d") return run(go("duplicate"));
         // copy, cut, paste of items, by key (WebKit sends no copy event without a text selection);
         // selected text anywhere (the log, the netlist): its own copy
         const text = !!sel?.toString();
         if ((k === "c" || k === "x") && !text) return void (copySelection(k === "x") && e.preventDefault());
         if (k === "v") return e.preventDefault(), pasteClipboard(); // (a selection does not matter: typing does, see above)
-        if (k === "s") return run(e.shiftKey ? C["save-as"] : C.save);
-        if (k === "o") return run(C.open);
+        if (k === "s") return run(go(e.shiftKey ? "save-as" : "save"));
+        if (k === "o") return run(go("open"));
         if (k === "n") return run(newWindow);
-        if (k === "k") return run(() => !isSymbolDoc(useS.getState().path) && C.component());
-        if (k === "f" && !e.shiftKey && !e.altKey) return run(C.find);
-        if (k === ",") return run(C.libraries);
-        if (k === "w" && !MAC) return run(C.close); // Ctrl+W closes the window (macOS: File → Close takes ⌘W)
-        if (k === "l") return run(C.panel);
-        if (k === "enter") return run(C.run);
+        if (k === "k") return run(go("component"));
+        if (k === "f" && !e.shiftKey && !e.altKey) return run(go("find"));
+        if (k === ",") return run(go("libraries"));
+        if (k === "w" && !MAC) return run(go("close")); // Ctrl+W closes the window (macOS: File → Close takes ⌘W)
+        if (k === "l") return run(go("panel"));
+        if (k === "enter") return run(go("run"));
         return;
       }
       const map: Record<string, () => unknown> = {
         escape: () => (window.dispatchEvent(new Event("nomospice:cancel")), useS.setState({ sel: [] })),
-        r: C.res, c: C.cap, l: C.ind, d: C.diode, v: C.voltage, i: C.current, g: C.ground,
-        w: C.wire, f3: C.wire, n: C.label, f4: C.label, s: C.directive, t: C.comment, p: C.component, f2: C.component,
+        r: go("res"), c: go("cap"), l: go("ind"), d: go("diode"), v: go("voltage"), i: go("current"), g: go("ground"),
+        w: go("wire"), f3: go("wire"), n: go("label"), f4: go("label"), s: go("directive"), t: go("comment"), p: go("component"), f2: go("component"),
         delete: deleteSelection, backspace: deleteSelection,
         f5: () => (useS.getState().sel.length ? deleteSelection() : useS.setState({ tool: { k: "delete" } })),
         f6: duplicate, f9: e.shiftKey ? redo : undo,
         // (F7/F8 as LTspice has them; on a Mac they are media keys unless fn is held: M too)
         // (F1; on a Mac a brightness key unless fn is held: ? too)
-        f1: C.help, "?": C.help, f7: moveTool, m: moveTool, f8: C.select, " ": C.fit,
+        f1: go("help"), "?": go("help"), f7: moveTool, m: moveTool, f8: go("select"), " ": go("fit"),
       };
       // (a symbol holds no parts, directives or analyses)
-      if (map[k] && !(isSymbolDoc(useS.getState().path) && ["p", "f2", "s"].includes(k))) run(map[k]);
+      if (map[k]) run(map[k]);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);

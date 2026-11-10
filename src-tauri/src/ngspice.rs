@@ -66,20 +66,25 @@ struct Latest {
     shown: Vec<String>,
     ended: Vec<(String, String)>,
 }
-/// Counts Halt presses. An operation (a simulation, a root locus) notes the count when it begins
-/// (`begin`) and is halted once the count moves on (`halted_since`): a Halt stops what was running
-/// when it was pressed, never something started afterwards, and no later start can undo it. Only
-/// the run thread acts on it (`bg_halt`, see `run_until`), so libngspice is never entered concurrently.
-static HALTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Counts Halt presses, per window. An operation (a simulation, a root locus) of a window notes
+/// its count when it begins (`begin`) and is halted once the count moves on (`halted_since`): a
+/// Halt stops what that window was running (or waiting to run) when it was pressed, never
+/// something started afterwards, nor another window's. Only the run thread acts on it (`bg_halt`,
+/// see `run_until`), so libngspice is never entered concurrently.
+static HALTS: Mutex<std::collections::BTreeMap<String, u64>> = Mutex::new(std::collections::BTreeMap::new());
 
-/// An operation begins (call it before netlisting, so a Halt during that counts too).
-pub fn begin() -> u64 {
-    HALTS.load(Ordering::SeqCst)
+fn halts(who: &str) -> u64 {
+    HALTS.lock().map_or(0, |h| h.get(who).copied().unwrap_or(0))
 }
 
-/// Whether Halt was pressed since the operation that began at `op`.
-pub fn halted_since(op: u64) -> bool {
-    HALTS.load(Ordering::SeqCst) != op
+/// An operation of window `who` begins (call it before netlisting, so a Halt during that counts too).
+pub fn begin(who: &str) -> u64 {
+    halts(who)
+}
+
+/// Whether window `who` pressed Halt since its operation that began at `op`.
+pub fn halted_since(who: &str, op: u64) -> bool {
+    halts(who) != op
 }
 
 extern "C" fn on_char(s: *const c_char, _: c_int, _: *mut c_void) -> c_int {
@@ -939,9 +944,11 @@ pub fn current_run() -> u64 {
     RUNS.load(Ordering::SeqCst)
 }
 
-/// Request a stop of whatever runs now; `run_until` sends `bg_halt` from its own thread.
-pub fn halt() {
-    HALTS.fetch_add(1, Ordering::SeqCst);
+/// Request a stop of what window `who` runs now; `run_until` sends `bg_halt` from its own thread.
+pub fn halt(who: &str) {
+    if let Ok(mut h) = HALTS.lock() {
+        *h.entry(who.to_string()).or_insert(0) += 1;
+    }
 }
 
 /// Tests that run simulations share the one ngspice engine: they take this lock.

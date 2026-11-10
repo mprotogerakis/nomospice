@@ -91,8 +91,10 @@ export function copySelection(cut = false, to?: DataTransfer) {
   return true;
 }
 
+/** What takes typing (a checkbox or button does not). */
+export const TEXT_FIELD = "input:not([type=checkbox]):not([type=radio]):not([type=button]),textarea";
 /** The focused text field, if one has the focus (its own Undo, Select All, Copy … then). */
-export const textField = () => document.activeElement?.closest<HTMLInputElement>("input:not([type=checkbox]):not([type=radio]):not([type=button]),textarea") ?? null;
+export const textField = () => document.activeElement?.closest<HTMLInputElement>(TEXT_FIELD) ?? null;
 
 /** Edit → Cut, Copy, Paste clicked in the menu bar (keys go by keydown): the parts' too. WebKit
  *  offers Copy and Cut only for selected text, unless beforecopy/beforecut say there is something. */

@@ -38,7 +38,10 @@ export function ContextMenu() {
       e.preventDefault();
       all[(k + (e.key === "ArrowDown" ? 1 : all.length - 1)) % all.length]?.focus();
     } else if (e.key === "Escape") closeMenu();
-    e.stopPropagation(); // the app's hotkeys stay out while the menu is open
+    // the app's hotkeys stay out while the menu is open, and the menu bar's keys (macOS) too, but
+    // the menu's own (Enter, Space, Tab) and Close, Quit, model libraries
+    else if ((e.key.length === 1 && e.key !== " " && !e.metaKey && !e.ctrlKey) || (e.metaKey && !"wq,".includes(e.key.toLowerCase()))) e.preventDefault();
+    e.stopPropagation();
   };
   return (
     <div
