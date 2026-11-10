@@ -2,6 +2,7 @@
 import type { Item, Shape } from "./types";
 import { commit, forDoc, isSymbolDoc, loadSymbols, useS } from "./store";
 import { box, isShape, rotateInPlace, shifted, snap } from "./geom";
+import { MAC } from "./lib/utils";
 
 export function deleteSelection() {
   const { items, sel } = useS.getState();
@@ -102,6 +103,7 @@ export const PAGE_KEYS = "nosdfkl=+-";
  *  keys and the menu's (Close, Quit, model libraries); elsewhere the page's ⌘-keys and, outside a
  *  text field, letters and ⌃-keys (in one they are its own; a select jumps to what is typed). */
 export function swallow(e: KeyboardEvent, contextMenu: boolean) {
+  if (!MAC) return false; // (Windows and Linux register no menu keys: nothing runs them twice)
   const key = e.key.toLowerCase();
   const letter = key.length === 1 && key !== " " && !e.metaKey && !(e.target instanceof Element && e.target.closest(`${TEXT_FIELD},select`));
   return letter || (e.metaKey && (contextMenu ? !MENU_OWN_KEYS.includes(key) : key === "enter" || (key.length === 1 && PAGE_KEYS.includes(key))));

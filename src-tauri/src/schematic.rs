@@ -239,9 +239,9 @@ pub struct Local {
     /// a fingerprint of its .asy files when they were (an added, removed, edited, renamed or
     /// replaced symbol changes it), and its schematics (blocks' sheets; a renamed one counts)
     stamp: Stamp,
-    /// each folder's stamp when last looked at: the windows of two folders take turns with the one
-    /// library, and a turn is no change of a folder's symbols
-    seen: HashMap<Option<std::path::PathBuf>, Stamp>,
+    /// what each window was last told of each folder (`news_for`): windows take turns with the one
+    /// library, and another window's turn is no news to this one
+    seen: HashMap<(String, Option<std::path::PathBuf>), Stamp>,
     /// keys of symbols lent by library folders (they go when the libraries change)
     lent: HashSet<String>,
 }
@@ -295,8 +295,7 @@ impl Library {
     /// component list shows them; they replace one cached from LTspice or a library folder (it
     /// comes back with another folder), not a built-in symbol. Another folder (or
     /// none) drops them again; `rescan` reloads the same folder (a symbol saved meanwhile).
-    /// Whether the folder's symbols changed since that folder was last looked at (not merely
-    /// another folder's turn).
+    /// Whether the folder's symbols were (re)loaded (another folder, or changed).
     pub fn set_dir(&mut self, dir: Option<&std::path::Path>, rescan: bool) -> bool {
         let moved = self.local.dir.as_deref() != dir;
         if !moved && !rescan {
@@ -307,10 +306,8 @@ impl Library {
         list.sort();
         // (None: no such folder; a schematic added or removed beside a symbol makes it a block or not)
         let stamp = dir.and_then(|d| std::fs::metadata(d).ok()).map(|_| (asy_stamp(&list), sheets.values().cloned().collect::<std::collections::BTreeSet<_>>()));
-        // (noted by the calls that report it only: a netlist's turn does not use the change up)
-        let changed = rescan && self.local.seen.insert(dir.map(std::path::Path::to_path_buf), stamp.clone()).as_ref() != Some(&stamp);
         if !moved && stamp == self.local.stamp {
-            return changed; // (loaded already, by a netlist's turn: still news to this call)
+            return false;
         }
         self.sheets.clear();
         self.local.stamp = stamp;
@@ -335,7 +332,13 @@ impl Library {
                 Err(_) => {}
             }
         }
-        changed
+        true
+    }
+
+    /// Whether the current folder's symbols changed since window `who` was last told (told now).
+    pub fn news_for(&mut self, who: &str) -> bool {
+        let key = (who.to_string(), self.local.dir.clone());
+        self.local.seen.insert(key, self.local.stamp.clone()).as_ref() != Some(&self.local.stamp)
     }
 
     /// Resolve a symbol; unknown names fall back to a local LTspice install and the library folders

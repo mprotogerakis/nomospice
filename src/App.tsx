@@ -239,7 +239,7 @@ async function saveNow(as: boolean): Promise<boolean> {
   const bare = !path.toLowerCase().endsWith(`.${ext}`);
   if (bare) path += `.${ext}`;
   // (open in another window: the two would write over each other)
-  if (path !== prev && (await elsewhere(path, false))) {
+  if ((path !== prev || prev === useS.getState().unwritten) && (await elsewhere(path, false))) { // (a restored copy's first save too)
     await message(`${fileName(path)} is open in another window: close it there first.`, { title: "nomospice" });
     return false;
   }

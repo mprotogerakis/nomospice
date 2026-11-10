@@ -16,10 +16,11 @@ struct Lib(Mutex<Library>);
 
 // Async commands run off the main thread (symbol lookup may hit the disk).
 #[tauri::command]
-async fn symbols(names: Vec<String>, dir: Option<String>, lib: tauri::State<'_, Lib>) -> Result<Vec<SymbolDef>, String> {
+async fn symbols(window: tauri::Window, names: Vec<String>, dir: Option<String>, lib: tauri::State<'_, Lib>) -> Result<Vec<SymbolDef>, String> {
     let mut lib = lib.0.lock().unwrap_or_else(|e| e.into_inner());
     lib.sync(); // library sources switched off: their symbols go
     lib.set_dir(dir.as_deref().map(std::path::Path::new), true); // a symbol saved there meanwhile counts
+    lib.news_for(window.label()); // (this window has them now)
     names.iter().for_each(|n| _ = lib.get(n));
     Ok(lib.defs.values().cloned().collect())
 }
@@ -275,7 +276,8 @@ async fn simulate(window: tauri::Window, items: Vec<Item>, dir: Option<String>, 
     let (mut netlist, sim, symbols) = {
         let mut lib = lib.0.lock().unwrap_or_else(|e| e.into_inner());
         // a run looks again: a symbol edited next to the schematic counts (the UI reloads it)
-        let symbols = lib.set_dir(dir.as_deref().map(std::path::Path::new), true);
+        lib.set_dir(dir.as_deref().map(std::path::Path::new), true);
+        let symbols = lib.news_for(&who); // (changed since this window last loaded them)
         lib.reread_sheets();
         (schematic::netlist(&items, &mut lib), schematic::netlist_for_sim(&items, &mut lib), symbols)
     };
@@ -831,7 +833,8 @@ fn candidates(dir: &std::path::Path) -> Vec<(std::fs::File, std::path::PathBuf)>
     for p in entries.flatten().map(|e| e.path()) {
         let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let ext = p.extension().map(|x| x.to_string_lossy().into_owned()).unwrap_or_default();
-        if !name.starts_with("recovery-") {
+        // (this process's: its open windows' (a scan would hold a lock one is just taking))
+        if !name.starts_with("recovery-") || name.starts_with(&format!("recovery-{}-", std::process::id())) {
             continue;
         }
         if name.contains(".nomospice-") && is_stale(&p) {
@@ -914,10 +917,11 @@ async fn recovery_resolve(app: tauri::AppHandle, window: tauri::Window, keep: bo
     tauri::async_runtime::spawn_blocking(move || resolve_now(&app, window.label(), keep)).await.map_err(|e| e.to_string())?
 }
 fn resolve_now(app: &tauri::AppHandle, label: &str, keep: bool) -> Result<(), String> {
+    // (this window's file first: failing, the orphan stays claimed and locked, offered no second time)
+    let own = if keep { Some(own(app, label)?) } else { None };
     let Some((f, lock)) = CLAIM.lock().map_err(|e| e.to_string())?.remove(label) else { return Ok(()) };
     let json = lock.with_extension("json");
-    if keep {
-        let (_held, dest) = own(app, label)?;
+    if let Some((_held, dest)) = own {
         std::fs::rename(&json, dest).map_err(|e| e.to_string())?;
     } else {
         let _ = std::fs::remove_file(&json);
@@ -1151,8 +1155,9 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::
         #[cfg(windows)]
         &P::select_all(app, None)?,
         &sep()?,
-        &it("rotate", "Rotate", Some("Ctrl+R"))?,
-        &it("mirror", "Mirror", Some("Ctrl+E"))?,
+        // (⌘ on macOS: ⌃E is a text field's end of line; ⌃R, ⌃E still turn parts, by the page)
+        &it("rotate", "Rotate", Some("CmdOrCtrl+R"))?,
+        &it("mirror", "Mirror", Some("CmdOrCtrl+E"))?,
         &sep()?,
         &it("find", "Find…", Some("CmdOrCtrl+F"))?,
     ])?;
