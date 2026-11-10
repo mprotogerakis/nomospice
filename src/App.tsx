@@ -105,9 +105,10 @@ export function installGuards() {
   });
   // Quit asks the windows in turn, in rounds (see quit_all): this one's unsaved changes, in front if
   // it has any; not again in the same Quit about the same ones (Don't Save) unless edited since
-  let asking = false, settled: { no: number; items: unknown } | null = null; // (asking: asked again meanwhile)
+  let asking = false, settled: { no: number; items: unknown } | null = null, refused = -1; // (asking: asked again meanwhile)
   void getCurrentWebviewWindow().listen<number>("quit-ask", async ({ payload: no }) => {
     if (asking) return void invoke("quit_waiting"); // (asked again: still deciding)
+    if (no === refused) return; // (asked again just before this window's Cancel ended that Quit)
     const s = useS.getState();
     // (asking already, closing it or opening another file: that answer first, the Quit stays)
     if (prompting) return void invoke("quit_answer", { ok: false, asked: true });
@@ -118,6 +119,7 @@ export function installGuards() {
       await getCurrentWindow().setFocus().catch(() => {});
       ok = await discardOk();
       if (ok) settled = { no, items: useS.getState().items };
+      else refused = no;
     } finally {
       asking = false;
       void invoke("quit_answer", { ok, asked: true });
@@ -527,6 +529,8 @@ export function App() {
         if (k === ",") return run(go("libraries"));
         if (k === "w" && !MAC) return run(go("close")); // Ctrl+W closes the window (macOS: File → Close takes ⌘W)
         if (k === "l") return run(go("panel"));
+        if (k === "=" || k === "+") return run(go("zoom-in")); // (+: where = needs Shift, a German keyboard)
+        if (k === "-") return run(go("zoom-out"));
         if (k === "enter") return run(go("run"));
         return;
       }

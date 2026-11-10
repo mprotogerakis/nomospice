@@ -227,6 +227,8 @@ pub struct Library {
     sheets: HashMap<String, (Option<std::time::SystemTime>, u64, std::sync::Arc<Vec<Item>>)>,
 }
 
+type Stamp = Option<((usize, u64), std::collections::BTreeSet<std::path::PathBuf>)>;
+
 /// Where symbols came from, so they can go again.
 #[derive(Default)]
 pub struct Local {
@@ -236,7 +238,10 @@ pub struct Local {
     own: HashSet<String>,
     /// a fingerprint of its .asy files when they were (an added, removed, edited, renamed or
     /// replaced symbol changes it), and its schematics (blocks' sheets; a renamed one counts)
-    stamp: Option<((usize, u64), std::collections::BTreeSet<std::path::PathBuf>)>,
+    stamp: Stamp,
+    /// each folder's stamp when last looked at: the windows of two folders take turns with the one
+    /// library, and a turn is no change of a folder's symbols
+    seen: HashMap<Option<std::path::PathBuf>, Stamp>,
     /// keys of symbols lent by library folders (they go when the libraries change)
     lent: HashSet<String>,
 }
@@ -290,7 +295,8 @@ impl Library {
     /// component list shows them; they replace one cached from LTspice or a library folder (it
     /// comes back with another folder), not a built-in symbol. Another folder (or
     /// none) drops them again; `rescan` reloads the same folder (a symbol saved meanwhile).
-    /// Whether the folder's symbols changed (were reloaded).
+    /// Whether the folder's symbols changed since that folder was last looked at (not merely
+    /// another folder's turn).
     pub fn set_dir(&mut self, dir: Option<&std::path::Path>, rescan: bool) -> bool {
         let moved = self.local.dir.as_deref() != dir;
         if !moved && !rescan {
@@ -301,6 +307,7 @@ impl Library {
         list.sort();
         // (None: no such folder; a schematic added or removed beside a symbol makes it a block or not)
         let stamp = dir.and_then(|d| std::fs::metadata(d).ok()).map(|_| (asy_stamp(&list), sheets.values().cloned().collect::<std::collections::BTreeSet<_>>()));
+        let changed = self.local.seen.insert(dir.map(std::path::Path::to_path_buf), stamp.clone()).as_ref() != Some(&stamp);
         if !moved && stamp == self.local.stamp {
             return false;
         }
@@ -327,7 +334,7 @@ impl Library {
                 Err(_) => {}
             }
         }
-        true
+        changed
     }
 
     /// Resolve a symbol; unknown names fall back to a local LTspice install and the library folders

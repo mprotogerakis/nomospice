@@ -539,12 +539,16 @@ fn doc_path(window: tauri::Window, path: Option<String>) {
 /// The window that has `path` open (`focus`: it comes to the front). None has it: None, and with
 /// `claim` it is this window's from now on (two windows opening it at once: one of them gets it).
 #[tauri::command]
-fn doc_window(app: tauri::AppHandle, window: tauri::Window, path: String, focus: bool, claim: bool) -> Option<String> {
+async fn doc_window(app: tauri::AppHandle, window: tauri::Window, path: String, focus: bool, claim: bool) -> Option<String> {
+    // (comparing files may touch the disk, a slow share: off the main thread and the async workers)
+    tauri::async_runtime::spawn_blocking(move || doc_window_now(&app, window.label(), path, focus, claim)).await.ok()?
+}
+fn doc_window_now(app: &tauri::AppHandle, own: &str, path: String, focus: bool, claim: bool) -> Option<String> {
     use tauri::Manager;
     let mut docs = DOCS.lock().ok()?;
     let Some(label) = docs.iter().find(|(_, p)| **p == path || same_file(std::path::Path::new(p.as_str()), std::path::Path::new(&path))).map(|(l, _)| l.clone()) else {
         if claim {
-            docs.insert(window.label().to_string(), path);
+            docs.insert(own.to_string(), path);
         }
         return None;
     };
@@ -640,8 +644,8 @@ fn quit_all(app: &tauri::AppHandle) {
 
 /// Windows with unsaved changes (their recovery copies), for the update's warning.
 #[tauri::command]
-fn unsaved_windows() -> usize {
-    OWN.lock().map_or(0, |held| held.values().filter(|(_, json)| json.exists()).count())
+async fn unsaved_windows() -> usize {
+    tauri::async_runtime::spawn_blocking(|| OWN.lock().map_or(0, |held| held.values().filter(|(_, json)| json.exists()).count())).await.unwrap_or(0)
 }
 
 /// A window's answer to Quit: `ok`, go on (saved, or not to be kept), else stay; `asked`: the
@@ -672,7 +676,8 @@ fn focused(app: &tauri::AppHandle) -> Option<String> {
 
 /// A window closed: what it held goes.
 fn forget_window(label: &str) {
-    // its simulation or root locus stops (else another window waits for it, with no Halt for it)
+    // its simulation or root locus stops (else another window waits for it, with no Halt for it).
+    // ponytail: their counts stay, a few bytes per closed window (gone, a stopped run would go on)
     ngspice::halt(label);
     sweep_gen(label, true);
     recovery_release(label);
@@ -721,7 +726,8 @@ fn recovery_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
     Ok(dir)
 }
 
-/// Window `label`'s recovery file (its lock file taken on first use), and the guard over them all.
+/// Window `label`'s recovery file (its lock file taken on first use), and the guard over them all
+/// (held for a whole save or clear).
 fn own(app: &tauri::AppHandle, label: &str) -> Result<(std::sync::MutexGuard<'static, Held>, std::path::PathBuf), String> {
     let mut held = OWN.lock().map_err(|e| e.to_string())?;
     if !held.contains_key(label) {
@@ -741,10 +747,10 @@ fn own(app: &tauri::AppHandle, label: &str) -> Result<(std::sync::MutexGuard<'st
 #[tauri::command]
 async fn recovery_save(app: tauri::AppHandle, window: tauri::Window, doc: serde_json::Value) -> Result<(), String> {
     // blocking file IO + fsync: keep it off the async workers other commands share
-    // (not under OWN: other windows' saves do not wait for this fsync; a window's own saves and
-    // clears come one after another, see the frontend's mirror)
+    // (under OWN: Quit's last clearing never comes between a write and its rename; writes wait
+    // for each other on SAVES anyway)
     tauri::async_runtime::spawn_blocking(move || {
-        let json = own(&app, window.label())?.1;
+        let (_held, json) = own(&app, window.label())?;
         write_atomic(&json, doc.to_string().as_bytes()).map_err(|e| e.to_string())
     })
     .await
