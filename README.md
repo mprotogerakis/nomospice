@@ -3,6 +3,10 @@
 A circuit simulator with schematic capture, click-to-probe waveforms, `.asc`
 files — with a modern UI, ngspice as the engine, a Rust core and a React frontend (Tauri 2).
 
+> **📖 Documentation: <https://mprotogerakis.github.io/nomospice/>** — tutorials from a first
+> simulation to your own blocks, how-to guides, every key, menu and directive.
+> **⬇ Download:** [latest release](https://github.com/mprotogerakis/nomospice/releases/latest) (macOS, Windows).
+
 ## What it does
 
 - **Workflow**: `R C L D V I G W N S T` place parts, wires, labels and directives; `⌃R`/`⌃E`
