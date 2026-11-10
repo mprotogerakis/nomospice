@@ -30,7 +30,7 @@ function typeInto(el: HTMLInputElement | HTMLTextAreaElement, text: string) {
   el.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
-let scene = "", work = "";
+let scene = "", work = "", file = "";
 
 export const api = {
   useS, simulate, addTrace, setPlot, command, sleep, invoke,
@@ -149,7 +149,9 @@ export const api = {
 export async function playScene() {
   const s = await invoke<[string, string] | null>("scene");
   if (!s) return;
-  [scene, work] = s;
+  // (a scene of another site: its absolute path without .js; its pictures by its name)
+  [file, work] = s;
+  scene = file.split("/").pop()!;
   // (synthetic pointers are no real ones: nothing to capture)
   Element.prototype.setPointerCapture = () => {};
   Element.prototype.releasePointerCapture = () => {};
@@ -157,7 +159,7 @@ export async function playScene() {
   await getCurrentWindow().setFocus().catch(() => {});
   try {
     await sleep(1500); // (the window's first layout, the examples loaded)
-    const mod = await import(/* @vite-ignore */ `/docs/scenes/${scene}.js`);
+    const mod = await import(/* @vite-ignore */ file.startsWith("/") ? `/@fs${encodeURI(file)}.js` : `/docs/scenes/${file}.js`);
     await mod.default(api);
   } catch (e) {
     await invoke("scene_log", { message: String(e instanceof Error ? e.stack ?? e.message : e) }).catch(() => {});
