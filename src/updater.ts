@@ -1,6 +1,7 @@
 // Updates from the GitHub releases: check latest.json (signed artifacts, see scripts/publish-release.sh),
 // then download, verify, install and restart on request.
 import { create } from "zustand";
+import { invoke } from "@tauri-apps/api/core";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { ask, message } from "@tauri-apps/plugin-dialog";
@@ -43,7 +44,8 @@ export async function installUpdate() {
   if (!update || busy || asking) return;
   asking = true;
   const notes = update.body?.trim() ? `\n\n${update.body.trim().slice(0, 600)}` : "";
-  const unsaved = useS.getState().dirty ? "\n\nThe schematic has unsaved changes: they are lost unless you save first." : "";
+  // (every window's: their recovery copies)
+  const unsaved = useS.getState().dirty || (await invoke<number>("unsaved_windows").catch(() => 0)) > 0 ? "\n\nSchematics with unsaved changes are offered for restore after the restart." : "";
   let yes = false;
   try {
     yes = await ask(`Install nomospice ${update.version} and restart?${notes}${unsaved}`, { title: "Update", kind: unsaved ? "warning" : "info" });

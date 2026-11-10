@@ -78,13 +78,15 @@ function shape(v: unknown): Shape | null {
 /** The items copied last, and whether the system clipboard holds them too (writing it can fail). */
 let clip = "", written = false;
 
-/** Copy (or cut) the selection: to the system clipboard and here. False: nothing selected. */
-export function copySelection(cut = false) {
+/** Copy (or cut) the selection: to the system clipboard (`to`: a copy event's) and here. False:
+ *  nothing selected. */
+export function copySelection(cut = false, to?: DataTransfer) {
   const t = copyText();
   if (!t) return false;
   clip = t;
-  written = false;
-  void navigator.clipboard?.writeText(t).then(() => (written = clip === t), () => {});
+  written = !!to;
+  if (to) to.setData("text/plain", t);
+  else void navigator.clipboard?.writeText(t).then(() => (written = clip === t), () => {});
   if (cut) deleteSelection();
   return true;
 }
@@ -95,19 +97,12 @@ export const textField = () => document.activeElement?.closest<HTMLInputElement>
 /** Edit → Cut, Copy, Paste clicked in the menu bar (keys go by keydown): the parts' too. WebKit
  *  offers Copy and Cut only for selected text, unless beforecopy/beforecut say there is something. */
 export function installClipboardEvents() {
-  const parts = () => !textField() && !useS.getState().dialog && !window.getSelection()?.toString();
+  const parts = () => !textField() && !useS.getState().dialog && !useS.getState().menu && !window.getSelection()?.toString();
   const offer = (e: Event) => void (parts() && copyText() && e.preventDefault());
   document.addEventListener("beforecopy", offer);
   document.addEventListener("beforecut", offer);
   document.addEventListener("beforepaste", (e) => void (parts() && e.preventDefault()));
-  const take = (cut: boolean) => (e: ClipboardEvent) => {
-    const t = parts() && copyText();
-    if (!t || !e.clipboardData) return;
-    e.preventDefault();
-    e.clipboardData.setData("text/plain", t);
-    (clip = t), (written = true);
-    if (cut) deleteSelection();
-  };
+  const take = (cut: boolean) => (e: ClipboardEvent) => void (parts() && e.clipboardData && copySelection(cut, e.clipboardData) && e.preventDefault());
   document.addEventListener("copy", take(false));
   document.addEventListener("cut", take(true));
   document.addEventListener("paste", (e) => {

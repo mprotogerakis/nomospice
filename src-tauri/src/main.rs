@@ -532,11 +532,13 @@ fn doc_window(app: tauri::AppHandle, window: tauri::Window, path: String, focus:
 /// meanwhile answers go on.
 static QUIT: Mutex<Option<(String, std::sync::mpsc::Sender<(bool, bool)>)>> = Mutex::new(None);
 static QUITTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Which Quit it is (a window's "Don't Save" holds for its own Quit only).
+static QUIT_NO: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 fn quit_all(app: &tauri::AppHandle) {
     use std::sync::atomic::Ordering::SeqCst;
     use tauri::{Emitter, Manager};
-    let ask = |app: &tauri::AppHandle, label: &str| app.emit_to(tauri::EventTarget::webview_window(label), "quit-ask", ());
+    let ask = |app: &tauri::AppHandle, label: &str| app.emit_to(tauri::EventTarget::webview_window(label), "quit-ask", QUIT_NO.load(SeqCst));
     if QUITTING.swap(true, SeqCst) {
         // asked again while a window has not answered (its page missed it, reloading): ask it again
         if let Some(label) = QUIT.lock().ok().and_then(|q| q.as_ref().map(|(l, _)| l.clone())) {
@@ -544,6 +546,7 @@ fn quit_all(app: &tauri::AppHandle) {
         }
         return;
     }
+    QUIT_NO.fetch_add(1, SeqCst);
     let app = app.clone();
     std::thread::spawn(move || loop {
         let first = focused(&app);
@@ -558,14 +561,22 @@ fn quit_all(app: &tauri::AppHandle) {
             if app.get_webview_window(&label).is_none() || ask(&app, &label).is_err() {
                 continue;
             }
-            match rx.recv() {
-                Ok((false, _)) => {
+            // (no answer: its page may have missed the question, loading still: asked again, which a
+            // page already asking ignores)
+            let answer = loop {
+                match rx.recv_timeout(std::time::Duration::from_secs(2)) {
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) if app.get_webview_window(&label).is_some() => drop(ask(&app, &label)),
+                    a => break a.ok(),
+                }
+            };
+            match answer {
+                Some((false, _)) => {
                     QUIT.lock().map(|mut q| q.take()).ok();
                     QUITTING.store(false, SeqCst);
                     return;
                 }
-                Ok((true, a)) => asked |= a,
-                Err(_) => {} // (closed meanwhile)
+                Some((true, a)) => asked |= a,
+                None => {} // (closed meanwhile)
             }
         }
         if asked {
@@ -579,6 +590,12 @@ fn quit_all(app: &tauri::AppHandle) {
         app.exit(0);
         return;
     });
+}
+
+/// Windows with unsaved changes (their recovery copies), for the update's warning.
+#[tauri::command]
+fn unsaved_windows() -> usize {
+    OWN.lock().map_or(0, |held| held.values().filter(|(_, json)| json.exists()).count())
 }
 
 /// A window's answer to Quit: `ok`, go on (saved, or not to be kept), else stay; `asked`: the
@@ -1160,7 +1177,7 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![symbols, examples, path_exists, open_asc, save_asc, block_symbol, export_svg, export_raw, netlist, simulate, root_locus, cancel_locus, folder_symbols, trace, run_id, halt, cli_args, recovery_save, recovery_take, recovery_count, recovery_resolve, recovery_clear,
-            new_window, window_count, doc_path, doc_window, quit_answer,
+            new_window, window_count, doc_path, doc_window, quit_answer, unsaved_windows,
             library_sources, library_set_sources, library_search, library_text, library_fetch_microcap,
             git_status, git_log, git_show, git_commit, git_init])
         .setup(|app| {

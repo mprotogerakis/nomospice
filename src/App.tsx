@@ -63,11 +63,18 @@ async function discardOk(): Promise<boolean> {
   const { dirty, path } = useS.getState();
   if (!dirty) return true;
   const name = fileName(path);
-  const r = await message("Your changes are lost if you don't save them.", { title: `Save the changes to “${name}”?`, kind: "warning", buttons: { yes: "Save", no: "Don't Save", cancel: "Cancel" } });
-  // (not written: stay; written, but changed meanwhile: asked again about those changes)
-  if (r === "Save" || r === "Yes") return (await saveFile()) && (!useS.getState().dirty || discardOk());
-  return r === "Don't Save" || r === "No";
+  prompting++;
+  try {
+    const r = await message("Your changes are lost if you don't save them.", { title: `Save the changes to “${name}”?`, kind: "warning", buttons: { yes: "Save", no: "Don't Save", cancel: "Cancel" } });
+    // (not written: stay; written, but changed meanwhile: asked again about those changes)
+    if (r === "Save" || r === "Yes") return (await saveFile()) && (!useS.getState().dirty || discardOk());
+    return r === "Don't Save" || r === "No";
+  } finally {
+    prompting--;
+  }
 }
+/** Asking about unsaved changes now (Quit waits for that answer instead of asking too). */
+let prompting = 0;
 /** Recovery mirror: debounce timer and the last save in flight (a clear must come after it). */
 let mirrorTimer: ReturnType<typeof setTimeout> | undefined;
 let mirrorWrite: Promise<unknown> = Promise.resolve();
@@ -98,24 +105,25 @@ export function installGuards() {
     if (!(await leave())) e.preventDefault();
   });
   // Quit asks the windows in turn, in rounds (see quit_all): this one's unsaved changes, in front if
-  // it has any; not again about the same ones (Don't Save) unless edited since
-  let asking = false, settled: unknown = null; // (asking: Quit chosen again while its question is open)
-  void getCurrentWebviewWindow().listen("quit-ask", async () => {
+  // it has any; not again in the same Quit about the same ones (Don't Save) unless edited since
+  let asking = false, settled: { no: number; items: unknown } | null = null; // (asking: asked again meanwhile)
+  void getCurrentWebviewWindow().listen<number>("quit-ask", async ({ payload: no }) => {
     if (asking) return;
     const s = useS.getState();
-    if (!s.dirty || s.items === settled) return void invoke("quit_answer", { ok: true, asked: false });
+    // (asking already, closing it or opening another file: that answer first, the Quit stays)
+    if (prompting) return void invoke("quit_answer", { ok: false, asked: true });
+    if (!s.dirty || (settled?.no === no && s.items === settled.items)) return void invoke("quit_answer", { ok: true, asked: false });
     asking = true;
+    let ok = false;
     try {
       await getCurrentWindow().setFocus().catch(() => {});
-      const ok = await discardOk();
-      if (ok) settled = useS.getState().items;
-      await invoke("quit_answer", { ok, asked: true });
+      ok = await discardOk();
+      if (ok) settled = { no, items: useS.getState().items };
     } finally {
       asking = false;
+      void invoke("quit_answer", { ok, asked: true });
     }
   });
-  // (when a key was pressed last: a menu command right after it came by its key)
-  window.addEventListener("keydown", () => void (keyAt = performance.now()), true);
   // the menu bar's commands, for this window when it is the focused one
   void getCurrentWebviewWindow().listen<string>("menu", (e) => command(e.payload));
   listen("libraries-changed", () => void refreshLibrarySymbols().catch(() => {}));
@@ -206,17 +214,16 @@ async function saveFile(as = false): Promise<boolean> {
     await message(`A ${isSymbolDoc(prev ?? "") ? "symbol saves as .asy" : "schematic saves as .asc"}.`, { title: "nomospice" });
     return false;
   }
-  if (!path.toLowerCase().endsWith(`.${ext}`)) {
-    // GTK save dialogs do not add the filter's extension, and checked for overwrite without it
-    path += `.${ext}`;
-    if ((await invoke<boolean>("path_exists", { path })) && !(await ask(`${fileName(path)} already exists. Replace it?`, { title: "nomospice", kind: "warning" }))) return false;
-  }
+  // GTK save dialogs do not add the filter's extension, and checked for overwrite without it
+  const bare = !path.toLowerCase().endsWith(`.${ext}`);
+  if (bare) path += `.${ext}`;
   // (open in another window: the two would write over each other)
   const at = await docWindow(path, false);
   if (at && at !== getCurrentWindow().label) {
     await message(`${fileName(path)} is open in another window: close it there first.`, { title: "nomospice" });
     return false;
   }
+  if (bare && (await invoke<boolean>("path_exists", { path })) && !(await ask(`${fileName(path)} already exists. Replace it?`, { title: "nomospice", kind: "warning" }))) return false;
   const items = useS.getState().items;
   const doc = docId();
   // another folder: symbols from next to the old file go along on request (else its parts lose
@@ -341,20 +348,15 @@ const C: Record<string, () => unknown> = {
 /** Commands a symbol has no use for (no parts, directives or analyses; drawn upright). */
 const NOT_IN_SYMBOLS = new Set(["component", "directive", "ground", "res", "cap", "ind", "diode", "voltage", "current", "rotate", "mirror", "run", "sim-command", "live", "add-trace", "export-plot", "export-raw", "block-symbol"]);
 
-/** When a key was pressed last (a menu command right after it came by that key). */
-let keyAt = -Infinity;
-
 /** A menu bar command for this window. Undo, Redo, Select All (Linux: Cut, Copy, Paste) in a text
- *  field are its own. By key, as the page's hotkeys: none while typing (but Close and the model
- *  libraries, the menu's own) or with a context menu open; clicked, it runs. */
+ *  field are its own. (Its keys reach it only where the page lets them: see the keydown handler.) */
 function command(id: string) {
-  const field = textField(), byKey = performance.now() - keyAt < 500;
+  const field = textField();
   if (field && (id === "undo" || id === "redo" || id === "cut" || id === "copy" || id === "paste")) return void document.execCommand(id);
   if (field && id === "select-all") return field.select();
-  if (field && byKey && id !== "close" && id !== "libraries") return;
+  if (field && ["duplicate", "delete", "rotate", "mirror"].includes(id)) return; // (⌃R in a field: no part turns)
   const s = useS.getState();
-  if (s.menu) useS.setState({ menu: null });
-  if (s.menu && byKey) return;
+  if (s.menu) useS.setState({ menu: null }); // (clicked in the menu bar)
   // a dialog open: ⌘W closes it (as Esc); the rest waits (it would replace the dialog and lose its
   // edits), but for help and about, which go
   if (s.dialog && s.dialog.k !== "help" && s.dialog.k !== "about") return void (id === "close" && useS.setState({ dialog: null }));
@@ -416,7 +418,9 @@ export function App() {
           // (a document never written, an opened netlist's .asc: its first save asks, as it would have;
           // as the snapshot says, else by whether its file is there)
           const unwritten = !!rec!.path && (rec!.unwritten === rec!.path || !(await invoke<boolean>("path_exists", { path: rec!.path })));
-          await loadDoc(rec!.items, rec!.path, unwritten);
+          // (open in another window by now: restored as a copy, whose first save asks where)
+          const other = rec!.path && !unwritten ? await docWindow(rec!.path, false, true) : null;
+          await loadDoc(rec!.items, rec!.path, unwritten || (!!other && other !== getCurrentWindow().label));
           useS.setState({ dirty: true });
           // (the file asked for: in a window of its own, unless it is the one restored)
           if (file && !(await docWindow(file))) void newWindow([file, ...args.filter((a) => a === "--run")]);
@@ -425,8 +429,8 @@ export function App() {
         if (main) for (let k = await invoke<number>("recovery_count").catch(() => 0); k > 0; k--) void newWindow(["--restore"]);
         if (restore) return;
       }
-      // (a window opened for a file: unless another one has it by now, then that one comes forward)
-      if (file && !main && (await docWindow(file, true, true))) return void getCurrentWindow().destroy();
+      // (unless another window has the file by now: that one comes forward, one opened for it closes)
+      if (file && (await docWindow(file, true, true))) return void (!main && getCurrentWindow().destroy());
       try {
         if (file) await openPath(file);
         if (args.includes("--run")) await simulate();
@@ -479,7 +483,13 @@ export function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (typing(e) || useS.getState().dialog || useS.getState().menu) return;
+      const st = useS.getState(), key = e.key.toLowerCase();
+      if (typing(e) || st.dialog || st.menu) {
+        // left alone here, the menu bar's keys (macOS) would run it all the same: swallowed, but a
+        // text field's own (⌘Z, ⌘A, ⌘X ⌘C ⌘V; ⌃ moves the caret) and the menu's (⌘W, ⌘Q, ⌘,)
+        if ((e.metaKey && (key === "enter" || (key.length === 1 && "nosdfkl=-".includes(key)))) || (st.menu && !e.metaKey && !e.ctrlKey && key.length === 1)) e.preventDefault();
+        return;
+      }
       const modKey = e.metaKey || e.ctrlKey;
       // plain Space/Enter on a focused button or checkbox operate that control (⌘↵ still runs)
       if (!modKey && (e.key === " " || e.key === "Enter") && e.target instanceof HTMLElement && e.target.closest("button,input,a")) return;
