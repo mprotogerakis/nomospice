@@ -13,7 +13,7 @@ files — with a modern UI, ngspice as the engine, a Rust core and a React front
   rotate and mirror; dragging a part pulls its wires along, `M`/`F7` moves parts off their wires (`Esc`/`F8` back);
   `⌘C`/`⌘X`/`⌘V` copy, cut and paste (also from one schematic into another);
   `F2`/`P`/`⌘K` opens the component library; `⌘F` finds parts, labels and texts; `⌘↵` runs; `?` (or `F1`) shows a quick reference. After a run, click a wire
-  to plot its voltage, a part to plot its current — in `.tran`, `.dc` **and `.ac`** (0 V current
+  to plot its voltage (drag from one wire to another: the voltage between them, `V(a,b)`), a part to plot its current — in `.tran`, `.dc` **and `.ac`** (0 V current
   sensors in the simulated netlist, so currents have phase). Near a pin, its own current: `Ib(Q1)`,
   `Ig(M1)`, `Ix(U1:OUT)`. Expressions take these names: `I(R1)-I(R2)`, `V(in)*I(R1)`.
 - **File format**: opens and saves `.asc` (Latin-1/UTF-16, every unknown line kept). 
@@ -40,7 +40,7 @@ files — with a modern UI, ngspice as the engine, a Rust core and a React front
 - **Waveforms** (uPlot): one pane per unit (units from the expression: V·A = W, integrals in J), a
   right axis per pane for traces of other sizes, synced zoom, cursors A/B with Δ and 1/Δx, average,
   RMS and integral between them (shift-drag marks the range), expressions in ngspice syntax (a
-  constant draws a reference line), a part's power (right-click > Plot power), copy as CSV, all
+  constant draws a reference line), a part's power (right-click > Plot power; in expressions `P(R1)+P(R2)`), copy as CSV, all
   results as a `.raw` file;
   an **FFT** of a transient (of A–B or the shown range; Hann window, dB of the amplitude), a log
   or fixed y axis per pane, a trace moved into another unit's pane (on its right axis). A single-frequency `.ac` (`.ac lin 1 50 50`) gives a phasor table

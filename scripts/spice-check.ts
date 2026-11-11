@@ -4,7 +4,7 @@ import { box, connectivity, dragPlan, hit, outline, shifted } from "../src/geom.
 import {
   tokens, formatAnalysis, formatIc, formatInclude, formatMeas, formatModel, formatParams, formatSource, numInfo, parseAnalysis,
   parseIc, parseInclude, parseMeas, parseModel, parseParams, parseSource, sample, si, spiceNum, directiveKind, analysisRoundTrips, analysisEditable, analysisOptions, analysisLineIndex, at, integrate, stripAnalyses, portablePaths, sourceRoundTrips,
-  exprUnit, unitTimes, fftSize, fftFreqs, spectrum, getParam, setParam, balanced, paramValue,
+  exprUnit, expandPowers, unitTimes, fftSize, fftFreqs, spectrum, getParam, setParam, balanced, paramValue,
 } from "../src/spice.ts";
 
 // numbers and the classic pitfalls
@@ -189,6 +189,8 @@ assert.equal(numInfo("1Meg", "Hz")!.text, "= 1MegHz"); // not "1M", the milli tr
   assert.equal(exprUnit("v(\"n001\")-v(\"n002\")"), "V");
   assert.equal(exprUnit("(v(a)-v(b))*i(vsense_r1)"), "W");
   assert.equal(exprUnit("V(out)/I(R1)"), "Ω");
+  assert.equal(exprUnit("P(R1)+P(R2)+p(r3)"), "W");
+  assert.equal(expandPowers("P(R1)+ p( r2 )-VP(out)+P(U1)", (n) => (/^r\d$/i.test(n) ? `v(${n})*i(${n})` : "")), "(v(R1)*i(R1))+ (v(r2)*i(r2))-VP(out)+P(U1)");
   assert.equal(exprUnit("I(R1)-I(R2)"), "A");
   assert.equal(exprUnit("Ib(Q1)+Ic(Q1)"), "A");
   assert.equal(exprUnit("ig(v1)"), "", "group delay or a gate current: not guessed");

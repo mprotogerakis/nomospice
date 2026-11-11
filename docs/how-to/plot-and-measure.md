@@ -5,6 +5,7 @@
 After a run, the schematic is a probe:
 
 - click a **wire** to plot its voltage;
+- drag from one **wire** to another to plot the voltage between them, `V(a,b)`: the red probe sits where you pressed, the black one where you let go (on ground: plain `V(a)`). While results are shown, a drag that starts on a wire or a label probes; to move one, use the move tool (++m++);
 - click a **part** to plot its current, in transient, DC and AC analyses alike;
 - click **near a pin** of a transistor or an IC to plot that pin's current, such as `Ib(Q1)` or `Ix(U1:OUT)`;
 - right-click a two-pin part and choose *Plot power* for the power it takes (transient and DC analyses).
@@ -15,7 +16,7 @@ Each unit gets a pane of its own: volts, amperes, watts.
 
 ![The Add Trace dialog with the expression V(in)-V(out)](../img/plot-and-measure/01-add-trace.png)
 
-Click *Add trace* beside the plot and type an expression in ngspice's syntax: `V(in)-V(out)`, `I(R1)`, `V(in)*I(R1)` (in watts), `db(V(out))`, `group_delay(V(out))`. The unit follows from the expression. A constant, such as `0.5`, draws a reference line.
+Click *Add trace* beside the plot and type an expression in ngspice's syntax: `V(in)-V(out)`, `I(R1)`, `V(in)*I(R1)` (in watts), `P(R1)+P(R2)` (two-pin parts' power, as *Plot power* draws it; transient and DC analyses), `db(V(out))`, `group_delay(V(out))`. The unit follows from the expression. A constant, such as `0.5`, draws a reference line.
 
 ![The difference V(in)-V(out) as a third trace](../img/plot-and-measure/02-expression.png)
 

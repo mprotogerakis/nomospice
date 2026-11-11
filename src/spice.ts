@@ -630,6 +630,7 @@ export function exprUnit(expr: string, vector: (name: string) => string = () => 
     const call = /^[^()]*\)/.exec(s.slice(i))?.[0];
     if (call && vector(`${id[0]}(${call}`)) return (i += call.length), dims(vector(`${id[0]}(${call}`));
     if (/^v[mri]?$/.test(name)) return raw(), dims("V");
+    if (name === "p") return raw(), dims("W"); // a part's power, see expandPowers
     // (not ig(): also ngspice's group delay of a source current, in seconds)
     if (/^i[cbedsx]?$/.test(name)) return raw(), dims("A");
     const a = args()[0];
@@ -673,6 +674,11 @@ export function exprUnit(expr: string, vector: (name: string) => string = () => 
   ws();
   return i < s.length || !r.d || r.n ? "" : unitName(r.d);
 }
+
+/** `P(R1)` in a trace expression: what `power(name)` gives for that part (the voltage across it
+ *  times its current); a name it gives nothing for stays as written. */
+export const expandPowers = (expr: string, power: (name: string) => string) =>
+  expr.replace(/\bP\(\s*([^()\s,]+)\s*\)/gi, (m, name: string) => ((p) => (p ? `(${p})` : m))(power(name)));
 
 // The spectrum of a transient trace (the plot's FFT view).
 

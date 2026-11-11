@@ -421,7 +421,7 @@ function TraceDialog() {
   };
   return (
     <Modal title="Add Trace" onSubmit={submit}>
-      <Field label="Expression" hint="ngspice syntax and part currents, e.g. V(out)-V(in) · I(R1)-I(R2) · Ib(Q1) · V(in)*I(R1) · db(V(out))">
+      <Field label="Expression" hint="ngspice syntax and part currents, e.g. V(out)-V(in) · I(R1)-I(R2) · Ib(Q1) · P(R1)+P(R2) · db(V(out))">
         <input data-autofocus list="vectors" className={FIELD} value={expr} onChange={(e) => setExpr(e.target.value)} />
       </Field>
       <datalist id="vectors">
@@ -532,7 +532,8 @@ const HELP: [string, [string, string][]][] = [
   ]],
   ["Plotting", [
     ["click a wire · a part", "its voltage · its current (near a pin: that pin's, Ib(Q1))"],
-    ["Add trace", "an expression: V(out)-V(in), I(R1), V(in)*I(R1) (W), db(), group_delay() …"],
+    ["drag from wire to wire", "the voltage between them, V(a,b)"],
+    ["Add trace", "an expression: V(out)-V(in), I(R1), P(R1)+P(R2) (a part's power, W), db(), group_delay() …"],
     ["click · shift-click", "cursor A · cursor B; shift-drag: the range A–B (average, RMS, integral)"],
     ["drag · wheel · dbl-click", "zoom · zoom and pan · reset"],
     ["right-click a trace's row", "(in the table beside the plot) right axis, another unit's pane, group delay, remove"],

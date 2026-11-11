@@ -51,6 +51,7 @@ The keys are the macOS ones. On Windows and Linux press ++ctrl++ for ++cmd++. In
 | Mouse | Does |
 |---|---|
 | click a wire, a part | plot its voltage, its current (near a pin: that pin's current) |
+| drag from a wire to another | plot the voltage between them, `V(a,b)` |
 | click, shift-click | cursor A, cursor B |
 | shift-drag | the range A–B (average, RMS, integral) |
 | drag, wheel, double-click | zoom; zoom and pan; see everything |

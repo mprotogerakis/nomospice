@@ -578,7 +578,7 @@ export function App() {
     : showWave && s.sim?.run?.plot.startsWith("noise") ? "Noise spectra: Add trace → onoise_spectrum / inoise_spectrum · totals in Results"
     : showWave && s.sim?.run?.plot.startsWith("sens") ? "Sensitivities: Add trace → a part name (e.g. r1) · right-click to edit"
     : tool.k === "move" ? `Move: drag the selection off the rest (unselected wires and labels stay) · Esc / F8: drag with wires again${probeMode(s.sim) ? " · click a wire or part to plot it" : ""}`
-    : showWave ? "Click a wire to plot V · click a part to plot I · right-click to edit"
+    : showWave ? "Click a wire to plot V · drag wire to wire: V(a,b) · click a part to plot I · right-click to edit"
     : "Drag to move · shift-drag box select · double/right-click to edit · ⌘↵ run";
 
   const startSplit = (e: React.PointerEvent) => {

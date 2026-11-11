@@ -62,6 +62,16 @@ export const api = {
     pointer("pointerup", at, false, mods);
     await api.settle();
   },
+  /** Press at `from`, drag to `to` and release (a differential probe: wire to wire); `shot`: a
+   *  picture before the release, the probes in it. */
+  async drag(from: Pt, to: Pt, shot?: string) {
+    pointer("pointermove", from, false);
+    pointer("pointerdown", from, true);
+    pointer("pointermove", to, true);
+    if (shot) await api.shot(shot);
+    pointer("pointerup", to, false);
+    await api.settle();
+  },
   async doubleClick(at: Pt) {
     const p = client(at);
     world().ownerSVGElement!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, clientX: p.x, clientY: p.y }));

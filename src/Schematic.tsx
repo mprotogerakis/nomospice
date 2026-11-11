@@ -20,7 +20,9 @@ type View = { x: number; y: number; k: number };
 type Drag =
   | { k: "pan"; sx: number; sy: number; vx: number; vy: number; moved: boolean }
   | { k: "move"; start: Pt; plan: (dx: number, dy: number) => Item[]; moved: boolean; index: number; at: Pt; base: Item[]; pin?: number }
-  | { k: "box"; start: Pt; end: Pt };
+  | { k: "box"; start: Pt; end: Pt }
+  /** LTspice's differential probe: red on wire/label `from`, black on what the pointer is over */
+  | { k: "diff"; from: number; to: number; at: Pt; base: Item[] };
 
 // SwiftFlow viewport constants (Models/Viewport.swift, FitViewOptions.swift)
 const MIN_ZOOM = 0.1, MAX_ZOOM = 6, FIT_PADDING = 80, FIT_MAX = 2.5, ZOOM_STEP = 1.2;
@@ -28,7 +30,9 @@ const clampZoom = (k: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, k));
 
 const cursorSvg = (body: string) =>
   `url("data:image/svg+xml,${encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24'>${body}</svg>`)}") 1 23, crosshair`;
-const PROBE_V = cursorSvg("<path d='M2 22 L9 15' stroke='%23e0573a' stroke-width='2'/><path d='M8 16 L18 6 L21 9 L11 19 Z' fill='%23e0573a' stroke='white' stroke-width='1'/>".replaceAll("%23", "#"));
+/** The voltage probe, its tip at (1, 23): red, or black for a differential probe's reference */
+const probeGlyph = (color: string) => `<path d='M2 22 L9 15' stroke='white' stroke-width='4'/><path d='M2 22 L9 15' stroke='${color}' stroke-width='2'/><path d='M8 16 L18 6 L21 9 L11 19 Z' fill='${color}' stroke='white' stroke-width='1'/>`;
+const PROBE_V = cursorSvg(probeGlyph("#e0573a"));
 const PROBE_I = cursorSvg("<circle cx='13' cy='11' r='7' fill='none' stroke='%23d9a441' stroke-width='3'/><path d='M2 22 L8 16' stroke='%23d9a441' stroke-width='2'/><path d='M13 6 v10 M10 13 l3 3 l3 -3' stroke='white' fill='none' stroke-width='1.5'/>".replaceAll("%23", "#"));
 
 function arcPath(p: number[]) {
@@ -290,6 +294,8 @@ export const Schematic = memo(function Schematic() {
   const pastedAt = useRef({ t: 0, x: 0, y: 0 });
   const [preview, setPreview] = useState<Item[] | null>(null);
   const [boxSel, setBoxSel] = useState<[Pt, Pt] | null>(null);
+  /** A differential probe being dragged: its red probe's wire/label, red at `a`, black at `b` */
+  const [diffProbe, setDiffProbe] = useState<{ from: number; a: Pt; b: Pt } | null>(null);
   const drag = useRef<Drag | null>(null);
   const mods = useRef(false);
   /** True while the view is the automatic fit; then layout changes refit instead of cropping. */
@@ -318,7 +324,7 @@ export const Schematic = memo(function Schematic() {
     return best;
   };
   // probing a part: the status bar names the current a click plots
-  const hoverCurrent = probing && hover >= 0 && items[hover]?.t === "sym" && nets ? partCurrent(nets, hover, hoverPin) : "";
+  const hoverCurrent = probing && !diffProbe && hover >= 0 && items[hover]?.t === "sym" && nets ? partCurrent(nets, hover, hoverPin) : "";
   useEffect(() => {
     useStatus.setState({ probe: hoverCurrent || null });
     return () => useStatus.setState({ probe: null });
@@ -509,6 +515,10 @@ export const Schematic = memo(function Schematic() {
           ? (dx: number, dy: number) => items.map((it, j) => (chosen.has(j) && isShape(it) ? shifted(it, dx, dy) : it))
           : (dx: number, dy: number) => (built ??= dragPlan(items, lib, chosen))(dx, dy);
         drag.current = { k: "move", start: g, plan, moved: false, index: i, at: [0, 0], base: items, pin: probing ? pinAt(items[i], p) : undefined };
+        // probing, a wire or label: a drag is LTspice's differential probe, a click its plain one
+        // (wires move with the move tool or a modifier)
+        const it = items[i];
+        if (probing && tool.k === "select" && !mods.current && (it.t === "wire" || it.t === "flag") && canProbe(it)) drag.current = { k: "diff", from: i, to: i, at: p, base: items };
       } else if (e.shiftKey) {
         drag.current = { k: "box", start: p, end: p };
       } else {
@@ -538,6 +548,10 @@ export const Schematic = memo(function Schematic() {
       if (dx || dy) d.moved = true;
       d.at = [dx, dy];
       if (d.moved) setPreview(d.plan(dx, dy));
+    } else if (d.k === "diff") {
+      d.to = hit(items, lib, p, 6 / view.k, false);
+      setHover(d.to);
+      setDiffProbe({ from: d.from, a: d.at, b: p });
     } else (d.end = p), setBoxSel([d.start, p]);
   };
 
@@ -555,6 +569,10 @@ export const Schematic = memo(function Schematic() {
       }
       // LTspice: a plain click probes at once; modifier clicks only change the selection
       else if (!d.moved && probing && !mods.current && useS.getState().items === d.base) probe(d.base[d.index], false, d.pin);
+    } else if (d?.k === "diff") {
+      // released on a wire or label: V(from,to) (on ground or its own net, a click: V(from))
+      const to = d.base[d.to];
+      if ((to?.t === "wire" || to?.t === "flag") && useS.getState().items === d.base) probe(d.base[d.from], false, undefined, to);
     } else if (d?.k === "pan" && !d.moved) useS.setState({ sel: [] });
     else if (d?.k === "box") {
       const [a, b] = [d.start, d.end]; // from the ref: the last pointermove may not have rendered
@@ -571,6 +589,7 @@ export const Schematic = memo(function Schematic() {
     }
     setPreview(null);
     setBoxSel(null);
+    setDiffProbe(null);
   };
 
   const onContextMenu = (e: React.MouseEvent) => {
@@ -717,11 +736,13 @@ export const Schematic = memo(function Schematic() {
   // labels whose wire leaves to the right are drawn to the left of their anchor
   const leftward = useMemo(() => leftLabels(shown), [shown]);
   const hoverIsSym = hover >= 0 && items[hover]?.t === "sym";
+  const diffNet = diffProbe ? nets?.nets[diffProbe.from]?.[0] : undefined; // (highlighted with the hovered one)
   const hoverProbe = probing && hover >= 0 && canProbe(items[hover], hoverPin);
   const cursorStyle =
     tool.k === "delete" ? "not-allowed"
     : !selecting ? "crosshair"
     : drag.current?.k === "pan" ? "grabbing"
+    : diffProbe ? "none" // (both probes are drawn)
     : hoverProbe ? (hoverIsSym ? PROBE_I : PROBE_V)
     : hover >= 0 ? (tool.k === "move" ? "move" : "pointer") : "default";
   const gap = GRID * view.k;
@@ -752,7 +773,8 @@ export const Schematic = memo(function Schematic() {
           {shown.map((it, i) => {
             if (!isShape(it)) return null;
             const selected = selSet.has(i);
-            const netHi = probing && hoverNet && it.t === "wire" && nets?.nets[i]?.[0] === hoverNet;
+            const net = it.t === "wire" ? nets?.nets[i]?.[0] : undefined;
+            const netHi = probing && !!net && (net === hoverNet || net === diffNet);
             return (
               <g
                 key={i}
@@ -797,6 +819,9 @@ export const Schematic = memo(function Schematic() {
             />
           )}
         </g>
+        {diffProbe && ([[diffProbe.a, "#e0573a"], [diffProbe.b, "#1b1b1f"]] as const).map(([q, c]) => (
+          <g key={c} pointerEvents="none" transform={`translate(${view.x + q[0] * view.k - 1} ${view.y + q[1] * view.k - 23})`} dangerouslySetInnerHTML={{ __html: probeGlyph(c) }} />
+        ))}
       </svg>
       {stale && sim && (
         <div className="pointer-events-none absolute top-2 left-1/2 -translate-x-1/2 rounded-float border border-status-warning-border bg-status-warning-soft px-2 py-0.5 text-2xs text-status-warning">
