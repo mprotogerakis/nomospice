@@ -1198,7 +1198,9 @@ fn ramped(line: &str) -> Option<String> {
     // (0 too: a .step of it steps the ramp's end; a 0 V sensor stays 0)
     let value = spice_num(v).is_some() || (v.starts_with('{') && v.ends_with('}'));
     // (a comment after it kept)
-    (value && rest.first().is_none_or(|r| r.eq_ignore_ascii_case("ac"))).then(|| format!("{} {} {} {RAMP}{v}){}{}", t[0], t[1], t[2], rest.iter().map(|r| format!(" {r}")).collect::<String>(), &line[code.trim_end().len()..]))
+    // (after the value: nothing, or AC and its numbers; a SINE there would be a second waveform)
+    let ac_only = rest.is_empty() || (rest[0].eq_ignore_ascii_case("ac") && rest.len() <= 3 && rest[1..].iter().all(|r| spice_num(r).is_some() || r.starts_with('{')));
+    (value && ac_only).then(|| format!("{} {} {} {RAMP}{v}){}{}", t[0], t[1], t[2], rest.iter().map(|r| format!(" {r}")).collect::<String>(), &line[code.trim_end().len()..]))
 }
 /// How [`ramped`] writes a source's value, `PWL(0 0 20u 5)` (a `.step` of the source steps the 5).
 const RAMP: &str = "PWL(0 0 20u ";
@@ -1915,20 +1917,43 @@ pub fn prepare(text: &str, dir: Option<&std::path::Path>, warnings: &mut Vec<Str
 /// LTspice's noise function `white(x)` (between -0.5 and 0.5, a new value at each integer x, in
 /// between interpolated) in a B source: ngspice has none, so `white(c*time)` becomes the voltage of
 /// a noise source of its own, ngspice's TRNOISE with the same rms (1/√12) and a new value every
-/// 1/c seconds. Other arguments, and white() in a subcircuit (its node would be local there), are
-/// said and left. None: no white() in the deck.
+/// 1/c seconds, kept within ±0.5 as LTspice's is. Other arguments, and white() in a subcircuit (its
+/// node would be local there), are said and left; a subcircuit with a `.func white` of its own is
+/// left alone. None: no white() in the deck.
 fn lt_white(text: &str, warnings: &mut Vec<String>) -> Option<String> {
     // (`.func white(x) …` of the deck's top level: its own; a subcircuit's is that subcircuit's)
     if !crate::laplace::calls(text, &["white"]) || deck_funcs(text, true).iter().any(|f| f == "white") {
         return None;
     }
+    let ci = |l: &str, p: &str| l.len() >= p.len() && l.as_bytes()[..p.len()].eq_ignore_ascii_case(p.as_bytes());
+    // (the subcircuits that define white() themselves)
+    let (mut own_in, mut cur) = (HashSet::<String>::new(), None::<String>);
+    for l in text.lines() {
+        let t = l.trim_start();
+        if ci(t, ".subckt") {
+            cur = t.split_whitespace().nth(1).map(str::to_ascii_lowercase);
+        } else if ci(t, ".ends") {
+            cur = None;
+        } else if let (Some(s), true) = (&cur, deck_funcs(l, false).iter().any(|f| f == "white")) {
+            own_in.insert(s.clone());
+        }
+    }
     // (one noise source per rate: white(1e5*time) twice is the same noise, as in LTspice)
-    let (mut out, mut sources, mut depth) = (String::with_capacity(text.len() + 128), Vec::<(f64, String)>::new(), 0);
+    let (mut out, mut sources, mut depth, mut cur, mut left) = (String::with_capacity(text.len() + 128), Vec::<(f64, String)>::new(), 0, None::<String>, false);
     for line in text.split_inclusive('\n') {
-        let t = line.trim_start().to_ascii_lowercase();
-        depth += i32::from(t.starts_with(".subckt")) - i32::from(t.starts_with(".ends"));
+        let t = line.trim_start();
+        if ci(t, ".subckt") {
+            depth += 1;
+            cur = t.split_whitespace().nth(1).map(str::to_ascii_lowercase);
+        } else if ci(t, ".ends") {
+            depth -= 1;
+            cur = None;
+        }
         let code = uncommented(line); // (not in a `;` comment)
-        if !t.starts_with('b') || !crate::laplace::calls(code, &["white"]) {
+        let theirs = cur.as_ref().is_some_and(|s| own_in.contains(s));
+        if !ci(t, "b") || theirs || !crate::laplace::calls(code, &["white"]) {
+            // (a white() on a `+` line or in a .func body is not translated: said)
+            left |= !theirs && !t.starts_with('*') && !ci(t, "b") && crate::laplace::calls(code, &["white"]);
             out.push_str(line);
             continue;
         }
@@ -1949,7 +1974,7 @@ fn lt_white(text: &str, warnings: &mut Vec<String>) -> Option<String> {
                         sources.len() - 1
                     }) + 1;
                     out.push_str(&rest[..k]);
-                    out.push_str(&format!("v(nw_white{n})"));
+                    out.push_str(&format!("max(min(v(nw_white{n}),0.5),-0.5)"));
                 }
                 _ => {
                     warnings.push(format!("`white({arg})`: nomospice turns white(c*time) into noise (ngspice has no white()); {}", if depth > 0 { "not inside a subcircuit" } else { "write the argument as a number times time" }));
@@ -1965,8 +1990,7 @@ fn lt_white(text: &str, warnings: &mut Vec<String>) -> Option<String> {
     for s in &sources {
         out = before_end(&out, &s.1);
     }
-    // (a white() on a `+` line or in a .func body is not translated: said)
-    if out.lines().any(|l| !l.trim_start().starts_with(['*', 'b', 'B']) && crate::laplace::calls(uncommented(l), &["white"])) {
+    if left {
         warnings.push("`white()` only becomes noise in a behavioral source's own line (not on a + line or in a .func): ngspice has no white()".into());
     }
     Some(out)
@@ -3062,21 +3086,28 @@ mod tests {
         assert_eq!(ramped("Vsense_r1 a b 0").as_deref(), Some("Vsense_r1 a b PWL(0 0 20u 0)")); // (stays 0; steppable)
         assert_eq!(ramped("R1 a b 1k"), None);
         assert_eq!(ramped("V1 vcc 0 12 ; supply").as_deref(), Some("V1 vcc 0 PWL(0 0 20u 12) ; supply"));
+        assert_eq!(ramped("V1 in 0 DC 0 AC 1 SIN(0 1 1k)"), None); // (a waveform of its own after the AC part)
         // white(c*time): a TRNOISE source of its own, before .end; other arguments are said
         let mut w = vec![];
         let out = lt_white("B1 n 0 V=white(1e6*time)/10 + white( time*2k )\n.tran 1m\n.end ; done\n", &mut w).unwrap();
-        assert!(out.starts_with("B1 n 0 V=v(nw_white1)/10 + v(nw_white2)\n.tran 1m\nVwhite1 nw_white1 0 dc 0 trnoise(0.288675 1e-6 0 0)\nVwhite2 nw_white2 0 dc 0 trnoise(0.288675 5e-4 0 0)\n.end ; done"), "{out}");
+        let (w1, w2) = ("max(min(v(nw_white1),0.5),-0.5)", "max(min(v(nw_white2),0.5),-0.5)");
+        assert!(out.starts_with(&format!("B1 n 0 V={w1}/10 + {w2}\n.tran 1m\nVwhite1 nw_white1 0 dc 0 trnoise(0.288675 1e-6 0 0)\nVwhite2 nw_white2 0 dc 0 trnoise(0.288675 5e-4 0 0)\n.end ; done")), "{out}");
         assert!(w.is_empty(), "{w:?}");
         let out = lt_white("B1 n 0 V=white(V(x))\n", &mut w).unwrap();
         assert!(out.contains("white(V(x))") && w.len() == 1, "{out} {w:?}");
         assert_eq!(lt_white("B1 n 0 V=1\n", &mut w), None);
         // not in a comment; a deck's own white() stays
         let out = lt_white("B1 n 0 V=white(time) ; was white(2*time)\n", &mut w).unwrap();
-        assert!(out.starts_with("B1 n 0 V=v(nw_white1) ; was white(2*time)\n") && !out.contains("nw_white2"), "{out}");
+        assert!(out.starts_with(&format!("B1 n 0 V={w1} ; was white(2*time)\n")) && !out.contains("nw_white2"), "{out}");
         assert_eq!(lt_white(".func white(x) {sin(x)}\nB1 n 0 V=white(time)\n", &mut w), None);
         let mut w = vec![];
         let out = lt_white("B1 n 0 V=white(1e5*time)-white(1e5*time)\nB2 m 0 V=1\n+ +white(time)\n", &mut w).unwrap();
-        assert!(out.starts_with("B1 n 0 V=v(nw_white1)-v(nw_white1)\n") && !out.contains("nw_white2") && w.len() == 1, "{out} {w:?}");
+        assert!(out.starts_with(&format!("B1 n 0 V={w1}-{w1}\n")) && !out.contains("nw_white2") && w.len() == 1, "{out} {w:?}");
+        // a subcircuit with a white() of its own: left alone, nothing said
+        let mut w = vec![];
+        let own = ".subckt n a b\n.func white(x) {sin(x)}\nB1 a b V=white(time)\n.ends\nB2 m 0 V=white(time)\n";
+        let out = lt_white(own, &mut w).unwrap();
+        assert!(out.contains("B1 a b V=white(time)") && out.contains(&format!("B2 m 0 V={w1}")) && w.is_empty(), "{out} {w:?}");
         // a .step of a source ramped up: the ramp's end
         let st = parse_step(".step V1 1 2 1").unwrap();
         let su = format!("V1 a 0 PWL(0 0 20u 5)\n.tran 1m uic\n{STARTUP}\n");

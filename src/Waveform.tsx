@@ -453,14 +453,19 @@ export const Waveform = memo(function Waveform() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [panes, ac, logX, xUnit, xs, size.w > 0, yAxes, spec, polarOn, points]); // (polar: no pane elements to draw in; back: new ones)
 
-  // an x range set by number (X range…): onto the plots, unless they show it already
-  useEffect(() => useS.subscribe((s, p) => {
-    const z = s.plot.zoom, u = plots.current[0];
-    if (z === p.plot.zoom || !u) return;
-    // (emptied: all of it again)
-    const [lo, hi] = z ?? [u.data[0][0], u.data[0][u.data[0].length - 1]];
-    if (u.scales.x.min !== lo || u.scales.x.max !== hi) u.setScale("x", { min: lo, max: hi });
-  }), []);
+  // an x range set by number (X range…, which says so): onto the plots; emptied: all of it again
+  // (a range not above 0 on a log axis: none, as a zoom from a linear sweep)
+  useEffect(() => {
+    const apply = () => {
+      const z = useS.getState().plot.zoom, u = plots.current[0];
+      if (!u) return;
+      if (z && logX && z[0] <= 0) return setPlot({ zoom: null });
+      const xd = u.data[0], [lo, hi] = z ?? [xd[0], xd[xd.length - 1]];
+      u.setScale("x", { min: lo, max: hi });
+    };
+    window.addEventListener("nomospice:x-range", apply);
+    return () => window.removeEventListener("nomospice:x-range", apply);
+  }, [logX]);
 
   useEffect(() => {
     const h = Math.floor(size.h / Math.max(panes.length, 1));

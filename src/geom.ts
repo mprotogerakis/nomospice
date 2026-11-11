@@ -438,7 +438,6 @@ export function twoPortIn(expr: string, nl: Netlist): string {
   const z0 = line(`R${src}_rser`)?.[3];
   // (the AC amplitude after the nodes, `AC 1`: a node named ac is none; a parameter: not here)
   const t = line(src)?.slice(3) ?? [], ac = t.findIndex((x) => /^ac$/i.test(x)), vs = ac >= 0 ? t[ac + 1] ?? "1" : "1";
-  if (/[{}]/.test(vs)) return expr;
   const zin = `(${vin}/(-I(${src})))`; // (I(V1): into its + pin)
   const r = /^I\((\w+)\)$/i.exec(out);
   // (a resistor of a plain value as the load, an Rser of one as the source's: else no reference)
@@ -450,7 +449,7 @@ export function twoPortIn(expr: string, nl: Netlist): string {
       : f === "zin" ? zin
       : !plain(z0) ? null
       : f === "s11" ? `((${zin}-(${z0}))/(${zin}+(${z0})))`
-      : vl && rl && !/[{}]/.test(rl) ? `(2*${vl}/(${vs})*sqrt((${z0})/(${rl})))` : null);
+      : vl && rl && plain(vs) ? `(2*${vl}/(${vs})*sqrt((${z0})/(${rl})))` : null); // (S21 alone needs the drive)
   }
   return e;
 }

@@ -519,6 +519,7 @@ function XRangeDialog({ unit, log }: { unit: string; log: boolean }) {
     if (bad) return;
     close();
     setPlot({ zoom: empty ? null : [a!, b!] });
+    window.dispatchEvent(new Event("nomospice:x-range")); // (the plot applies it)
   };
   return (
     <Modal title="X Range" onSubmit={submit}>
