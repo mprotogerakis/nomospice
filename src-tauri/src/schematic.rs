@@ -166,7 +166,7 @@ pub fn parse_asy(name: &str, src: &str) -> SymbolDef {
             Some("WINDOW") => {
                 d.windows.insert(num(1) as u8, (num(2), num(3)));
             }
-            Some("TEXT") if tok.len() > 5 => d.texts.push((num(1), num(2), tok[3].to_string(), num(4), rest(5))),
+            Some("TEXT") if tok.len() > 5 => d.texts.push((num(1), num(2), tok[3].to_string(), num(4), unescape(&rest(5)))),
             Some("SymbolType") => d.block = tok.get(1).is_some_and(|t| t.eq_ignore_ascii_case("block")),
             Some("PIN") => {
                 let just = tok.get(3).filter(|j| !j.eq_ignore_ascii_case("none")).map_or(String::new(), |j| j.to_ascii_uppercase());
@@ -1472,8 +1472,10 @@ impl Step {
                         let at = sp.get(2).ok_or_else(|| format!("`.step {n}`: {n} has no nodes"))?.1;
                         let new = format!("{} DC {v:e}{}", &line.line[..at], &line.line[at..]);
                         // (under .tran startup: ramped up like the others)
-                        let new = if startup { ramped(&new).unwrap_or(new) } else { new };
-                        Ok(format!("{}{new}{}", &text[..line.start], &text[line.start + line.line.len()..]))
+                        let ramp = startup.then(|| ramped(&new)).flatten();
+                        let out = format!("{}{}{}", &text[..line.start], ramp.as_deref().unwrap_or(&new), &text[line.start + line.line.len()..]);
+                        // (ramped here: named on the mark too, so the root locus's deck takes it back)
+                        Ok(if ramp.is_some() { out.replacen(&format!("{STARTUP} ; ramped:"), &format!("{STARTUP} ; ramped: {low}"), 1) } else { out })
                     }
                 }
             }
@@ -2132,7 +2134,7 @@ fn deck_funcs(text: &str, top: bool) -> Vec<String> {
 }
 
 /// The `)` matching the `(` at `open`.
-fn matching(s: &str, open: usize) -> Option<usize> {
+pub(crate) fn matching(s: &str, open: usize) -> Option<usize> {
     let mut depth = 0;
     s[open..].char_indices().find_map(|(i, c)| {
         depth += match c { '(' => 1, ')' => -1, _ => 0 };
@@ -3274,7 +3276,8 @@ mod tests {
         let pz = p.only_pz().0;
         assert!(pz.contains("\nV1 a 0 5\n") && pz.contains("\nV2 b 0 PWL(0 0 20e-6 3)\n"), "{pz}");
         let st = parse_step(".step V1 1 5 1").unwrap();
-        let out = st.apply(&format!("V1 in 0 AC 1\n.tran 1u 1m uic\n{STARTUP}\n"), 2.0).unwrap();
+        let out = st.apply(&format!("V1 in 0 AC 1\n.tran 1u 1m uic\n{STARTUP} ; ramped:\n"), 2.0).unwrap();
+        assert!(out.contains(&format!("{STARTUP} ; ramped: v1")), "{out}"); // (named on the mark)
         assert!(out.starts_with("V1 in 0 PWL(0 0 20e-6 2e0) AC 1\n"), "{out}");
         // white(c*time): a TRNOISE source of its own, before .end; other arguments are said
         let mut w = vec![];

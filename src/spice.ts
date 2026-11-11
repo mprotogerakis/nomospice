@@ -768,6 +768,20 @@ export type FftWindow = keyof typeof FFT_WINDOWS;
 /** The spectrum as it is unless set otherwise (FFT settings…): Hann, dB, points by the time steps. */
 export const FFT_DEFAULT: { window: FftWindow; lin: boolean; n: number } = { window: "hann", lin: false, n: 0 };
 
+/** Window `win` at n points and its sum, kept for the last (window, n): a .step family's curves all use it. */
+let WINDOW: { key: string; w: Float64Array; sum: number } | null = null;
+function windowOf(win: FftWindow, n: number) {
+  const key = `${win} ${n}`;
+  if (WINDOW?.key === key) return WINDOW;
+  const a = FFT_WINDOWS[win].a, w = new Float64Array(n);
+  let sum = 0;
+  for (let i = 0; i < n; i++) {
+    for (let k = 0; k < a.length; k++) w[i] += (k % 2 ? -1 : 1) * a[k] * Math.cos((2 * Math.PI * k * i) / n);
+    sum += w[i];
+  }
+  return (WINDOW = { key, w, sum });
+}
+
 /** The amplitude spectrum of ys(xs) over lo..hi in dB (a sine of amplitude 1: 0 dB), or `lin`:
  *  the amplitude itself; resampled at n even points (the time steps are not even), its mean taken
  *  off (DC is not shown, and the window would leak it into the lowest bins), windowed (the
@@ -787,13 +801,9 @@ export function spectrum(xs: number[], ys: (number | null)[], lo: number, hi: nu
     re[i] = v;
     mean += v / n;
   }
-  let sum = 0;
-  const a = FFT_WINDOWS[win].a;
+  const { w: ws, sum } = windowOf(win, n);
   for (let i = 0; i < n; i++) {
-    let w = 0;
-    for (let k = 0; k < a.length; k++) w += (k % 2 ? -1 : 1) * a[k] * Math.cos((2 * Math.PI * k * i) / n);
-    re[i] = (re[i] - mean) * w;
-    sum += w;
+    re[i] = (re[i] - mean) * ws[i];
   }
   fft(re, im);
   const db: (number | null)[] = [];

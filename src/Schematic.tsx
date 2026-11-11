@@ -85,8 +85,9 @@ function SymTexts({ def, it }: { def: SymbolDef; it: Extract<Item, { t: "sym" }>
         const j = just.replace(/^v/i, "");
         const run = /^left/i.test(j) ? 1 : /^right/i.test(j) ? -1 : 0;
         // (a vertical text runs up the symbol: on a turned part, maybe across; drawn upright then)
-        const [hx] = /^v/i.test(just) ? xform(it.rot, 0, -1) : [0];
-        const v = /^v/i.test(just) && hx === 0, turned = v ? run : /^v/i.test(just) ? hx * run : xform(it.rot, run, 0)[0];
+        const [hx, hy] = /^v/i.test(just) ? xform(it.rot, 0, -1) : [0, 0];
+        // (still vertical: drawn reading upwards; turned over, R180, its anchor on the other side)
+        const v = /^v/i.test(just) && hx === 0, turned = v ? (hy > 0 ? -run : run) : /^v/i.test(just) ? hx * run : xform(it.rot, run, 0)[0];
         const ux = turned === 0 ? run : turned; // (the run now vertical: as written)
         return (
           <text key={i} x={px} y={py} fontSize={8 + 3 * size} transform={v ? `rotate(-90 ${px} ${py})` : undefined}

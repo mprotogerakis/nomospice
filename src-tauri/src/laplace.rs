@@ -254,17 +254,7 @@ impl P<'_> {
                 }
                 // a function call or a parameter: kept as written, if s is not in it
                 if self.peek() == Some('(') {
-                    let mut depth = 0;
-                    for (k, c) in self.s[self.i..].char_indices() {
-                        depth += match c { '(' => 1, ')' => -1, _ => 0 };
-                        if depth == 0 {
-                            self.i += k + 1;
-                            break;
-                        }
-                    }
-                    if depth != 0 {
-                        return Err("a ( without its )".into());
-                    }
+                    self.i = crate::schematic::matching(self.s, self.i).ok_or("a ( without its )")? + 1;
                 }
                 let text = self.s[start..self.i].trim();
                 if mentions_s(text) {

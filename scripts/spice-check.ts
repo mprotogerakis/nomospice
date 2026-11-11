@@ -248,6 +248,7 @@ assert.equal(numInfo("1Meg", "Hz")!.text, "= 1MegHz"); // not "1M", the milli tr
   assert.equal(funcsIn("NF(V(n))+g(1)", st), "NF(V(n))+((1)*2)"); // (a .func over a stepped parameter: left …)
   assert.match(funcsLeft("NF(V(n))", st)!, /NF\(\): its \.func uses Rs/); // (… and said)
   assert.equal(funcsLeft("g(1)", st), null);
+  assert.equal(funcsLeft("par(V(a), V(b))", ".param R=1k\n* .step param R 1k 2k 1k (nomospice: one run per step)\n.func par(R, x) {R*x/(R+x)}"), null); // (its own parameter R)
   assert.equal(funcsLeft("NF(V(n))", st.replace(" (nomospice: one run per step)", "")), null); // (a .step the user commented out: none)
   assert.equal(twoPortIn("Zin(V1)", { ...two, text: "V1 V1_rser 0 AC 1\nRV1_rser in V1_rser 50\nR1 out 0 50\n* .net I(R1) V1" }), "Zin(V1)"); // (likewise a .net)
   const st2 = ".param Rs=50 k={2*Rs}\n* .step dec param Rs 1 10k 10 (nomospice: one run per step)\n.func NF(x) {x*k}\n.func h(y) {NF(y)*2}";
@@ -256,6 +257,7 @@ assert.equal(numInfo("1Meg", "Hz")!.text, "= 1MegHz"); // not "1M", the milli tr
   const pl = { ...two, text: two.text.replace("R1 out 0 50", ".param RL=50\nR1 out 0 {RL}") };
   assert.equal(twoPortIn("S21(V1)", pl), '(2*v("out")/(1)*sqrt((50)/(50)))'); // (a load of a .param value)
   assert.equal(twoPortIn("S21(V1)", { ...pl, text: pl.text + "\n* .step param RL list 50 100 (nomospice: one run per step)" }), "S21(V1)"); // (one .step varies: not)
+  assert.equal(twoPortIn("S21(V1)", { ...two, text: two.text + "\n* .step R1 50 100 50 (nomospice: one run per step)" }), "S21(V1)"); // (the load stepped itself: not)
   assert.equal(funcsIn("vd(out,in)", ".func vd(a,b) {V(a)-V(b)}"), "(V(out)-V(in))"); // (a parameter inside a probe: the name as given)
   assert.equal(twoPortIn("S21(V1)", { ...two, text: two.text.replace("* .net I(R1) V1 ; nomospice: two-port", "* .net I(C1) V1 ; nomospice: two-port") }), "S21(V1)"); // (a load that is no resistor)
   const pv = { ...two, text: two.text.replace("V1 V1_rser 0 AC 1", "V1 V1_rser 0 AC {Vac}") };

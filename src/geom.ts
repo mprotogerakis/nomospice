@@ -412,7 +412,7 @@ export function funcsIn(expr: string, text: string): string {
 type FuncDef = { name: string; params: string[]; body: string; withParams: (body: string) => string; stepped?: string };
 /** The top level's .func and .param definitions of a netlist (a subcircuit's are its own), parsed
  *  once per text (the traces of a run all ask). */
-let DEFS: { text: string; funcs: FuncDef[]; params: Map<string, string>; stepped: Map<string, string>; lines: string[] } | null = null;
+let DEFS: { text: string; funcs: FuncDef[]; params: Map<string, string>; stepped: Map<string, string>; parts: Set<string>; lines: string[] } | null = null;
 /** A probe call in an expression, `V(out)`, `I(R1)`, `Ib(Q1)`: its argument is a name, no expression. */
 const PROBE = /\b(?:v|i|i[bcdegsx])\s*\([^)]*\)/gi;
 function deckDefs(text: string) {
@@ -429,6 +429,8 @@ function deckDefs(text: string) {
   const roots = new Map<string, string>();
   // (the netlist's own: a `* .step` the user commented out is none)
   for (const m of top.matchAll(/^\*\s*\.step\s+(?:(?:dec|oct|lin)\s+)?param\s+(\w+).*\(nomospice: one run per step\)\s*$/gim)) roots.set(m[1].toLowerCase(), m[1]);
+  // (a part a .step varies itself, .step R1 …: its value differs per step too)
+  const parts = new Set([...top.matchAll(/^\*\s*\.step\s+(?:(?:dec|oct|lin)\s+)?(?!param\b)(\w+).*\(nomospice: one run per step\)\s*$/gim)].map((m) => m[1].toLowerCase()));
   const mentions = (body: string) => (roots.size ? body.replace(PROBE, "").match(new RegExp(`\\b(${[...roots.keys()].join("|")})\\b(?!\\s*\\()`, "i"))?.[1] : undefined);
   for (let round = 0; round < 8; round++) {
     let more = false;
@@ -451,10 +453,12 @@ function deckDefs(text: string) {
   };
   const funcs = [...top.matchAll(/^\s*\.func(?:tion)?\s+(\w+)\s*\(([^)]*)\)\s*=?\s*(.+?)\s*$/gim)].map((m): FuncDef => {
     const body = m[3].replace(/^\{(.*)\}$/, "$1").replace(/^'(.*)'$/, "$1");
-    const hit = mentions(body), root = hit && roots.get(hit.toLowerCase());
-    return { name: m[1], params: m[2].split(/[\s,]+/).filter(Boolean), body, withParams, stepped: hit && (root?.toLowerCase() === hit.toLowerCase() ? hit : `${hit} (of ${root})`) };
+    const params = m[2].split(/[\s,]+/).filter(Boolean);
+    // (its own parameters, R in .func par(R, x), are its own: no stepped .param of that name)
+    const hit = mentions(params.length ? body.replace(new RegExp(`\\b(${params.join("|")})\\b(?!\\s*\\()`, "gi"), " ") : body), root = hit && roots.get(hit.toLowerCase());
+    return { name: m[1], params, body, withParams, stepped: hit && (root?.toLowerCase() === hit.toLowerCase() ? hit : `${hit} (of ${root})`) };
   });
-  DEFS = { text, funcs, params, stepped: roots, lines: text.split("\n") };
+  DEFS = { text, funcs, params, stepped: roots, parts, lines: text.split("\n") };
   return DEFS;
 }
 const deckFuncs = (text: string) => deckDefs(text).funcs;
@@ -484,7 +488,7 @@ export function twoPortIn(expr: string, nl: Netlist): string {
   const m = NET_DIRECTIVE.exec(nl.text);
   if (!m || /\b(rin|rout)\s*=/i.test(m[3])) return expr;
   const [, spec, src] = m, out = (spec ?? "").replace(/\s+/g, ""); // (`.net V1`, a one-port: Zin and S11 only)
-  const { lines, params, stepped } = deckDefs(nl.text);
+  const { lines, params, stepped, parts } = deckDefs(nl.text);
   const line = (name: string) => lines.find((l) => l.split(/\s+/)[0]?.toLowerCase() === name.toLowerCase())?.split(/\s+/);
   // (a value `{RL}` of a .param: the value itself, where that is a number; one .step varies: not)
   const resolved = (x?: string) => ((m) => (m && !stepped.has(m[1].toLowerCase()) ? params.get(m[1].toLowerCase()) ?? x : x))(x ? /^\{\s*(\w+)\s*\}$/.exec(x) : null);
@@ -505,7 +509,8 @@ export function twoPortIn(expr: string, nl: Netlist): string {
   const plain = (x?: string) => !!x && /^[\d.]+(e[-+]?\d+)?[a-zµ]*$/i.test(x);
   // (the load to ground: its node's voltage, whichever way the resistor is drawn)
   const loadV = (p?: string[]) => (p?.length !== 2 ? "" : p[0] === "0" ? vexpr(p[1]) : p[1] === "0" ? vexpr(p[0]) : across(p));
-  const [vl, rl] = r && /^r/i.test(r[1]) && plain(resolved(line(r[1])?.[3])) ? [loadV(nets(r[1])), resolved(line(r[1])?.[3])] : ["", undefined];
+  // (a load that .step varies itself: its value differs per step)
+  const [vl, rl] = r && /^r/i.test(r[1]) && !parts.has(r[1].toLowerCase()) && plain(resolved(line(r[1])?.[3])) ? [loadV(nets(r[1])), resolved(line(r[1])?.[3])] : ["", undefined];
   let e = expr;
   for (const f of ["zin", "s11", "s21"]) {
     e = replaceCalls(e, f, ([s]) => s?.toLowerCase() !== src.toLowerCase() ? null
