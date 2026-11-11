@@ -1431,6 +1431,7 @@
 <p>After a run, the schematic is a probe:</p>
 <ul>
 <li>click a <strong>wire</strong> to plot its voltage;</li>
+<li>drag from one <strong>wire</strong> to another to plot the voltage between them, <code>V(a,b)</code>: the red probe sits where you pressed, the black one where you let go (on ground: plain <code>V(a)</code>). While results are shown, a drag that starts on a wire or a label probes; to move one, use the move tool (<span class="keys"><kbd class="key-m">M</kbd></span>);</li>
 <li>click a <strong>part</strong> to plot its current, in transient, DC and AC analyses alike;</li>
 <li>click <strong>near a pin</strong> of a transistor or an IC to plot that pin's current, such as <code>Ib(Q1)</code> or <code>Ix(U1:OUT)</code>;</li>
 <li>right-click a two-pin part and choose <em>Plot power</em> for the power it takes (transient and DC analyses).</li>
@@ -1438,7 +1439,7 @@
 <p>Each unit gets a pane of its own: volts, amperes, watts.</p>
 <h2 id="plot-an-expression">Plot an expression<a class="headerlink" href="#plot-an-expression" title="Permanent link">&para;</a></h2>
 <p><img alt="The Add Trace dialog with the expression V(in)-V(out)" src="../img/plot-and-measure/01-add-trace.png" /></p>
-<p>Click <em>Add trace</em> beside the plot and type an expression in ngspice's syntax: <code>V(in)-V(out)</code>, <code>I(R1)</code>, <code>V(in)*I(R1)</code> (in watts), <code>db(V(out))</code>, <code>group_delay(V(out))</code>. The unit follows from the expression. A constant, such as <code>0.5</code>, draws a reference line.</p>
+<p>Click <em>Add trace</em> beside the plot and type an expression in ngspice's syntax: <code>V(in)-V(out)</code>, <code>I(R1)</code>, <code>V(in)*I(R1)</code> (in watts), <code>P(R1)+P(R2)</code> (two-pin parts' power, as <em>Plot power</em> draws it; transient and DC analyses), <code>db(V(out))</code>, <code>group_delay(V(out))</code>. The unit follows from the expression. A constant, such as <code>0.5</code>, draws a reference line.</p>
 <p><img alt="The difference V(in)-V(out) as a third trace" src="../img/plot-and-measure/02-expression.png" /></p>
 <h2 id="arrange-traces">Arrange traces<a class="headerlink" href="#arrange-traces" title="Permanent link">&para;</a></h2>
 <p><img alt="A trace's menu: right axis, copy expression, remove" src="../img/plot-and-measure/03-trace-menu.png" /></p>
