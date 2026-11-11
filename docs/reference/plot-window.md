@@ -27,15 +27,15 @@ After a run with results over time, frequency or a sweep, the plot opens above t
 | drag | zooms into the range dragged over |
 | wheel or trackpad | zooms around the mouse; sideways pans |
 | double-click | shows everything again |
-| right-click a row | right axis, another pane, group delay (AC), copy expression, remove |
+| right-click a row | right axis, another pane, a pane of its own, group delay (AC), copy expression, remove |
 | right-click the plot | its menu |
 
 ## The plot's menu
 
-Reset zoom · Clear cursors · Add trace… · Bode, Nyquist and Nichols plot (AC) · FFT (spectrum) and back (transient) · Log y axis · Y range… · Copy data as CSV · Export plot as SVG… · Export results as .raw… · Remove all traces.
+Reset zoom · Clear cursors · Add trace… · Bode, Nyquist and Nichols plot (AC) · FFT (spectrum) and back (transient) · Log or linear x axis (frequencies) · X range… · Hide the phase (AC) · Mark data points · FFT settings… (window: Hann, rectangular, Hamming, Blackman-Harris, flat top; dB or linear amplitude; points) · Log y axis · Y range… · Copy data as CSV · Export plot as SVG… · Export results as .raw… · Remove all traces.
 
 ## Other result views
 
 - A single-frequency AC analysis (`.ac lin 1 50 50`) gives a table of phasors, magnitude ∠ phase, under *Phasors* in the bottom panel.
-- `.op`, `.tf` and the totals of `.noise` are tables under *Results* or *Operating point*.
+- `.op`, `.tf` and the totals of `.noise` are tables under *Results* or *Operating point*. After `.op`, hovering a wire shows its voltage and hovering a part its current in the status bar; the canvas menu's *Show operating point* writes them beside the labels and parts.
 - `.pz` shows the s-plane: see [Find poles and zeros](../how-to/poles-and-zeros.md).

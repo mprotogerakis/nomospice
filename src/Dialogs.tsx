@@ -574,6 +574,8 @@ const HELP: [string, [string, string][]][] = [
   ["Plotting", [
     ["click a wire · a part", "its voltage · its current (near a pin: that pin's, Ib(Q1))"],
     ["drag from wire to wire", "the voltage between them, V(a,b)"],
+    ["a trace's menu", "a pane of its own; the plot's: FFT settings, x axis log/linear and range, hide the phase, mark data points"],
+    ["after .op", "hover a wire or part: its voltage or current; canvas menu: Show operating point"],
     ["Add trace", "an expression: V(out)-V(in), I(R1), P(R1)+P(R2) (a part's power, W), db(), group_delay() …"],
     ["click · shift-click", "cursor A · cursor B; shift-drag: the range A–B (average, RMS, integral)"],
     ["drag · wheel · dbl-click", "zoom · zoom and pan · reset"],

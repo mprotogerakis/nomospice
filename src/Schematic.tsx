@@ -10,7 +10,7 @@ import {
 } from "./geom";
 import { canProbe, commit, currentNets, isSymbolDoc, nextInst, powerMode, powerName, probe, probeMode, simulate, useS, useStatus } from "./store";
 import { copySelection, deleteSelection, duplicate, newItem, pasteClipboard, transform } from "./actions";
-import { ANALYSIS, ANY_ANALYSIS, analysisOptions, continuation } from "./spice";
+import { ANALYSIS, ANY_ANALYSIS, analysisOptions, continuation, si } from "./spice";
 import { openMenu, type MenuItem } from "./Menu";
 import { useSize } from "./lib/useSize";
 import { cn } from "@/lib/utils";
@@ -335,6 +335,21 @@ export const Schematic = memo(function Schematic() {
     return () => useStatus.setState({ probe: null });
   }, [hoverCurrent]);
 
+  // the operating point (.op, fresh): node voltages by net, part currents by name (I(R1), a
+  // source's v1#branch; a .step run's per step, `out [R=1k]`)
+  const opNow = !!sim?.run?.plot.startsWith("op") && !stale;
+  const opRows = (match: (n: string) => boolean) => sim?.run?.op.filter(([n]) => match(n)) ?? [];
+  const named = (want: string) => (n: string) => n.toLowerCase() === want.toLowerCase() || n.toLowerCase().startsWith(`${want.toLowerCase()} [`);
+  const opCurrent = (i: number, pin?: number) => {
+    if (!nets) return null;
+    const label = partCurrent(nets, i, pin), inst = nets.insts[i] ?? "";
+    const rows = label ? opRows(named(label)) : [];
+    const got = rows.length ? rows : inst ? opRows(named(`${inst}#branch`)) : [];
+    return got.length ? `${label || `I(${inst})`} = ${got.map((r) => si(r[1], "A", 4)).join(" / ")}` : null;
+  };
+  /** Values written beside the net labels and the parts (the canvas menu's Show operating point) */
+  const [opShown, setOpShown] = useState(false);
+
   const size = useSize(svgRef);
 
   /** `its` in the middle, at the zoom that fits them, at most `cap`; nothing to show: the origin. */
@@ -390,10 +405,12 @@ export const Schematic = memo(function Schematic() {
     // stale results: auto net names (N001 ...) may now denote other nodes, so no value
     // (a .step run: the net's value per step, `out [R=1k]`, in order)
     const own = (n: string) => !!hoverNet && (n.toLowerCase() === hoverNet.toLowerCase() || n.toLowerCase().startsWith(`${hoverNet.toLowerCase()} [`));
-    const vs = hoverNet && !stale && sim?.run?.plot.startsWith("op") ? sim.run.op.filter(([n]) => own(n)) : [];
+    const vs = hoverNet && opNow ? opRows(own) : [];
     if (vs.length) op = ` = ${vs.map((v) => v[1].toPrecision(5)).join(" / ")} V`;
-    useStatus.setState({ net: hoverNet ? hoverNet + op : null, zoom: view.k });
-  }, [hoverNet, view.k, sim, stale]);
+    // a part: its current, as the operating point lists it
+    const part = !hoverNet && opNow && hover >= 0 && items[hover]?.t === "sym" ? opCurrent(hover, hoverPin) : null;
+    useStatus.setState({ net: hoverNet ? hoverNet + op : part, zoom: view.k });
+  }, [hoverNet, view.k, sim, stale, hover, hoverPin]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     const cancel = () => (wireStart ? setWireStart(null) : useS.setState({ tool: { k: "select" } }));
     window.addEventListener("nomospice:cancel", cancel);
@@ -676,6 +693,7 @@ export const Schematic = memo(function Schematic() {
       "-",
       { label: "Edit simulation command…", run: () => set({ dialog: { k: "sim" } }) },
       { label: "Run", hint: "⌘↵", run: simulate },
+      ...(opNow ? [{ label: opShown ? "Hide operating point" : "Show operating point", hint: "voltages at the labels, currents at the parts", run: () => setOpShown(!opShown) }] : []),
       "-",
       { label: "Paste", hint: "⌘V", run: pasteClipboard },
       { label: "Select all", hint: "⌘A", run: () => set({ sel: items.flatMap((x, j) => (x.t === "raw" ? [] : [j])) }) },
@@ -840,6 +858,21 @@ export const Schematic = memo(function Schematic() {
           )}
           {!selecting && (
             <circle cx={cursor[0]} cy={cursor[1]} r={3} fill="none" stroke="var(--selection)" strokeWidth={1} vectorEffect="non-scaling-stroke" />
+          )}
+          {opShown && opNow && nets && (
+            <g className="fill-[var(--selection)] text-[11px]" stroke="none">
+              {items.map((it, i) => {
+                if (it.t === "flag" && !/^(0|gnd)$/i.test(it.name)) {
+                  // (beside the label's box, on the side away from its wire)
+                  const v = opRows(named(nets.nets[i]?.[0] ?? "\u0000")), left = leftward.has(`${it.x},${it.y}`), r = labelRect(it, left);
+                  return v.length ? <text key={`op${i}`} x={left ? r[0] - 4 : r[2] + 4} y={it.y} dominantBaseline="middle" textAnchor={left ? "end" : "start"}>{v.map((x) => si(x[1], "V", 4)).join(" / ")}</text> : null;
+                }
+                if (it.t !== "sym") return null;
+                const c = opCurrent(i);
+                const bb = symBox(it, defOf(lib, it));
+                return c ? <text key={`op${i}`} x={bb[2] + 4} y={bb[3]}>{c}</text> : null;
+              })}
+            </g>
           )}
           {boxSel && (
             <rect

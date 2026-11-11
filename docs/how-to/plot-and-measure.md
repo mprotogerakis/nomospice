@@ -40,7 +40,15 @@ For measurements you want every run, write a `.meas` directive (press ++s++, the
 
 ![The spectrum of the traces between the cursors](../img/plot-and-measure/05-fft.png)
 
-Right-click a transient plot and choose *FFT (spectrum)*: the spectrum of the range between the cursors A and B, else of what is shown, with a Hann window and in decibels of the amplitude. *Back to the transient* returns.
+Right-click a transient plot and choose *FFT (spectrum)*: the spectrum of the range between the cursors A and B, else of what is shown, with a Hann window and in decibels of the amplitude. *FFT settings…* in the same menu chooses the window (Hann; rectangular for a whole number of periods; Hamming; Blackman-Harris for small lines beside big ones; flat top for exact amplitudes), the amplitude in dB or as it is (volts, amperes), and the number of points. *Back to the transient* returns.
+
+## Arrange the axes
+
+The plot's menu switches a frequency axis between logarithmic and linear, sets the x range by number (*X range…*), hides an AC result's phase (*Hide the phase*: the magnitude alone) and marks the points the simulator computed (*Mark data points*). A trace's menu puts it *Into a pane of its own*, so input and output, both in volts, are shown one above the other.
+
+## Two-port quantities
+
+With `.net I(R1) V1` beside an `.ac` analysis (V1 the source, with an Rser as the reference impedance; R1 the load), *Add trace* offers `S21(V1)`, `S11(V1)` and `Zin(V1)`: transmission and reflection in dB and phase, the input impedance in ohms.
 
 ## Other choices in the plot's menu
 

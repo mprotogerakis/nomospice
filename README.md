@@ -31,6 +31,9 @@ files — with a modern UI, ngspice as the engine, a Rust core and a React front
   curves, one per step, and `.meas` is measured per step. **Monte Carlo**: `{mc(1k,0.05)}`,
   `flat(x)`, `gauss(x)` draw anew in each run of `.step param run 1 100 1` (a `.param` of one
   draws anew wherever it is used).
+- **More parts**: behavioral sources `bv`/`bi` (`V=V(a)*V(b)`, `white(1e6*time)` noise), transmission lines
+  `tline`/`ltline`, `opamp2` with supply pins (clips at the rails, slew rate), logic gates and a D flip-flop
+  (DIN EN 60617); `.tran … startup` ramps the supplies up as LTspice does.
 - **Laplace sources**: an E or G source with `Laplace=1/(1+s*tau)` (any ratio of polynomials in s,
   `.param`s inside) works in `.op`, `.ac` and `.tran`.
 - **Measurements**: `.meas` results are listed with the plot.
@@ -42,8 +45,11 @@ files — with a modern UI, ngspice as the engine, a Rust core and a React front
   RMS and integral between them (shift-drag marks the range), expressions in ngspice syntax (a
   constant draws a reference line), a part's power (right-click > Plot power; in expressions `P(R1)+P(R2)`), copy as CSV, all
   results as a `.raw` file;
-  an **FFT** of a transient (of A–B or the shown range; Hann window, dB of the amplitude), a log
-  or fixed y axis per pane, a trace moved into another unit's pane (on its right axis). A single-frequency `.ac` (`.ac lin 1 50 50`) gives a phasor table
+  an **FFT** of a transient (of A–B or the shown range; Hann, rectangular, Hamming, Blackman-Harris or
+  flat-top window, dB or linear, the number of points), a log or fixed y axis per pane, a log or linear
+  frequency axis, the x range by number, a trace moved into another unit's pane (on its right axis) or
+  into a pane of its own, the phase hidden, the data points marked, `.func` in expressions, S-parameters
+  (`S21(V1)`, `S11(V1)`, `Zin(V1)`) of LTspice's `.net`; after `.op`, the values at the labels and parts. A single-frequency `.ac` (`.ac lin 1 50 50`) gives a phasor table
   (magnitude ∠ phase) instead of a plot.
 - **SVG export** for slides and papers (right-click the canvas or the plot): the schematic or the plots as
   shown, in a light print style, readable by Inkscape, browsers, PowerPoint and Keynote.

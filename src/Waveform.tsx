@@ -526,7 +526,7 @@ export const Waveform = memo(function Waveform() {
       <div className="flex w-[340px] shrink-0 flex-col border-l border-border bg-surface-panel text-xs">
         {win && (
           <div className="border-b border-border px-2 py-1 font-mono text-2xs text-text-secondary">
-            Spectrum of {si(win.lo, "s")} … {si(win.hi, "s")}: {win.n} points, Hann window, dB of the amplitude (a sine of 1 V or 1 A: 0 dB){win.curves > 1 ? "; of each step's curve as fetched for the plot (thinned: what lies above its points' Nyquist frequency folds in)" : ""} ·{" "}
+            Spectrum of {si(win.lo, "s")} … {si(win.hi, "s")}: {win.n} points, {FFT_WINDOWS[fftOpts.window].label} window, {fftOpts.lin ? "the amplitude (a sine of 1 V: 1 V)" : "dB of the amplitude (a sine of 1 V or 1 A: 0 dB)"}{win.curves > 1 ? "; of each step's curve as fetched for the plot (thinned: what lies above its points' Nyquist frequency folds in)" : ""} ·{" "}
             <button className="underline hover:text-text-strong" onClick={() => showFft(null)}>back to the transient</button>
           </div>
         )}
