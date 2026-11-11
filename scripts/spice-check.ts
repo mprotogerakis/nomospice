@@ -1,6 +1,6 @@
 // Self-check of src/spice.ts (the form editors' SPICE parsing/formatting): node scripts/spice-check.ts
 import assert from "node:assert/strict";
-import { box, connectivity, dragPlan, expandPowers, hit, outline, POWER_CALL, powersIn, shifted } from "../src/geom.ts";
+import { box, connectivity, dragPlan, expandPowers, funcsIn, hit, outline, POWER_CALL, powersIn, shifted, twoPortIn } from "../src/geom.ts";
 import {
   tokens, formatAnalysis, formatIc, formatInclude, formatMeas, formatModel, formatParams, formatSource, numInfo, parseAnalysis,
   parseIc, parseInclude, parseMeas, parseModel, parseParams, parseSource, sample, si, spiceNum, directiveKind, analysisRoundTrips, analysisEditable, analysisOptions, analysisLineIndex, at, integrate, stripAnalyses, portablePaths, sourceRoundTrips,
@@ -208,6 +208,17 @@ assert.equal(numInfo("1Meg", "Hz")!.text, "= 1MegHz"); // not "1M", the milli tr
   assert.equal(powersIn("P(R1)+p(d1)", nl), '((v("a")-v("b"))*I(R1))+((v("c")-0)*I(D1))');
   assert.equal(powersIn("P(U1)", nl), '((v("p")-v("q"))*Ix(U1:A))');
   assert.equal(powersIn("P(U2)+P(R9)", nl), "P(U2)+P(R9)");
+  // .func of the netlist in a trace: its body, the arguments in parentheses; nested, two arguments
+  const funcs = ".func NF(x) {10*log10(x*x/(50*4*boltz*300))}\n.func sq(a, b) a*b\n.func twice(x) 2*sq(x,1)";
+  assert.equal(funcsIn("NF(V(inoise))", funcs), "(10*log10((V(inoise))*(V(inoise))/(50*4*boltz*300)))");
+  assert.equal(funcsIn("twice(V(a,b))+sq(1)", funcs), "(2*(((V(a,b)))*(1)))+sq(1)"); // (sq of a wrong count of arguments: left)
+  // .net I(R1) V1: Zin, S11, S21 of V1 (Rser 50, AC 1) into R1 (50 Ω)
+  const two = { text: "V1 V1_rser 0 AC 1\nRV1_rser in V1_rser 50\nR1 out 0 50\n* .net I(R1) V1", nets: [["in", "0"], ["out", "0"]], insts: ["V1", "R1"], probes: [], pin_currents: [], sheets: [], warnings: [] };
+  assert.equal(twoPortIn("Zin(V1)", two), '((v("in")-0)/(-I(V1)))');
+  assert.equal(twoPortIn("S11(v1)", two), '((((v("in")-0)/(-I(V1)))-(50))/(((v("in")-0)/(-I(V1)))+(50)))');
+  assert.equal(twoPortIn("S21(V1)", two), '(2*(v("out")-0)/(1)*sqrt((50)/(50)))');
+  assert.equal(twoPortIn("S21(V2)", two), "S21(V2)");
+  assert.equal(twoPortIn("S21(V1)", { ...two, text: two.text.replace("* .net I(R1) V1", "* .net V(out) V1") }), "S21(V1)"); // (no Rout=: no load to refer to)
   assert.equal(exprUnit("I(R1)-I(R2)"), "A");
   assert.equal(exprUnit("Ib(Q1)+Ic(Q1)"), "A");
   assert.equal(exprUnit("ig(v1)"), "", "group delay or a gate current: not guessed");

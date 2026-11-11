@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import type { GitStatus, Item, Netlist, Shape, Sim, SymbolDef, Trace, TraceData } from "./types";
-import { defOf, isNet, partCurrent, pinLine, POWER_ANY, POWER_CALL, powerExpr, powersIn, prefixOf, symKey, vexpr, type Lib } from "./geom";
+import { defOf, funcsIn, isNet, partCurrent, pinLine, POWER_ANY, POWER_CALL, powerExpr, powersIn, prefixOf, symKey, twoPortIn, vexpr, type Lib } from "./geom";
 import { ANALYSIS, ANY_ANALYSIS, analysisLineIndex, analysisOptions, continuation, parseAnalysis, stripAnalyses, type Analysis, type FftWindow } from "./spice";
 
 export type Tool =
@@ -302,9 +302,12 @@ function freeSlot(traces: Trace[]) {
 async function fetchTrace(t: Trace): Promise<Trace> {
   const run = get().sim?.run;
   if (!run) return { ...t, data: undefined, error: "no simulation results: run the simulation" };
-  const expr = ngspiceExpr(t.expr, get().sim!.netlist); // (the one the results were computed with)
+  const nl = get().sim!.netlist; // (the one the results were computed with)
+  const pre = withDefs(t.expr, nl), expr = powersIn(pre, nl);
   const unknown = POWER_ANY.test(expr); // (P() of whatever: exprUnit's watts, so ours to explain)
-  if ((t.power || expr !== t.expr || unknown) && !powerMode(get().sim)) return { ...t, data: undefined, error: "power: only in .tran and .dc results" };
+  if ((t.power || expr !== pre || unknown) && !powerMode(get().sim)) return { ...t, data: undefined, error: "power: only in .tran and .dc results" };
+  if (/\b(s11|s21|zin)\s*\(/i.test(expr) || (/\b(s11|s21|zin)\s*\(/i.test(t.expr) && !run.plot.startsWith("ac")))
+    return { ...t, data: undefined, error: "S11(V1), S21(V1), Zin(V1): an .ac result with a .net directive, e.g. .net I(R1) V1 (R1 the load, V1 with an Rser or Rin=)" };
   if (unknown) {
     const left = POWER_CALL.exec(expr)?.[1];
     return { ...t, data: undefined, error: `${left ? `P(${left}): no such two-pin part. ` : ""}P() is the power of a part with two pins, by its name: P(R1) (its menu's Plot power)` };
@@ -587,8 +590,10 @@ export function canProbe(target: Item | undefined, pin?: number) {
   return (isNet(target) && !ground) || part;
 }
 
-/** `expr` as ngspice reads it, by the netlist the results were computed with (see powersIn). */
-export const ngspiceExpr = (expr: string, nl = get().sim?.netlist) => (nl ? powersIn(expr, nl) : expr);
+/** `expr` with the netlist's `.func`s and its `.net` (S11(V1) …) written out (geom's funcsIn, twoPortIn). */
+const withDefs = (expr: string, nl: Netlist) => twoPortIn(funcsIn(expr, nl.text), nl);
+/** `expr` as ngspice reads it, by the netlist the results were computed with (see powersIn too). */
+export const ngspiceExpr = (expr: string, nl = get().sim?.netlist) => (nl ? powersIn(withDefs(expr, nl), nl) : expr);
 
 /** A two-pin part's power by the name of its current: I(D1) -> P(D1). */
 export const powerName = (current: string) => current.replace(/^I/, "P");

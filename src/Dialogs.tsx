@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { message, open } from "@tauri-apps/plugin-dialog";
 import type { Item, LibEntry, LibSource } from "./types";
-import { addTrace, analysisItem, commit, currentTab, fileName, forDoc, isSymbolDoc, loadSymbols, placePart, placeSymbol, setPlot, setYAxis, useS } from "./store";
+import { addTrace, analysisItem, commit, currentTab, fileName, forDoc, isSymbolDoc, loadSymbols, ngspiceExpr, placePart, placeSymbol, setPlot, setYAxis, useS } from "./store";
 import { defOf, pinLine, portOf, POWER_ANY, prefixOf, vexpr } from "./geom";
 import { Button } from "./ui/button";
 import { closeDialog as close, Field, FIELD, Modal, numHelp, NumField, Rows, Select, TextField } from "./ui/dialog";
@@ -416,7 +416,7 @@ function TraceDialog() {
     const f = e.match(/^(\w+)\((.*)\)$/);
     const unit = f && /^v?db$/i.test(f[1]) ? "dB" : f && /^(c?ph|vp)$/i.test(f[1]) ? "rad"
       : noise ? ((a) => (a === run?.scale ? xUnitOf(a) : /^\w+$/.test(a) ? noiseUnit(a) : ""))(f && /^(mag|vm|real|re|abs)$/i.test(f[1]) ? f[2] : e) // (a spectrum, or a magnitude of one)
-      : raw ? "" : ((u) => (u === "W" && run?.plot.startsWith("ac") && !POWER_ANY.test(e) ? "VA" : u))(exprUnit(e, vectorUnit, xUnitOf(run?.scale ?? ""))); // (V·I in .ac: complex, VA; P() is watts, from a later .tran)
+      : raw ? "" : ((u) => (u === "W" && run?.plot.startsWith("ac") && !POWER_ANY.test(e) ? "VA" : u))(exprUnit(ngspiceExpr(e), vectorUnit, xUnitOf(run?.scale ?? ""))); // (V·I in .ac: complex, VA; P() is watts, from a later .tran; .func, S21(V1) … as written out)
     if (e) addTrace(e, e, unit);
   };
   return (
@@ -425,6 +425,8 @@ function TraceDialog() {
         <input data-autofocus list="vectors" className={FIELD} value={expr} onChange={(e) => setExpr(e.target.value)} />
       </Field>
       <datalist id="vectors">
+        {/* (.net I(R1) V1: its two-port quantities) */}
+        {(/^\*\s*\.net\s+\S+\s+(\S+)/im.exec(useS.getState().sim?.netlist.text ?? "")?.slice(1, 2) ?? []).flatMap((s) => ["S21", "S11", "Zin"].map((f) => <option key={f} value={`${f}(${s})`} />))}
         {vectors.filter((v) => v !== run?.scale).map((v) => (
           <option key={v} value={raw ? v : /^[\w+\-.]+#branch$/.test(v) ? `i(${v.replace("#branch", "")})` : /^[\w+\-.]+$/.test(v) ? vexpr(v) : v} />
         ))}

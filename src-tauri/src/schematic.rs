@@ -1231,7 +1231,10 @@ fn directive(line: &str, warnings: &mut Vec<String>) -> Option<String> {
             }
             Some(format!(".tran {}{uic}{}", v.join(" "), if startup { format!("\n{STARTUP}") } else { String::new() }))
         }
-        Some(".wave" | ".net" | ".savebias" | ".loadbias") => {
+        // LTspice's two-port analysis: kept as a comment, the plot makes S11(V1), S21(V1), Zin(V1)
+        // of it (an .ac result's vectors)
+        Some(".net") => Some(format!("* {}", uncommented(line).trim())),
+        Some(".wave" | ".savebias" | ".loadbias") => {
             warnings.push(format!("`{line}` is LTspice-only and was skipped"));
             None
         }
@@ -3195,6 +3198,25 @@ mod tests {
         let n = tr("v(n)");
         let rms = (n.re.iter().map(|v| v * v).sum::<f64>() / n.re.len() as f64).sqrt();
         assert!((0.2..0.37).contains(&rms), "rms {rms}");
+    }
+
+    #[test]
+    fn two_port_net_simulates() {
+        // .net I(R1) V1 stays as a comment the plot reads; its quantities as the plot writes them out
+        // (geom's twoPortIn): V1 (AC 1, Rser 50) -> 50 Ω in series -> R1 50 Ω: Zin 100, S11 1/3, S21 2/3
+        let _s = SIM.lock();
+        let src = "Version 4\nSHEET 1 880 680\nFLAG 0 16 in\nFLAG 0 96 0\nFLAG 112 16 in\nFLAG 112 96 out\nFLAG 208 16 out\nFLAG 208 96 0\n\
+            SYMBOL voltage 0 0 R0\nSYMATTR InstName V1\nSYMATTR Value AC 1\nSYMATTR SpiceLine Rser=50\n\
+            SYMBOL res 96 0 R0\nSYMATTR InstName R2\nSYMATTR Value 50\nSYMBOL res 192 0 R0\nSYMATTR InstName R1\nSYMATTR Value 50\n\
+            TEXT 0 200 Left 2 !.net I(R1) V1\nTEXT 0 232 Left 2 !.ac lin 2 1k 2k\n";
+        let nl = netlist_for_sim(&parse_asc(src), &mut Library::builtin());
+        assert!(nl.text.contains("* .net I(R1) V1") && nl.text.contains("RV1_rser in V1_rser 50") && !nl.warnings.iter().any(|w| w.contains(".net")), "{}\n{:?}", nl.text, nl.warnings);
+        let run = crate::ngspice::run(&prepare(&nl.text, None, &mut vec![])).unwrap();
+        let mag = |e: &str| { let t = crate::ngspice::trace(e, &run.scale, run.id).unwrap(); t.re[0].hypot(t.im.as_ref().map_or(0.0, |i| i[0])) };
+        let zin = "((v(\"in\")-0)/(-i(v1)))";
+        assert!((mag(zin) - 100.0).abs() < 1e-6, "Zin {}", mag(zin));
+        assert!((mag(&format!("(({zin}-(50))/({zin}+(50)))")) - 1.0 / 3.0).abs() < 1e-9);
+        assert!((mag("(2*(v(\"out\")-0)/(1)*sqrt((50)/(50)))") - 2.0 / 3.0).abs() < 1e-9);
     }
 
     #[test]

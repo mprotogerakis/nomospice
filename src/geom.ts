@@ -349,6 +349,81 @@ const POWER_CALLS = new RegExp(POWER_CALL.source, "gi");
 /** P() of anything (exprUnit's watts): an expression that asks for a power. */
 export const POWER_ANY = /\bP\s*\(/i;
 
+/** `expr` with each call of `name` (any case, blanks before `(` too) replaced by what `f` makes of
+ *  its arguments (split at the commas outside parentheses); null: left as written. */
+function replaceCalls(expr: string, name: string, f: (args: string[]) => string | null): string {
+  const re = new RegExp(`\\b${name}\\s*\\(`, "gi");
+  let out = "", from = 0, m: RegExpExecArray | null;
+  while ((m = re.exec(expr))) {
+    let depth = 0, end = -1;
+    const args: string[] = [];
+    let start = m.index + m[0].length;
+    for (let i = start - 1; i < expr.length; i++) {
+      const c = expr[i];
+      if (c === "(") depth++;
+      else if (c === ")" && --depth === 0) { end = i; break; }
+      else if (c === "," && depth === 1) args.push(expr.slice(start, i).trim()), (start = i + 1);
+    }
+    if (end < 0) break;
+    args.push(expr.slice(start, end).trim());
+    const r = f(args);
+    out += expr.slice(from, m.index) + (r ?? expr.slice(m.index, end + 1));
+    from = end + 1;
+    re.lastIndex = end + 1;
+  }
+  return out + expr.slice(from);
+}
+
+/** The netlist's `.func f(x) {…}` in a trace expression, as LTspice's plot defs: ngspice's plot
+ *  expressions know none. A call becomes its body, each parameter its argument in parentheses;
+ *  calls of other functions in it too (10 rounds at most: a recursive one stops there). */
+export function funcsIn(expr: string, text: string): string {
+  const defs = [...text.matchAll(/^\s*\.func(?:tion)?\s+(\w+)\s*\(([^)]*)\)\s*=?\s*(.+?)\s*$/gim)].map((m) => ({
+    name: m[1], params: m[2].split(/[\s,]+/).filter(Boolean), body: m[3].replace(/^\{(.*)\}$/, "$1").replace(/^'(.*)'$/, "$1"),
+  }));
+  for (let round = 0; round < 10; round++) {
+    const before = expr;
+    for (const d of defs) {
+      // (all parameters at once: an argument's own letters are not a parameter's)
+      const re = new RegExp(`\\b(${d.params.join("|")})\\b`, "g");
+      expr = replaceCalls(expr, d.name, (args) => args.length !== d.params.length ? null
+        : `(${d.params.length ? d.body.replace(re, (p) => `(${args[d.params.indexOf(p)]})`) : d.body})`);
+    }
+    if (expr === before) break;
+  }
+  return expr;
+}
+
+/** LTspice's `.net` (a comment in the run's netlist: ngspice has no such analysis) in a trace
+ *  expression of an .ac result: Zin(V1), S11(V1) and S21(V1) of the two-port from source V1 (its
+ *  Rser, or Rin=, the reference impedance; its AC amplitude) to the load, I(R1) (the voltage across
+ *  R1, its value the load) or V(out[,ref]) with Rout=. What it cannot make stays as written. */
+export function twoPortIn(expr: string, nl: Netlist): string {
+  const m = /^\*\s*\.net\s+(\S+)\s+(\S+)(.*)$/im.exec(nl.text);
+  if (!m || !/\b(s11|s21|zin)\s*\(/i.test(expr)) return expr;
+  const [, out, src, rest] = m;
+  const param = (k: string) => new RegExp(`\\b${k}\\s*=\\s*(\\S+)`, "i").exec(rest)?.[1];
+  const line = (name: string) => nl.text.split("\n").find((l) => l.split(/\s+/)[0]?.toLowerCase() === name.toLowerCase())?.split(/\s+/);
+  const nets = (inst: string) => nl.nets[nl.insts.findIndex((x) => x.toLowerCase() === inst.toLowerCase())];
+  const across = (p?: string[]) => (p?.length === 2 ? `(${vexpr(p[0])}-${vexpr(p[1])})` : "");
+  const vin = across(nets(src));
+  if (!vin) return expr;
+  const z0 = param("Rin") ?? line(`R${src}_rser`)?.[3];
+  const vs = /\bac\s+(\S+)/i.exec(line(src)?.join(" ") ?? "")?.[1] ?? "1";
+  const zin = `(${vin}/(-I(${src})))`; // (I(V1): into its + pin)
+  const r = /^I\((\w+)\)$/i.exec(out), v = /^V\(([^,)]+)(?:,([^)]+))?\)$/i.exec(out);
+  const [vl, rl] = r ? [across(nets(r[1])), line(r[1])?.[3]] : v ? [`(${vexpr(v[1].trim())}-${vexpr(v[2]?.trim() ?? "0")})`, param("Rout")] : ["", undefined];
+  let e = expr;
+  for (const f of ["zin", "s11", "s21"]) {
+    e = replaceCalls(e, f, ([s]) => s?.toLowerCase() !== src.toLowerCase() ? null
+      : f === "zin" ? zin
+      : !z0 || /[{}]/.test(z0) ? null
+      : f === "s11" ? `((${zin}-(${z0}))/(${zin}+(${z0})))`
+      : vl && rl && !/[{}]/.test(rl) ? `(2*${vl}/(${vs})*sqrt((${z0})/(${rl})))` : null);
+  }
+  return e;
+}
+
 /** A wire or a label: what has a net (a voltage to probe, a differential probe's end). */
 export const isNet = (it: Item | undefined) => it?.t === "wire" || it?.t === "flag";
 
