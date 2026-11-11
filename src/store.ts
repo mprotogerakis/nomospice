@@ -620,8 +620,8 @@ export async function probe(target: Item, power = false, pin?: number, ref?: Ite
   if (!sim?.run || !probeMode(sim) || stale || i < 0) return; // e.g. the re-run turned out to be .noise
   if (target.t === "sym" && power) {
     if (!powerMode(sim)) return;
-    // LTspice's power probe, as P(R1) where that names it back (rewired, it follows the part; a
-    // typed P(R1) is the same trace), else as the product (Px(U1:A) is no expression)
+    // LTspice's power probe, as P(R1) where that names it back (rewired, it follows the part; the
+    // same P(R1) typed is the same trace), else as the product (Px(U1:A) is no expression)
     const name = powerName(partCurrent(sim.netlist, i)), p = powerExpr(sim.netlist, i);
     if (p) await addTraceNow(name, POWER_CALL.exec(name)?.[0] === name ? name : p, "W", true);
   } else if (target.t === "sym") {

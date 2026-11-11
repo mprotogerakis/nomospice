@@ -23,7 +23,7 @@ work=$(mktemp -d)
 k=0
 app= dog=
 # (interrupted: the scene's app and its watchdog end too, each a process group of its own)
-trap 'for g in $app $dog; do kill -- -$g 2>/dev/null; done; rm -rf "$work"' EXIT
+trap 'for g in $app $dog; do kill -- -$g 2>/dev/null || true; done; rm -rf "$work"' EXIT
 trap 'exit 130' INT TERM
 data="$HOME/Library/Application Support/de.nomospice.docs"
 for n in "$@"; do

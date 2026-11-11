@@ -169,11 +169,11 @@ function onDrawing(it: Extract<Item, { t: "draw" }>, p: Pt, tol: number) {
 }
 /** Topmost item under p; flags > texts > wires > symbols > drawings (`drawings` false: none of
  *  them, while probing: no target there). */
-export function hit(items: Item[], lib: Lib, p: Pt, tol: number, drawings = true): number {
+export function hit(items: Item[], lib: Lib, p: Pt, tol: number, drawings = true, only?: (it: Item) => boolean): number {
   let best = -1, rank = 9;
   const left = leftLabels(items);
   items.forEach((it, i) => {
-    if (it.t === "raw" || RANK[it.t] > rank || (it.t === "draw" && !drawings)) return; // equal rank: later = drawn on top wins
+    if (it.t === "raw" || RANK[it.t] > rank || (it.t === "draw" && !drawings) || (only && !only(it))) return; // equal rank: later = drawn on top wins
     const ok = it.t === "wire" ? distSeg(p, it.x1, it.y1, it.x2, it.y2) <= tol
       : it.t === "draw" ? onDrawing(it, p, tol)
       : inBox(box(it, lib, left)!, p, tol);

@@ -1270,7 +1270,8 @@ fn on_menu(app: &tauri::AppHandle, id: &str) {
 // ---------------------------------------------------------------- documentation screenshots
 
 // Dev builds only (scripts/docs-shots.sh): NOMOSPICE_SCENES=<name> plays docs/scenes/<name>.js in the
-// first window (see src/scenes.ts), each shot a picture of the window in NOMOSPICE_SHOTS.
+// first window (see src/scenes.ts), or an absolute path without .js another site's scene; each shot a
+// picture of the window in NOMOSPICE_SHOTS (that site's img folder).
 
 /// The scene to play and its work folder (NOMOSPICE_SCENE_WORK: where it saves files); none outside
 /// a dev build's first window.

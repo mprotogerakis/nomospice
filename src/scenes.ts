@@ -1,5 +1,5 @@
-// Documentation screenshots, dev builds only (scripts/docs-shots.sh). A scene, docs/scenes/<name>.js,
-// drives the app as a user would (keys, clicks on the schematic, dialogs) through `api`; each
+// Documentation screenshots, dev builds only (scripts/docs-shots.sh). A scene, docs/scenes/<name>.js
+// (or another site's, by its absolute path), drives the app as a user would (keys, clicks on the schematic, dialogs) through `api`; each
 // shot(id) is a picture of the window, docs/img/<name>/<id>.png. The tutorial pages show them in
 // order, and the text after each is what scripts/docs-video.py says over it.
 import { invoke } from "@tauri-apps/api/core";
