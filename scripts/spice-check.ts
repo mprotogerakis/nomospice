@@ -226,6 +226,8 @@ assert.equal(numInfo("1Meg", "Hz")!.text, "= 1MegHz"); // not "1M", the milli tr
   assert.equal(funcsIn("V(out)/vt()", ".func vt() {boltz*300/echarge}"), "V(out)/(boltz*300/echarge)"); // (no parameters)
   assert.equal(funcsIn("NF(V(n))", ".func NF(x) {x*2} ; noise figure"), "((V(n))*2)"); // (a comment after it)
   assert.equal(funcsIn("pw(2)", ".func pw(v) {v*V(out)}"), "((2)*V(out))"); // (a parameter v is no V())
+  assert.equal(funcsIn("NF(V(n))", ".func NF(x)\n+ {10*log10(x)}"), "(10*log10((V(n))))"); // (a body on a + line)
+  assert.equal(funcsIn("sq(NF(V(a)))", ".func sq(a,b) a*b\n.func NF(x) {10*log10(x)}"), "sq((10*log10((V(a)))))"); // (inside a call left as written)
   assert.equal(twoPortIn("S21(V1)", { ...two, text: two.text.replace("* .net I(R1) V1", "* .net I(C1) V1") }), "S21(V1)"); // (a load that is no resistor)
   const pv = { ...two, text: two.text.replace("V1 V1_rser 0 AC 1", "V1 V1_rser 0 AC {Vac}") };
   assert.equal(twoPortIn("S21(V1)", pv), "S21(V1)"); // (a parameter as the drive: S21 not, …)

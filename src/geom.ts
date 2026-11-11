@@ -367,7 +367,13 @@ function replaceCalls(expr: string, name: string, f: (args: string[]) => string 
     if (end < 0) break;
     args.push(expr.slice(start, end).trim());
     const r = f(args);
-    out += expr.slice(from, m.index) + (r ?? expr.slice(m.index, end + 1));
+    if (r == null) { // (left as written, but what is called inside it is not)
+      const upTo = m.index + m[0].length;
+      out += expr.slice(from, upTo);
+      from = re.lastIndex = upTo;
+      continue;
+    }
+    out += expr.slice(from, m.index) + r;
     from = end + 1;
     re.lastIndex = end + 1;
   }
@@ -402,8 +408,8 @@ let FUNCS: { text: string; defs: { name: string; params: string[]; body: string 
 function deckFuncs(text: string) {
   if (FUNCS?.text === text) return FUNCS.defs;
   let depth = 0;
-  // (a line's `;` comment is not of its body)
-  const top = text.split("\n").filter((l) => { const t = l.trim().toLowerCase(); depth += t.startsWith(".subckt") ? 1 : t.startsWith(".ends") ? -1 : 0; return depth === 0; }).map((l) => l.split(";")[0]).join("\n");
+  // (a line's `;` comment is not of its body; a body continued on + lines is one line)
+  const top = text.split("\n").filter((l) => { const t = l.trim().toLowerCase(); depth += t.startsWith(".subckt") ? 1 : t.startsWith(".ends") ? -1 : 0; return depth === 0; }).map((l) => l.split(";")[0]).join("\n").replace(/\n\s*\+\s?/g, " ");
   const defs = [...top.matchAll(/^\s*\.func(?:tion)?\s+(\w+)\s*\(([^)]*)\)\s*=?\s*(.+?)\s*$/gim)].map((m) => ({
     name: m[1], params: m[2].split(/[\s,]+/).filter(Boolean), body: m[3].replace(/^\{(.*)\}$/, "$1").replace(/^'(.*)'$/, "$1"),
   }));

@@ -1415,8 +1415,11 @@ impl Step {
                     Some(&(a, e)) => Ok(splice(text, &[(line.start + a, line.start + e)], v)),
                     // `V1 in 0 AC 1`, a SINE: no DC value written (0): one put after the nodes
                     None => {
-                        let at = line.start + sp.get(2).ok_or_else(|| format!("`.step {n}`: {n} has no nodes"))?.1;
-                        Ok(format!("{} DC {v:e}{}", &text[..at], &text[at..]))
+                        let at = sp.get(2).ok_or_else(|| format!("`.step {n}`: {n} has no nodes"))?.1;
+                        let new = format!("{} DC {v:e}{}", &line.line[..at], &line.line[at..]);
+                        // (under .tran startup: ramped up like the others)
+                        let new = if text.contains(STARTUP) { ramped(&new).unwrap_or(new) } else { new };
+                        Ok(format!("{}{new}{}", &text[..line.start], &text[line.start + line.line.len()..]))
                     }
                 }
             }
@@ -1910,7 +1913,19 @@ pub fn prepare(text: &str, dir: Option<&std::path::Path>, warnings: &mut Vec<Str
     let out = lt_white(&out, x.warnings).unwrap_or(out);
     // .tran … startup: every DC source of the deck ramped up (drawn, written in a directive, in a
     // sheet or an included file)
-    let out = if out.contains(STARTUP) { out.split_inclusive('\n').map(|l| ramped(l.trim_end()).map_or(l.to_string(), |r| r + "\n")).collect() } else { out };
+    let out = if out.contains(STARTUP) {
+        // (not the title line, nor comments)
+        let ls = deck_lines(&out);
+        let mut s = String::with_capacity(out.len() + 64);
+        for (k, l) in ls.iter().enumerate() {
+            let piece = &out[l.start..ls.get(k + 1).map_or(out.len(), |n| n.start)];
+            match (k > 0 && !l.skip).then(|| ramped(l.line)).flatten() {
+                Some(r) => { s.push_str(&r); s.push_str(&piece[l.line.len()..]); }
+                None => s.push_str(piece),
+            }
+        }
+        s
+    } else { out };
     Prepared(out, vec![], vec![])
 }
 
@@ -1925,36 +1940,36 @@ fn lt_white(text: &str, warnings: &mut Vec<String>) -> Option<String> {
     if !crate::laplace::calls(text, &["white"]) || deck_funcs(text, true).iter().any(|f| f == "white") {
         return None;
     }
-    let ci = |l: &str, p: &str| l.len() >= p.len() && l.as_bytes()[..p.len()].eq_ignore_ascii_case(p.as_bytes());
-    // (the subcircuits that define white() themselves)
+    let ls = deck_lines(text);
+    // (the subcircuits that define white() themselves: a .subckt's name up to its .ends)
+    let name_of = |l: &DeckLine| l.low.trim_start().strip_prefix(".subckt").filter(|r| r.starts_with(char::is_whitespace)).and_then(|r| r.split_whitespace().next()).map(str::to_string);
+    let ends = |l: &DeckLine| l.low.trim_start().starts_with(".ends");
     let (mut own_in, mut cur) = (HashSet::<String>::new(), None::<String>);
-    for l in text.lines() {
-        let t = l.trim_start();
-        if ci(t, ".subckt") {
-            cur = t.split_whitespace().nth(1).map(str::to_ascii_lowercase);
-        } else if ci(t, ".ends") {
+    for l in &ls {
+        if let Some(n) = name_of(l) {
+            cur = Some(n);
+        } else if ends(l) {
             cur = None;
-        } else if let (Some(s), true) = (&cur, deck_funcs(l, false).iter().any(|f| f == "white")) {
+        } else if let (Some(s), true) = (&cur, !l.skip && deck_funcs(l.line, false).iter().any(|f| f == "white")) {
             own_in.insert(s.clone());
         }
     }
     // (one noise source per rate: white(1e5*time) twice is the same noise, as in LTspice)
-    let (mut out, mut sources, mut depth, mut cur, mut left) = (String::with_capacity(text.len() + 128), Vec::<(f64, String)>::new(), 0, None::<String>, false);
-    for line in text.split_inclusive('\n') {
-        let t = line.trim_start();
-        if ci(t, ".subckt") {
-            depth += 1;
-            cur = t.split_whitespace().nth(1).map(str::to_ascii_lowercase);
-        } else if ci(t, ".ends") {
-            depth -= 1;
+    let (mut out, mut sources, mut cur, mut left) = (String::with_capacity(text.len() + 128), Vec::<(f64, String)>::new(), None::<String>, false);
+    for (k, l) in ls.iter().enumerate() {
+        let piece = &text[l.start..ls.get(k + 1).map_or(text.len(), |n| n.start)];
+        if let Some(n) = name_of(l) {
+            cur = Some(n);
+        } else if ends(l) {
             cur = None;
         }
-        let code = uncommented(line); // (not in a `;` comment)
+        let code = uncommented(l.line); // (not in a `;` comment)
         let theirs = cur.as_ref().is_some_and(|s| own_in.contains(s));
-        if !ci(t, "b") || theirs || !crate::laplace::calls(code, &["white"]) {
+        let b = l.low.trim_start().starts_with('b');
+        if l.skip || !b || theirs || !crate::laplace::calls(code, &["white"]) {
             // (a white() on a `+` line or in a .func body is not translated: said)
-            left |= !theirs && !t.starts_with('*') && !ci(t, "b") && crate::laplace::calls(code, &["white"]);
-            out.push_str(line);
+            left |= !l.skip && !theirs && !b && crate::laplace::calls(code, &["white"]);
+            out.push_str(piece);
             continue;
         }
         let mut rest = code;
@@ -1968,7 +1983,7 @@ fn lt_white(text: &str, warnings: &mut Vec<String>) -> Option<String> {
                 arg.split_once('*').and_then(|(a, b)| if b.eq_ignore_ascii_case("time") { spice_num(a) } else if a.eq_ignore_ascii_case("time") { spice_num(b) } else { None })
             }.filter(|c| *c > 0.0);
             match c {
-                Some(c) if depth == 0 => {
+                Some(c) if l.top => {
                     let n = sources.iter().position(|s| s.0 == c).unwrap_or_else(|| {
                         sources.push((c, format!("Vwhite{n} nw_white{n} 0 dc 0 trnoise(0.288675 {:e} 0 0)", 1.0 / c, n = sources.len() + 1)));
                         sources.len() - 1
@@ -1977,14 +1992,14 @@ fn lt_white(text: &str, warnings: &mut Vec<String>) -> Option<String> {
                     out.push_str(&format!("max(min(v(nw_white{n}),0.5),-0.5)"));
                 }
                 _ => {
-                    warnings.push(format!("`white({arg})`: nomospice turns white(c*time) into noise (ngspice has no white()); {}", if depth > 0 { "not inside a subcircuit" } else { "write the argument as a number times time" }));
+                    warnings.push(format!("`white({arg})`: nomospice turns white(c*time) into noise (ngspice has no white()); {}", if !l.top { "not inside a subcircuit" } else { "write the argument as a number times time" }));
                     out.push_str(&rest[..=close]);
                 }
             }
             rest = &rest[close + 1..];
         }
         out.push_str(rest);
-        out.push_str(&line[code.len()..]);
+        out.push_str(&piece[code.len()..]);
     }
     // (the noise sources before .end, at the top level)
     for s in &sources {
@@ -1999,15 +2014,10 @@ fn lt_white(text: &str, warnings: &mut Vec<String>) -> Option<String> {
 /// The names of the deck's `.func`s (`.function` too), lowercase; `top`: its top level's only (a
 /// subcircuit's are local).
 fn deck_funcs(text: &str, top: bool) -> Vec<String> {
-    let mut level = 0;
-    text.lines().filter_map(|l| {
-        let t = l.trim_start();
-        let low = t.to_ascii_lowercase();
-        level += i32::from(low.starts_with(".subckt")) - i32::from(low.starts_with(".ends"));
-        // (bytes: a comment's ö at byte 5 is no place to cut a str)
-        let b = t.as_bytes();
-        let head = [&b".function"[..], b".func"].into_iter().find(|h| b.len() > h.len() && b[..h.len()].eq_ignore_ascii_case(h) && b[h.len()].is_ascii_whitespace())?;
-        (!top || level == 0).then(|| t[head.len()..].trim_start().split(|c: char| c == '(' || c.is_whitespace()).next().unwrap_or("").to_ascii_lowercase())
+    deck_lines(text).iter().filter_map(|l| {
+        let t = l.low.trim_start();
+        let head = [".function", ".func"].into_iter().find(|h| t.len() > h.len() && t.starts_with(h) && t.as_bytes()[h.len()].is_ascii_whitespace())?;
+        (!top || l.top).then(|| t[head.len()..].trim_start().split(|c: char| c == '(' || c.is_whitespace()).next().unwrap_or("").to_string())
     }).collect()
 }
 
@@ -3087,6 +3097,12 @@ mod tests {
         assert_eq!(ramped("R1 a b 1k"), None);
         assert_eq!(ramped("V1 vcc 0 12 ; supply").as_deref(), Some("V1 vcc 0 PWL(0 0 20u 12) ; supply"));
         assert_eq!(ramped("V1 in 0 DC 0 AC 1 SIN(0 1 1k)"), None); // (a waveform of its own after the AC part)
+        // the ramp pass: not the title line; a stepped source without a DC value ramps too
+        let p = prepare(&format!("Vref test 1 2\nV1 a 0 5\n.tran 1u 1m uic\n{STARTUP}\n.end\n"), None, &mut vec![]);
+        assert!(p.0.starts_with("Vref test 1 2\nV1 a 0 PWL(0 0 20u 5)\n"), "{}", p.0);
+        let st = parse_step(".step V1 1 5 1").unwrap();
+        let out = st.apply(&format!("V1 in 0 AC 1\n.tran 1u 1m uic\n{STARTUP}\n"), 2.0).unwrap();
+        assert!(out.starts_with("V1 in 0 PWL(0 0 20u 2e0) AC 1\n"), "{out}");
         // white(c*time): a TRNOISE source of its own, before .end; other arguments are said
         let mut w = vec![];
         let out = lt_white("B1 n 0 V=white(1e6*time)/10 + white( time*2k )\n.tran 1m\n.end ; done\n", &mut w).unwrap();
