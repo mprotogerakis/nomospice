@@ -52,7 +52,7 @@ SPICE reads a number with a suffix, case-insensitively:
 - `mc(x, tol)`: x with a tolerance, uniform within ±tol (as a fraction); `flat(x)`: uniform within ±x; `gauss(x)`: normal with σ = x. They draw anew in each run of a `.step`, so `.step param run 1 100 1` is a Monte Carlo analysis.
 - `Laplace=H(s)` on an `e` or `g` source: a transfer function, any ratio of polynomials in `s`.
 - Independent sources (V, I) are edited in a form: DC, sine, pulse, exponential, FM, noise, piecewise linear (with a preview), an AC amplitude, and series resistance and parallel capacitance. *Noise* is ngspice's `TRNOISE(rms step 1/f-exponent 1/f-amplitude)`, which not every simulator reads.
-- `white(c*time)` in a behavioral source (noise between -0.5 and 0.5, a new value every 1/c s) becomes a noise source of the same rms.
+- `white(c*time)` in a behavioral source (noise between -0.5 and 0.5, a new value every 1/c s) becomes a noise source: clipped Gaussian noise of about the same rms.
 
 ## Trace expressions
 

@@ -384,7 +384,7 @@ function replaceCalls(expr: string, name: string, f: (args: string[]) => string 
  *  expressions know none. A call becomes its body, each parameter its argument in parentheses;
  *  calls of other functions in it too (10 rounds at most: a recursive one stops there). */
 export function funcsIn(expr: string, text: string): string {
-  const defs = deckFuncs(text);
+  const { funcs: defs, mentions } = deckDefs(text);
   if (!defs.length) return expr;
   for (let round = 0; round < 10; round++) {
     const before = expr;
@@ -395,7 +395,8 @@ export function funcsIn(expr: string, text: string): string {
       const re = new RegExp(`\\b(${d.params.join("|")})\\b(?!\\s*\\()`, "gi"), low = d.params.map((p) => p.toLowerCase());
       expr = replaceCalls(expr, d.name, (given) => {
         const args = given.length === 1 && !given[0] ? [] : given; // (`vt()`: none)
-        if (args.length !== d.params.length) return null;
+        // (a stepped .param as an argument: left, see funcsLeft)
+        if (args.length !== d.params.length || args.some((a) => mentions(a))) return null;
         // (in parentheses, an expression; inside a probe call, V(a): the name as given, no parentheses)
         const arg = (p: string, bare: boolean) => (bare ? args[low.indexOf(p.toLowerCase())] : `(${args[low.indexOf(p.toLowerCase())]})`);
         const probes = d.body.match(PROBE) ?? [];
@@ -412,7 +413,7 @@ export function funcsIn(expr: string, text: string): string {
 type FuncDef = { name: string; params: string[]; body: string; withParams: (body: string) => string; stepped?: string };
 /** The top level's .func and .param definitions of a netlist (a subcircuit's are its own), parsed
  *  once per text (the traces of a run all ask). */
-let DEFS: { text: string; funcs: FuncDef[]; params: Map<string, string>; stepped: Map<string, string>; parts: Set<string>; lines: string[] } | null = null;
+let DEFS: { text: string; funcs: FuncDef[]; params: Map<string, string>; stepped: Map<string, string>; parts: Set<string>; lines: string[]; mentions: (s: string) => string | undefined } | null = null;
 /** A probe call in an expression, `V(out)`, `I(R1)`, `Ib(Q1)`: its argument is a name, no expression. */
 const PROBE = /\b(?:v|i|i[bcdegsx])\s*\([^)]*\)/gi;
 function deckDefs(text: string) {
@@ -470,16 +471,21 @@ function deckDefs(text: string) {
     const hit = mentions(params.length ? body.replace(new RegExp(`\\b(${params.join("|")})\\b(?!\\s*\\()`, "gi"), " ") : body), root = hit && roots.get(hit.toLowerCase());
     return { name: m[1], params, body, withParams, stepped: hit && (root?.toLowerCase() === hit.toLowerCase() ? hit : `${hit} (of ${root})`) };
   });
-  DEFS = { text, funcs, params, stepped: roots, parts, lines: text.split("\n") };
+  DEFS = { text, funcs, params, stepped: roots, parts, lines: text.split("\n"), mentions };
   return DEFS;
 }
-const deckFuncs = (text: string) => deckDefs(text).funcs;
 
-/** Why a `.func` call in `expr` is not written out (see funcsIn): its body uses a parameter that
- *  `.step` varies, which one expression cannot hold per step. */
+/** Why a `.func` call in `expr` is not written out (see funcsIn): its body or an argument uses a
+ *  parameter that `.step` varies, which one expression cannot hold per step. */
 export function funcsLeft(expr: string, text: string): string | null {
-  const d = deckFuncs(text).find((d) => d.stepped && new RegExp(`\\b${d.name}\\s*\\(`, "i").test(expr));
-  return d ? `${d.name}(): its .func uses ${d.stepped}, which .step varies; a trace cannot take a value per step` : null;
+  const { funcs, mentions } = deckDefs(text);
+  for (const d of funcs) {
+    let arg: string | undefined;
+    replaceCalls(expr, d.name, (args) => ((arg ??= args.map(mentions).find(Boolean)), null));
+    const uses = d.stepped && new RegExp(`\\b${d.name}\\s*\\(`, "i").test(expr) ? `its .func uses ${d.stepped}` : arg && `its argument uses ${arg}`;
+    if (uses) return `${d.name}(): ${uses}, which .step varies; a trace cannot take a value per step`;
+  }
+  return null;
 }
 
 /** A two-port quantity of `.net` in a trace expression: S21(V1), S11(V1), Zin(V1). */

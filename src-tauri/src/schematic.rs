@@ -993,7 +993,7 @@ struct DeckLine<'a> {
     low: String,
     /// outside `.subckt … .ends`
     top: bool,
-    /// a comment or blank line (SPICE skips these, also between a line and its `+` continuations)
+    /// a comment (`*`, `;`) or blank line (SPICE skips these, also between a line and its `+` continuations)
     skip: bool,
     /// lowercase first token of the statement this line belongs to (`.param` for its `+` lines too)
     head: String,
@@ -1013,7 +1013,7 @@ fn deck_lines(text: &str) -> Vec<DeckLine<'_>> {
         let low = line.to_ascii_lowercase();
         let first = low.split_whitespace().next().unwrap_or("").to_string();
         match first.as_str() { ".subckt" => sub += 1, ".ends" => sub = (sub - 1).max(0), _ => {} } // a stray .ends must not hide the rest
-        let skip = first.is_empty() || first.starts_with('*');
+        let skip = first.is_empty() || first.starts_with(['*', ';']);
         if !skip && !first.starts_with('+') {
             head = first.clone();
         }
@@ -1239,24 +1239,6 @@ fn ramp_end(token: &str) -> Option<&str> {
     token.strip_prefix(RAMP).and_then(|r| r.strip_suffix(')')).filter(|v| braced(v) || !v.contains([' ', '(']))
 }
 
-/// The deck's sources as before `.tran startup` ramped them: for a run of another analysis on it
-/// (a root locus's `.pz`), whose operating point would see them at 0.
-fn unramped(text: &str) -> String {
-    if !text.contains(STARTUP) {
-        return text.to_string();
-    }
-    // (and without the mark: a .step of a source in it then puts in a DC value, no ramp)
-    let ramped = ramped_sources(text);
-    let ours = |l: &str| l.split_whitespace().next().is_some_and(|n| ramped.contains(&n.to_ascii_lowercase()));
-    text.split_inclusive('\n').filter(|l| !l.starts_with(STARTUP)).map(|l| {
-        let sp = token_spans(l);
-        match sp.get(3).and_then(|&(a, e)| ramp_end(&l[a..e]).map(|v| (a, e, v))) {
-            Some((a, e, v)) if ours(l) => format!("{}{v}{}", &l[..a], &l[e..]),
-            _ => l.to_string(),
-        }
-    }).collect()
-}
-
 /// Translate LTspice-only directive syntax to something ngspice accepts.
 fn directive(line: &str, warnings: &mut Vec<String>) -> Option<String> {
     let mut tok = spice_tokens(line).into_iter();
@@ -1324,9 +1306,8 @@ impl Prepared {
     /// or `.meas` would run every step for nothing).
     pub fn only_pz(&self) -> Prepared {
         const OTHER: [&str; 16] = [".tran", ".ac", ".dc", ".op", ".noise", ".tf", ".sens", ".four", ".meas", ".measure", ".disto", ".pss", ".sp", ".hb", ".print", ".plot"];
-        // with their `+` continuation lines (and the sources as before a `.tran startup` ramped them)
-        let base = unramped(&self.0);
-        let text = deck_lines(&base).iter().map(|l| {
+        // with their `+` continuation lines (a deck with a .pz is not ramped by .tran startup)
+        let text = deck_lines(&self.0).iter().map(|l| {
             if !l.skip && OTHER.contains(&l.head.as_str()) { format!("* {}", l.line) } else { l.line.to_string() }
         }).collect::<Vec<_>>().join("\n") + "\n";
         // (random values, mc(): one sample for all the sweep's steps, not a draw per step)
@@ -1459,8 +1440,9 @@ impl Step {
                 let sp = token_spans(line.line);
                 // (ramped up by .tran startup: the value the ramp ends at)
                 // (exactly the ramp, under .tran startup: a PWL of the user's own that starts alike is no ramp)
-                let startup = text.contains(STARTUP);
-                if let Some(&(a, e)) = sp.get(3).filter(|_| startup && ramped_sources(text).contains(&low)).filter(|&&(a, e)| ramp_end(&line.line[a..e]).is_some()) {
+                // (the mark with its list: prepare ramped; beside other analyses it did not)
+                let startup = text.contains(&format!("{STARTUP} ; ramped:"));
+                if let Some(&(a, e)) = sp.get(3).filter(|_| ramped_sources(text).contains(&low)).filter(|&&(a, e)| ramp_end(&line.line[a..e]).is_some()) {
                     return Ok(splice(text, &[(line.start + a + RAMP.len(), line.start + e - 1)], v));
                 }
                 // (the DC value where it is written: right after the nodes, or after a `DC` anywhere)
@@ -2696,11 +2678,9 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
                     }
                 }
                 let d = directive(line, &mut nl.warnings);
+                // (a comment between leaves the + lines with their statement)
                 if !l.starts_with('*') {
-                    skipped = d.is_none(); // (a comment between leaves its + lines skipped)
-                }
-                if !l.starts_with('*') {
-                    // (a comment between a .tran and its + lines leaves it the last)
+                    skipped = d.is_none();
                     tran = (l.starts_with(".tran") && d.is_some()).then(|| (directives.len(), uncommented(line).trim_end().to_string()));
                 }
                 directives.extend(d);
@@ -3273,14 +3253,14 @@ mod tests {
         // a root locus on the deck: its .pz sees the sources as they were
         let p = prepare(&format!("* t\nV1 a 0 5\nR1 a 0 1k\n.tran 1u 1m uic\n{STARTUP}\n.pz a 0 a 0 vol pol\n.end\n"), None, &mut vec![]);
         let pz = p.only_pz().0;
-        assert!(pz.contains("\nV1 a 0 5\n") && pz.contains("\n* .tran 1u 1m uic\n") && !pz.contains("* .pz") && !pz.contains(STARTUP), "{pz}");
-        assert_eq!(unramped(&format!("V1 a 0 PWL(0 0 20e-6 5 1m 3)\n{STARTUP}\n")).lines().next(), Some("V1 a 0 PWL(0 0 20e-6 5 1m 3)")); // (a PWL of the user's own stays)
-        assert_eq!(unramped(&format!("  Vref n 0 PWL(0 0 20e-6 2.5)\n{STARTUP} ; ramped: vref\n")).lines().next(), Some("  Vref n 0 2.5")); // (indented, a library's)
+        assert!(pz.contains("\nV1 a 0 5\n") && pz.contains("\n* .tran 1u 1m uic\n") && !pz.contains("* .pz"), "{pz}");
         assert_eq!(ramp_end("PWL(0 0 20e-6 {a} 1m {b})"), None); // (braced points of the user's own)
-        // (only the sources the pass ramped: one of the user's own written alike stays)
-        let p = prepare(&format!("* t\nV1 a 0 5\nV2 b 0 PWL(0 0 20e-6 3)\n.tran 1u 1m uic\n{STARTUP}\n.pz a 0 a 0 vol pol\n.end\n"), None, &mut vec![]);
-        let pz = p.only_pz().0;
-        assert!(pz.contains("\nV1 a 0 5\n") && pz.contains("\nV2 b 0 PWL(0 0 20e-6 3)\n"), "{pz}");
+        // (beside other analyses not ramped: a stepped source without a DC value neither)
+        let out = parse_step(".step V1 1 5 1").unwrap().apply(&format!("V1 in 0 AC 1\n.tran 1u 1m uic\n{STARTUP}\n.ac dec 10 1 1k\n"), 2.0).unwrap();
+        assert!(out.starts_with("V1 in 0 DC 2e0 AC 1\n"), "{out}");
+        // (a `;` comment between a source and its + line)
+        let p = prepare(&format!("* t\nV1 vcc 0\n; supply\n+ 12\n.tran 1u 1m uic\n{STARTUP}\n.end\n"), None, &mut vec![]);
+        assert!(p.0.starts_with("* t\nV1 vcc 0 PWL(0 0 20e-6 12)\n; supply\n"), "{}", p.0);
         let st = parse_step(".step V1 1 5 1").unwrap();
         let out = st.apply(&format!("V1 in 0 AC 1\n.tran 1u 1m uic\n{STARTUP} ; ramped:\n"), 2.0).unwrap();
         assert!(out.contains(&format!("{STARTUP} ; ramped: v1")), "{out}"); // (named on the mark)
