@@ -5,10 +5,10 @@ import { useShallow } from "zustand/react/shallow";
 import { Maximize, Minus, Plus } from "lucide-react";
 import type { Item, Shape, SymbolDef } from "./types";
 import {
-  box, connectivity, defOf, pinLine, portOf, arcSpan, dragPlan, mirror, outline, pins, prefixOf, rotate, dropZeroWires, dropZeroWiresKeepSel, GRID, hit, isNet, isShape, labelRect, leftLabels, matrix, shifted, snap, symBox,
+  box, connectivity, defOf, pinLine, portOf, arcSpan, dragPlan, mirror, outline, pins, prefixOf, rotate, dropZeroWires, dropZeroWiresKeepSel, GRID, hit, isNet, isShape, partCurrent, labelRect, leftLabels, matrix, shifted, snap, symBox,
   textLines, union, xform, type Box, type Lib, type Pt,
 } from "./geom";
-import { canProbe, commit, currentNets, isSymbolDoc, nextInst, partCurrent, powerMode, powerName, probe, probeMode, simulate, useS, useStatus } from "./store";
+import { canProbe, commit, currentNets, isSymbolDoc, nextInst, powerMode, powerName, probe, probeMode, simulate, useS, useStatus } from "./store";
 import { copySelection, deleteSelection, duplicate, newItem, pasteClipboard, transform } from "./actions";
 import { ANALYSIS, ANY_ANALYSIS, analysisOptions, continuation } from "./spice";
 import { openMenu, type MenuItem } from "./Menu";
@@ -593,7 +593,7 @@ export const Schematic = memo(function Schematic() {
     } else if (d?.k === "diff") {
       // released on a wire or label: V(from,to) (on ground or its own net, a click: V(from))
       const to = d.base[d.to]; // (not moved: still `from`, a click)
-      if (to && useS.getState().items === d.base) probe(d.base[d.from], false, undefined, to);
+      if (to && probing && useS.getState().items === d.base) probe(d.base[d.from], false, undefined, to);
     } else if (d?.k === "pan" && !d.moved) useS.setState({ sel: [] });
     else if (d?.k === "box") {
       const [a, b] = [d.start, d.end]; // from the ref: the last pointermove may not have rendered
@@ -626,7 +626,7 @@ export const Schematic = memo(function Schematic() {
     const it = items[i];
     const set = useS.setState;
     const net = i >= 0 ? nets?.nets[i]?.[0] : undefined;
-    const selectNet = () => set({ sel: items.flatMap((x, j) => ((x.t === "wire" || x.t === "flag") && nets?.nets[j]?.[0] === net ? [j] : [])) });
+    const selectNet = () => set({ sel: items.flatMap((x, j) => (isNet(x) && nets?.nets[j]?.[0] === net ? [j] : [])) });
     const edit = () => set({ sel: [i], dialog: { k: "edit", index: i } });
     // a part: its current, and each pin's where it has its own (a transistor's Ib, a subcircuit's pins)
     const own = probing && it?.t === "sym" && nets ? partCurrent(nets, i) : "";
@@ -839,8 +839,9 @@ export const Schematic = memo(function Schematic() {
             />
           )}
         </g>
-        {diffProbe && ([[diffProbe.a, "#e0573a"], [diffProbe.b, "#1b1b1f"]] as const).map(([q, c]) => (
-          <g key={c} pointerEvents="none" transform={`translate(${view.x + q[0] * view.k - 1} ${view.y + q[1] * view.k - 23})`} dangerouslySetInnerHTML={{ __html: probeGlyph(c) }} />
+        {/* (the black one in the text's colour: light on a dark canvas) */}
+        {diffProbe && ([[diffProbe.a, "#e0573a"], [diffProbe.b, "var(--text-strong)"]] as const).map(([q, c]) => (
+          <g key={c} pointerEvents="none" color={c} transform={`translate(${view.x + q[0] * view.k - 1} ${view.y + q[1] * view.k - 23})`} dangerouslySetInnerHTML={{ __html: probeGlyph("currentColor") }} />
         ))}
       </svg>
       {stale && sim && (

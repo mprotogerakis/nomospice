@@ -377,5 +377,3 @@ export function powersIn(expr: string, nl: Netlist) {
   };
   return expandPowers(expr, (n) => powerExpr(nl, part(n.toLowerCase())));
 }
-
-

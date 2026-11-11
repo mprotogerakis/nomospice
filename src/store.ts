@@ -583,7 +583,6 @@ export const ngspiceExpr = (expr: string, nl = get().sim?.netlist) => (nl ? powe
 /** A two-pin part's power by the name of its current: I(D1) -> P(D1). */
 export const powerName = (current: string) => current.replace(/^I/, "P");
 
-export { partCurrent };
 
 /** LTspice probe: wire/label -> V(net), part -> current. Re-runs first if the results are stale,
  *  so net names always come from the netlist the results were computed with. `ref`: the black

@@ -675,7 +675,6 @@ export function exprUnit(expr: string, vector: (name: string) => string = () => 
   return i < s.length || !r.d || r.n ? "" : unitName(r.d);
 }
 
-
 // The spectrum of a transient trace (the plot's FFT view).
 
 const TWIDDLES = new Map<number, [Float64Array, Float64Array]>();
