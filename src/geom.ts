@@ -410,6 +410,7 @@ export function funcsIn(expr: string, text: string): string {
 
 /** The top level's `.func`s of a netlist (a subcircuit's are its own), parsed once per text (the
  *  traces of a run all ask). */
+/** A .func: its body with its parameters, writing out the .params it uses; `stepped`: one .step varies. */
 type FuncDef = { name: string; params: string[]; body: string; withParams: (body: string) => string; stepped?: string };
 /** The top level's .func and .param definitions of a netlist (a subcircuit's are its own), parsed
  *  once per text (the traces of a run all ask). */
@@ -421,7 +422,6 @@ function deckDefs(text: string) {
   let depth = 0;
   // (a line's `;` or `$` comment is not of its body; a body continued on + lines is one line)
   const top = text.split("\n").filter((l) => { const t = l.trim().toLowerCase(); depth += t.startsWith(".subckt") ? 1 : t.startsWith(".ends") ? -1 : 0; return depth === 0; }).map((l) => l.split(/;|(?<![^\s])\$/)[0]).join("\n").replace(/\n\s*\+\s?/g, " ");
-  const probe = PROBE; // (a node's name is no parameter's; imag() is no probe)
   // (the top level's .param values too: a body's `Rs` means nothing to ngspice's plot expressions)
   const params = new Map<string, string>();
   for (const m of top.matchAll(/^\s*\.param\s+(.+)$/gim))
@@ -431,7 +431,7 @@ function deckDefs(text: string) {
   const roots = new Map<string, string>();
   // (the netlist's own: a `* .step` the user commented out is none)
   for (const m of top.matchAll(/^\*\s*\.step\s+(?:(?:dec|oct|lin)\s+)?param\s+(\w+).*\(nomospice: one run per step\)\s*$/gim)) roots.set(m[1].toLowerCase(), m[1]);
-  const mentions = (body: string) => (roots.size ? body.replace(probe, "").match(new RegExp(`\\b(${[...roots.keys()].join("|")})\\b(?!\\s*\\()`, "i"))?.[1] : undefined);
+  const mentions = (body: string) => (roots.size ? body.replace(PROBE, "").match(new RegExp(`\\b(${[...roots.keys()].join("|")})\\b(?!\\s*\\()`, "i"))?.[1] : undefined);
   for (let round = 0; round < 8; round++) {
     let more = false;
     for (const [k, v] of params) {
@@ -445,8 +445,8 @@ function deckDefs(text: string) {
     if (!names) return body;
     for (let round = 0; round < 8; round++) {
       const before = body;
-      const ps = body.match(probe) ?? [];
-      body = body.split(probe).reduce((o, seg, k) => o + seg.replace(names, (n) => `(${params.get(n.toLowerCase())})`) + (ps[k] ?? ""), "");
+      const ps = body.match(PROBE) ?? [];
+      body = body.split(PROBE).reduce((o, seg, k) => o + seg.replace(names, (n) => `(${params.get(n.toLowerCase())})`) + (ps[k] ?? ""), "");
       if (body === before) break;
     }
     return body;

@@ -13,5 +13,5 @@ export default defineConfig({
   resolve: { alias: { "@": "/src" } },
   clearScreen: false,
   // (NOMOSPICE_PORT: docs-shots.sh runs on another port, beside a `pnpm tauri dev` of one's own)
-  server: { port: +(process.env.NOMOSPICE_PORT ?? 1420), strictPort: true, fs: { allow: [searchForWorkspaceRoot(process.cwd()), ...extra] } },
+  server: { port: +(process.env.NOMOSPICE_PORT || 1420), strictPort: true, fs: { allow: [searchForWorkspaceRoot(process.cwd()), ...extra] } },
 });

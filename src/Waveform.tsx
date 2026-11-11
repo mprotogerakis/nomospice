@@ -155,6 +155,16 @@ function plotSvg(us: uPlot[], panes: Pane[], cur: { a: number | null; b: number 
   });
 }
 
+/** The store's zoom onto plot `u` (the panes follow it, synced); none: all of it. A zoom reaching 0 Hz
+ *  (from a linear sweep) is unusable on a log axis: dropped. */
+function applyZoom(u: uPlot | undefined, logX: boolean) {
+  const z = useS.getState().plot.zoom;
+  if (!u) return;
+  if (z && logX && z[0] <= 0) return setPlot({ zoom: null });
+  const xd = u.data[0], [lo, hi] = z ?? [xd[0], xd[xd.length - 1]];
+  u.setScale("x", { min: lo, max: hi });
+}
+
 /** Linear interpolation of ys at x; NaN outside the data (a cursor from a longer previous run). */
 export const Waveform = memo(function Waveform() {
   const run = useS((s) => s.sim?.run);
@@ -441,10 +451,7 @@ export const Waveform = memo(function Waveform() {
       all.push(new uPlot(opts, [ord(xs), ...pane.series.map((s) => ord(ys(s)))] as uPlot.AlignedData, el));
     });
     plots.current = all;
-    const zoom = useS.getState().plot.zoom;
-    // a zoom from a linear sweep may reach 0 Hz: unusable on a log axis
-    if (zoom && !(logX && zoom[0] <= 0)) all[0]?.setScale("x", { min: zoom[0], max: zoom[1] });
-    else if (zoom) setPlot({ zoom: null });
+    if (useS.getState().plot.zoom) applyZoom(all[0], logX);
     return () => {
       all.forEach((u) => u.destroy());
       plots.current = [];
@@ -456,13 +463,7 @@ export const Waveform = memo(function Waveform() {
   // an x range set by number (X range…, which says so): onto the plots; emptied: all of it again
   // (a range not above 0 on a log axis: none, as a zoom from a linear sweep)
   useEffect(() => {
-    const apply = () => {
-      const z = useS.getState().plot.zoom, u = plots.current[0];
-      if (!u) return;
-      if (z && logX && z[0] <= 0) return setPlot({ zoom: null });
-      const xd = u.data[0], [lo, hi] = z ?? [xd[0], xd[xd.length - 1]];
-      u.setScale("x", { min: lo, max: hi });
-    };
+    const apply = () => applyZoom(plots.current[0], logX);
     window.addEventListener("nomospice:x-range", apply);
     return () => window.removeEventListener("nomospice:x-range", apply);
   }, [logX]);

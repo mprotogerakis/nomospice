@@ -1195,9 +1195,12 @@ fn ramped(line: &str) -> Option<String> {
     if !t.first().is_some_and(|n| n.starts_with(['V', 'v', 'I', 'i'])) || t.len() < 4 {
         return None;
     }
-    let dc = usize::from(t[3].eq_ignore_ascii_case("dc"));
-    let v = t.get(3 + dc)?;
-    let rest = &t[4 + dc..];
+    // (the DC value right after the nodes, or after a `DC` anywhere: `AC 1 DC 5`, as .step finds it)
+    let after = &t[3..];
+    let (v, rest): (&str, Vec<&str>) = match after.iter().position(|x| x.eq_ignore_ascii_case("dc")) {
+        Some(k) => (after.get(k + 1)?, after[..k].iter().chain(&after[k + 2..]).copied().collect()),
+        None => (after[0], after[1..].to_vec()),
+    };
     // (0 too: a .step of it steps the ramp's end; a 0 V sensor stays 0)
     let value = spice_num(v).is_some() || (v.starts_with('{') && v.ends_with('}'));
     // (a comment after it kept)
@@ -1235,7 +1238,8 @@ fn unramped(text: &str) -> String {
     if !text.contains(STARTUP) {
         return text.to_string();
     }
-    text.split_inclusive('\n').map(|l| {
+    // (and without the mark: a .step of a source in it then puts in a DC value, no ramp)
+    text.split_inclusive('\n').filter(|l| l.trim_end() != STARTUP).map(|l| {
         let sp = token_spans(l);
         match sp.get(3).and_then(|&(a, e)| ramp_end(&l[a..e]).map(|v| (a, e, v))) {
             Some((a, e, v)) if l.trim_start().starts_with(['V', 'v', 'I', 'i']) => format!("{}{v}{}", &l[..a], &l[e..]),
@@ -3189,6 +3193,7 @@ mod tests {
         assert_eq!(ramped("R1 a b 1k"), None);
         assert_eq!(ramped("V1 vcc 0 12 ; supply").as_deref(), Some("V1 vcc 0 PWL(0 0 20e-6 12) ; supply"));
         assert_eq!(ramped("V1 in 0 DC 0 AC 1 SIN(0 1 1k)"), None); // (a waveform of its own after the AC part)
+        assert_eq!(ramped("V1 a 0 AC 1 DC 5").as_deref(), Some("V1 a 0 PWL(0 0 20e-6 5) AC 1")); // (DC after the AC part)
         // the ramp pass: not the title line; a stepped source without a DC value ramps too
         let p = prepare(&format!("Vref test 1 2\nV1 a 0 5\n.tran 1u 1m uic\n{STARTUP}\n.end\n"), None, &mut vec![]);
         assert!(p.0.starts_with("Vref test 1 2\nV1 a 0 PWL(0 0 20e-6 5)\n"), "{}", p.0);
@@ -3201,7 +3206,7 @@ mod tests {
         // a root locus on the deck: its .pz sees the sources as they were
         let p = prepare(&format!("* t\nV1 a 0 5\nR1 a 0 1k\n.tran 1u 1m uic\n{STARTUP}\n.pz a 0 a 0 vol pol\n.end\n"), None, &mut vec![]);
         let pz = p.only_pz().0;
-        assert!(pz.contains("\nV1 a 0 5\n") && pz.contains("\n* .tran 1u 1m uic\n") && !pz.contains("* .pz"), "{pz}");
+        assert!(pz.contains("\nV1 a 0 5\n") && pz.contains("\n* .tran 1u 1m uic\n") && !pz.contains("* .pz") && !pz.contains(STARTUP), "{pz}");
         assert_eq!(unramped(&format!("V1 a 0 PWL(0 0 20e-6 5 1m 3)\n{STARTUP}\n")).lines().next(), Some("V1 a 0 PWL(0 0 20e-6 5 1m 3)")); // (a PWL of the user's own stays)
         assert_eq!(unramped(&format!("  Vref n 0 PWL(0 0 20e-6 2.5)\n{STARTUP}\n")).lines().next(), Some("  Vref n 0 2.5")); // (indented, a library's)
         let st = parse_step(".step V1 1 5 1").unwrap();
