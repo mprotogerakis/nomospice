@@ -294,9 +294,9 @@ async function fetchTrace(t: Trace): Promise<Trace> {
   if (!run) return { ...t, data: undefined, error: "no simulation results: run the simulation" };
   const nl = get().sim!.netlist; // (the one the results were computed with)
   if ((t.power || POWER_CALL.test(t.expr)) && !powerMode(get().sim)) return { ...t, data: undefined, error: "power: only in .tran and .dc results" };
-  // P(D1) by the name it is drawn with (its trace's, Plot power P(D1)), or its netlist's (XD1)
-  const p = (n: string) => `p(${n.toLowerCase()})`;
-  const expr = expandPowers(t.expr, (n) => powerExpr(nl, nl.insts.findIndex((x, j) => powerName(partCurrent(nl, j)).toLowerCase() === p(n) || x.toLowerCase() === n.toLowerCase())));
+  // P(D1) by the name it is drawn with (its current's, I(D1)), else by its netlist's (XD1)
+  const part = (n: string) => ((i) => (i >= 0 ? i : nl.insts.findIndex((x) => x.toLowerCase() === n)))(nl.insts.findIndex((_, j) => partCurrent(nl, j).toLowerCase() === `i(${n})`));
+  const expr = expandPowers(t.expr, (n) => powerExpr(nl, part(n.toLowerCase())));
   const left = POWER_CALL.exec(expr)?.[1];
   if (left) return { ...t, data: undefined, error: `P(${left}): no such two-pin part; P() is the power of a part with two pins, by its name (its menu's Plot power)` };
   try {
@@ -598,7 +598,9 @@ export function partCurrent(nl: Netlist, i: number, pin?: number) {
  *  so net names always come from the netlist the results were computed with. `ref`: the black
  *  probe of a differential one (another wire/label), V(net,ref); on ground or the same net: V(net). */
 export async function probe(target: Item, power = false, pin?: number, ref?: Item) {
-  if (!canProbe(target, pin) && !(ref && ref !== target)) return; // (ground: only as a differential probe's red end) // only things that can be plotted are worth a re-simulation
+  // only things that can be plotted are worth a re-simulation (ground: as a differential probe's
+  // red end, its black one elsewhere)
+  if (!canProbe(target, pin) && !(ref && ref !== target && canProbe(ref))) return;
   await idle();
   if (get().stale) await simulate();
   const { sim, items, stale } = get();
@@ -606,9 +608,10 @@ export async function probe(target: Item, power = false, pin?: number, ref?: Ite
   if (!sim?.run || !probeMode(sim) || stale || i < 0) return; // e.g. the re-run turned out to be .noise
   if (target.t === "sym" && power) {
     if (!powerMode(sim)) return;
-    // LTspice's power probe
-    const p = powerExpr(sim.netlist, i);
-    if (p) await addTraceNow(powerName(partCurrent(sim.netlist, i)), p, "W", true);
+    // LTspice's power probe, as P(R1) where that names it back (a trace typed alike is the same
+    // one), else as the product (Px(U1:A) is no expression)
+    const name = powerName(partCurrent(sim.netlist, i)), p = powerExpr(sim.netlist, i);
+    if (p) await addTraceNow(name, POWER_CALL.exec(name)?.[0] === name ? name : p, "W", true);
   } else if (target.t === "sym") {
     const cur = partCurrent(sim.netlist, i, pin); // (also the expression: the backend reads the name)
     if (cur) await addTraceNow(cur, cur, "A");

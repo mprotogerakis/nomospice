@@ -552,14 +552,16 @@ export const Schematic = memo(function Schematic() {
       if (Math.hypot(e.clientX - d.sx, e.clientY - d.sy) > 3) d.moved = true; // (less: a click, if a shaky one)
       if (!d.moved) return;
       d.to = hit(items, lib, p, 6 / view.k, false);
-      setHover(d.to);
+      setHover(items[d.to]?.t === "wire" || items[d.to]?.t === "flag" ? d.to : -1); // (only what it can end on)
       setDiffProbe({ from: d.from, a: d.at, b: p });
     } else (d.end = p), setBoxSel([d.start, p]);
   };
 
   /** The pointer taken away (a system gesture): the drag ends, nothing done. */
   const onPointerCancel = () => {
+    if (drag.current?.k === "pan") ended((n) => n + 1);
     drag.current = null;
+    setHover(-1);
     setPreview(null);
     setBoxSel(null);
     setDiffProbe(null);

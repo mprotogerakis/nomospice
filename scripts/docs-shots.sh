@@ -42,12 +42,14 @@ for n in "$@"; do
   NOMOSPICE_SCENES=$file NOMOSPICE_SHOTS=$img NOMOSPICE_SCENE_WORK=$work/$k-$n \
     pnpm tauri dev --config '{"identifier":"de.nomospice.docs"}' >"$log" 2>&1 &
   app=$!
-  set +m
-  # (a scene stuck, say on a native dialog it cannot answer: ended after 10 minutes)
+  # (a scene stuck, say on a native dialog it cannot answer: ended after 10 minutes; a group of
+  # its own too, so its sleep ends with it)
   ( sleep 600; echo "scene $n: timed out" >>"$log"; kill -- -$app ) 2>/dev/null &
   dog=$!
+  set +m
   ok=0; wait $app || ok=$?
-  kill $dog 2>/dev/null; wait $dog 2>/dev/null || true # (reaped quietly; killed, it returns 143)
+  kill -- -$dog 2>/dev/null || true # (gone already when it fired)
+  wait $dog 2>/dev/null || true # (reaped quietly; killed, it returns 143)
   if [ $ok -ne 0 ]; then tail -20 "$log"; exit 1; fi
   if [ -f "$img/$n/ERROR.png" ]; then echo "scene $n failed: $img/$n/ERROR.png"; grep -A3 "^scene:" "$log" | head -8; exit 1; fi
   # (a palette per picture: a quarter of the size, no visible difference; pngquant if there is one)
