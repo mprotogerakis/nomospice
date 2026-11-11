@@ -707,7 +707,7 @@ pub fn netlist_items(text: &str) -> Vec<Item> {
                 }
             }
             // (a comment line in it: no command)
-            _ if control => dropped += usize::from(!low.is_empty() && !low.starts_with('*') && !low.starts_with(COMMENT_LINE)),
+            _ if control => dropped += usize::from(!low.is_empty() && !low.starts_with(['*', ';', '#'])), // (`$cmd`: a command there)
             _ => body.push(l.to_string()),
         }
     }
@@ -1246,6 +1246,23 @@ fn ramp_end(token: &str) -> Option<&str> {
 fn starred(line: &str) -> Option<String> {
     line.trim_start().strip_prefix(COMMENT_LINE).map(|r| format!("* {}", r.trim()))
 }
+/// A line as libngspice takes it: it rejects the whole deck on non-ASCII bytes (`10µ`, `4.7μF`,
+/// `10kΩ`). One character for one (other blanks a blank, the rest `_`), but a unit Ω after a value
+/// dropped: the tokens stay those of the line as written (an include's file name is read there).
+fn ascii(line: &str) -> std::borrow::Cow<'_, str> {
+    if line.is_ascii() {
+        return line.into();
+    }
+    let mut prev = ' ';
+    line.chars().filter_map(|c| match (std::mem::replace(&mut prev, c), c) {
+        (p, 'Ω') if !p.is_whitespace() => None,
+        (_, 'µ' | 'μ') => Some('u'),
+        (_, c) if c.is_ascii() => Some(c),
+        (_, c) if c.is_whitespace() => Some(' '),
+        _ => Some('_'),
+    }).collect::<String>().into()
+}
+
 /// What else than `*` starts a comment line (see [`starred`]).
 const COMMENT_LINE: [char; 3] = [';', '#', '$'];
 
@@ -2299,20 +2316,15 @@ impl Expander<'_> {
         let (mut in_section, mut control, mut found) = (section.is_none(), false, section.is_none());
         for (n, raw) in text.lines().enumerate() {
             // the line as it goes out, and as every check below reads it (one of the line before
-            // would let `Ω.control` through): libngspice rejects the whole deck on non-ASCII bytes
-            // (`10µ`, `4.7μF`, `10kΩ`); a comment line starred
-            let ascii: String = raw.chars().filter(|c| *c != 'Ω').map(|c| match c {
-                'µ' | 'μ' => 'u',
-                c if c.is_ascii() => c,
-                _ => '_',
-            }).collect();
-            let line = starred(&ascii).unwrap_or(ascii);
+            // would let `Ω.control` through), a comment line starred
+            let asc = ascii(raw);
+            let line = starred(&asc).map_or(asc, std::borrow::Cow::Owned);
             let t = line.trim();
-            let l = t.to_lowercase();
+            let l = t.to_ascii_lowercase();
             let tok: Vec<&str> = t.split_whitespace().collect();
             if let Some(sec) = section {
                 if !in_section {
-                    in_section = l.starts_with(".lib") && tok.len() == 2 && tok[1].eq_ignore_ascii_case(sec);
+                    in_section = l.starts_with(".lib") && tok.len() == 2 && tok[1].eq_ignore_ascii_case(&ascii(sec));
                     found |= in_section;
                     continue;
                 }
@@ -2349,11 +2361,12 @@ impl Expander<'_> {
             }
             // LTspice's behavioural diode (Ron/Roff/Vfwd/Vrev) becomes an XSPICE device in ngspice:
             // without its code models loaded the whole deck fails to parse, so say why up front
-            if !l.starts_with(['+', '*']) {
+            // (comment and blank lines: neither a model nor its + lines)
+            if !l.is_empty() && !l.starts_with(['+', '*']) {
                 let t: Vec<&str> = l.split(|c: char| c.is_whitespace() || c == '(').filter(|s| !s.is_empty()).collect();
                 self.diode = (t.first() == Some(&".model") && t.get(2) == Some(&"d")).then(|| t[1].to_string());
             }
-            if let Some(m) = &self.diode {
+            if let Some(m) = self.diode.as_ref().filter(|_| l.starts_with(|c| c != '*')) {
                 if ["ron=", "roff=", "vfwd=", "vrev="].iter().any(|p| l.replace(' ', "").contains(p)) {
                     self.behavioural.push(m.clone());
                     self.diode = None; // once per model
@@ -4315,11 +4328,12 @@ SYMBOL half 400 300 R0\nSYMATTR InstName U4\nSYMATTR Value R=3k\nFLAG 352 300 a\
         assert!(text.text().contains(".op"));
         let text = prepare("* t\n*# shell touch /tmp/nomospice-pwned\n.op\n.end\n", None, &mut vec![]);
         assert!(!text.text().contains("shell"), "{}", text.text());
-        // (ngspice makes a line's first # a *: `##shell` would be `*#shell`; an Ω before a line's
-        // start is dropped on the way out: the checks read the line as it goes out)
+        // (ngspice makes a line's first # a *: `##shell` would be `*#shell`; an Ω at a line's start
+        // must not hide a command: the checks read the line as it goes out, `_.control` is none)
         let text = prepare("* t\n##shell touch /tmp/nomospice-pwned\n  ##shell touch /tmp/nomospice-pwned\nΩ*# shell touch /tmp/nomospice-pwned\nΩ.control\nshell touch /tmp/nomospice-pwned\nΩ.endc\n# note\n.op\n.end\n", None, &mut vec![]);
         let out = text.text();
-        assert!(out.lines().all(|l| !l.trim_start().starts_with(['#', '.']) || l == ".op" || l == ".end") && !out.contains("\nshell") && !out.contains("*#") && out.contains("* note\n"), "{out}");
+        assert!(out.lines().map(|l| l.trim_start().to_ascii_lowercase()).all(|l| !l.starts_with(".control") && !l.starts_with("*#") && !l.starts_with('#')) && out.contains("* note\n"), "{out}");
+        assert_eq!(ascii("Ω .include x.lib\u{a0}R1 a b 10kΩ 4.7µ Größe"), "_ .include x.lib R1 a b 10k 4.7u Gr__e"); // (tokens as written)
         assert!(nl.nets[0][0].chars().all(|c| c.is_ascii_alphanumeric() || c == '_'), "{:?}", nl.nets[0]);
         assert!(crate::ngspice::trace("v(a);shell ls", "", 0).is_err());
     }
