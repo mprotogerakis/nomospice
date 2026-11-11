@@ -62,7 +62,7 @@ export function numInfo(s: string, unit = ""): { text: string; warn?: string } |
 
 // ---------------------------------------------------------------- independent sources (V, I)
 
-export type Func = "SINE" | "PULSE" | "EXP" | "SFFM" | "PWL";
+export type Func = "SINE" | "PULSE" | "EXP" | "SFFM" | "TRNOISE" | "PWL";
 /** One function argument; unit "y" is the source's own unit (V or A). `def` fills a gap before a
  *  given argument; `spice` is what SPICE uses when trailing arguments are left out (for the
  *  preview): a number, "inf" (PULSE width/period: no repetition) or "?" (depends on .tran). */
@@ -84,6 +84,12 @@ export const FUNCS: Record<Exclude<Func, "PWL">, Arg[]> = {
   SFFM: [
     { label: "Offset", unit: "y", def: "0", spice: "0" }, { label: "Amplitude", unit: "y", def: "1", spice: "0" }, { label: "Carrier frequency", unit: "Hz", def: "10k", spice: "?" },
     { label: "Modulation index", unit: "", def: "5", spice: "0" }, { label: "Signal frequency", unit: "Hz", def: "1k", spice: "?" },
+  ],
+  // ngspice's transient noise (LTspice has none: there, white() in a B source); Gaussian, a new
+  // value each time step, linear in between; a 1/f part on top
+  TRNOISE: [
+    { label: "Noise (rms)", unit: "y", def: "0.1", spice: "0" }, { label: "Time step", unit: "s", def: "1u", spice: "?" },
+    { label: "1/f exponent", unit: "", def: "0", spice: "0" }, { label: "1/f amplitude", unit: "y", def: "0", spice: "0" },
   ],
 };
 
@@ -124,7 +130,7 @@ export function parseSource(...parts: (string | undefined)[]): Source {
   const vrest: string[] = [], rest: string[] = [];
   for (let i = 0; i < t.length; i++) {
     const [w, inValue] = t[i];
-    const fn = w.match(/^(SINE|SIN|PULSE|EXP|SFFM|PWL)\((.*)\)$/is);
+    const fn = w.match(/^(SINE|SIN|PULSE|EXP|SFFM|TRNOISE|PWL)\((.*)\)$/is);
     const kv = w.match(/^(rser|cpar)=(.+)$/i);
     if (fn && !s.func) {
       s.func = (fn[1].toUpperCase() === "SIN" ? "SINE" : fn[1].toUpperCase()) as Func;
@@ -223,6 +229,15 @@ export function sample(s: Source, n = 240): [number, number][] | null {
       end = isFinite(td2) ? Math.max(td2 + 5 * tau2, td1 + 5 * tau1, 1e-12) : Math.max(td1 + 5 * tau1, 2 * td1, 1e-12);
       const rise = (x: number, tau: number) => (x < 0 ? 0 : tau > 0 ? 1 - Math.exp(-x / tau) : 1); // tau 0: a step, not 0/0
       f = (t) => v1 + (v2 - v1) * rise(t - td1, tau1) + (v1 - v2) * rise(t - td2, tau2);
+    } else if (s.func === "TRNOISE") {
+      // a sample of such noise (the same each time: a fixed seed), not the run's own
+      const [na, nt] = p;
+      if (!(nt > 0)) return null;
+      let seed = 12345;
+      const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2 ** 31) + 0.5) / 2 ** 31;
+      const g = Array.from({ length: 52 }, () => na * Math.sqrt(-2 * Math.log(rnd())) * Math.cos(2 * Math.PI * rnd()));
+      end = 50 * nt;
+      f = (t) => { const k = Math.min(Math.floor(t / nt), 50), x = t / nt - k; return g[k] + (g[k + 1] - g[k]) * x; };
     } else {
       const [off, amp, fc, mdi, fs] = p;
       end = fs > 0 ? 2 / fs : 1;

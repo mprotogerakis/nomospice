@@ -123,6 +123,13 @@ assert.equal(formatSource(parseSource("SINE(0 {max(a,b)} 1k)")).Value, "SINE(0 {
 assert.equal(formatInclude(false, parseInclude(".inc 'x.lib'").path, ""), '.include "x.lib"');
 assert.deepEqual(formatSource(parseSource("PWL(0 0 1m 1) r=0", "AC 1")), { Value: "PWL(0 0 1m 1) r=0", Value2: "AC 1", SpiceLine: "" });
 assert.ok(sample(parseSource("EXP(0 1 0 0)"))!.every(([, v]) => Number.isFinite(v))); // tau 0: no NaN
+// TRNOISE: read and written back; its preview a noise of about the rms asked for
+const nz = parseSource("TRNOISE(0.1 1u 0 0)");
+assert.equal(nz.func, "TRNOISE");
+assert.equal(formatSource(nz).Value, "TRNOISE(0.1 1u 0 0)");
+const nzs = sample(nz)!;
+const nzr = Math.sqrt(nzs.reduce((a, [, v]) => a + v * v, 0) / nzs.length);
+assert.ok(nzr > 0.05 && nzr < 0.15, `rms ${nzr}`);
 assert.ok(sourceRoundTrips("") && sourceRoundTrips(undefined, "", "")); // an empty source is DC 0, not text
 assert.equal(analysisRoundTrips(".ac list 1k 2k 5k"), false); // the form has no `list` sweep
 for (const v of ["AC 1 2 3", "DC PULSE(0 5 0 1n 1n 1m 2m)"]) assert.equal(sourceRoundTrips(v), false, v); // would change meaning

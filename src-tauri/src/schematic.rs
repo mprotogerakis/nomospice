@@ -142,7 +142,7 @@ macro_rules! builtin {
 }
 const BUILTIN_SYMBOLS: &[(&str, &str)] = builtin!(
     "res", "cap", "polcap", "ind", "voltage", "current", "diode", "schottky", "zener", "led", "npn", "pnp",
-    "nmos", "pmos", "njf", "pjf", "opamp", "e", "g", "jumper", "sw", "csw"
+    "nmos", "pmos", "njf", "pjf", "opamp", "e", "g", "jumper", "sw", "csw", "bv", "bi"
 );
 
 pub fn parse_asy(name: &str, src: &str) -> SymbolDef {
@@ -1153,6 +1153,25 @@ pub fn spice_tokens(s: &str) -> Vec<&str> {
     out
 }
 
+/// `.tran … startup` leaves this line after its `.tran … uic`: the netlist's DC sources are then
+/// ramped up (see [`ramped`]).
+const STARTUP: &str = "* startup: the DC sources ramped up from 0 over 20 µs, no operating point (LTspice's .tran startup)";
+
+/// An independent source's line `V1 a b 5` (or `DC 5`, an AC part after it) as one that ramps up
+/// from 0 over the first 20 µs, as LTspice's `.tran startup` does; None: not such a source (a
+/// function such as SINE keeps its own start; a 0 V current sensor needs none).
+fn ramped(line: &str) -> Option<String> {
+    let t = spice_tokens(line);
+    if !t.first().is_some_and(|n| n.starts_with(['V', 'v', 'I', 'i'])) || t.len() < 4 {
+        return None;
+    }
+    let dc = usize::from(t[3].eq_ignore_ascii_case("dc"));
+    let v = t.get(3 + dc)?;
+    let rest = &t[4 + dc..];
+    let value = spice_num(v).filter(|x| *x != 0.0).is_some() || (v.starts_with('{') && v.ends_with('}'));
+    (value && rest.first().is_none_or(|r| r.eq_ignore_ascii_case("ac"))).then(|| format!("{} {} {} PWL(0 0 20u {v}){}", t[0], t[1], t[2], rest.iter().map(|r| format!(" {r}")).collect::<String>()))
+}
+
 /// Translate LTspice-only directive syntax to something ngspice accepts.
 fn directive(line: &str, warnings: &mut Vec<String>) -> Option<String> {
     let mut tok = spice_tokens(line).into_iter();
@@ -1164,14 +1183,15 @@ fn directive(line: &str, warnings: &mut Vec<String>) -> Option<String> {
             const LT_ONLY: [&str; 3] = ["startup", "steady", "nodiscard"];
             let expr = |t: &&str| spice_num(t).is_some() || t.starts_with(['{', '\'']);
             let (rest, lt): (Vec<&str>, Vec<&str>) = tok.partition(|t| !LT_ONLY.contains(&t.to_lowercase().as_str()));
-            for k in lt {
+            // startup as LTspice does it: no operating point, the DC sources ramped up (see `startup`)
+            let startup = lt.iter().any(|k| k.eq_ignore_ascii_case("startup"));
+            for k in lt.iter().filter(|k| !k.eq_ignore_ascii_case("startup")) {
                 warnings.push(match k.to_lowercase().as_str() {
-                    "startup" => "`.tran startup` is LTspice-only: ngspice starts from the DC operating point (supplies are not ramped up)".into(),
                     "steady" => "`.tran steady` is LTspice-only: ngspice runs to the full stop time".into(),
                     _ => "`.tran nodiscard` is LTspice-only: ngspice discards data before Tstart".into(),
                 });
             }
-            let uic = if rest.iter().any(|t| t.eq_ignore_ascii_case("uic")) { " uic" } else { "" };
+            let uic = if startup || rest.iter().any(|t| t.eq_ignore_ascii_case("uic")) { " uic" } else { "" };
             let mut v: Vec<String> = rest.iter().copied().filter(expr).map(str::to_string).collect();
             let step = |stop: &str| match spice_num(stop) {
                 Some(n) => {
@@ -1186,7 +1206,7 @@ fn directive(line: &str, warnings: &mut Vec<String>) -> Option<String> {
                 2.. if spice_num(&v[0]) == Some(0.0) => v[0] = step(&v[1]),
                 _ => {}
             }
-            Some(format!(".tran {}{uic}", v.join(" ")))
+            Some(format!(".tran {}{uic}{}", v.join(" "), if startup { format!("\n{STARTUP}") } else { String::new() }))
         }
         Some(".wave" | ".net" | ".savebias" | ".loadbias") => {
             warnings.push(format!("`{line}` is LTspice-only and was skipped"));
@@ -1845,7 +1865,86 @@ pub fn prepare(text: &str, dir: Option<&std::path::Path>, warnings: &mut Vec<Str
         std::borrow::Cow::Owned(t) => Some(t),
         std::borrow::Cow::Borrowed(_) => None, // (nothing to translate: not copied)
     };
-    Prepared(translated.unwrap_or(out), vec![], vec![])
+    let out = translated.unwrap_or(out);
+    Prepared(lt_white(&out, x.warnings).unwrap_or(out), vec![], vec![])
+}
+
+/// LTspice's noise function `white(x)` (between -0.5 and 0.5, a new value at each integer x, in
+/// between interpolated) in a B source: ngspice has none, so `white(c*time)` becomes the voltage of
+/// a noise source of its own, ngspice's TRNOISE with the same rms (1/√12) and a new value every
+/// 1/c seconds. Other arguments, and white() in a subcircuit (its node would be local there), are
+/// said and left. None: no white() in the deck.
+fn lt_white(text: &str, warnings: &mut Vec<String>) -> Option<String> {
+    if !crate::laplace::calls(text, &["white"]) {
+        return None;
+    }
+    let (mut out, mut sources, mut depth) = (String::with_capacity(text.len() + 128), vec![], 0);
+    for line in text.split_inclusive('\n') {
+        let t = line.trim_start().to_ascii_lowercase();
+        depth += i32::from(t.starts_with(".subckt")) - i32::from(t.starts_with(".ends"));
+        if !t.starts_with('b') || !crate::laplace::calls(line, &["white"]) {
+            out.push_str(line);
+            continue;
+        }
+        let mut rest = line;
+        while let Some(k) = find_call(rest, "white") {
+            let open = k + rest[k..].find('(').unwrap_or(0);
+            let close = matching(rest, open);
+            let Some(close) = close else { break };
+            let arg = rest[open + 1..close].replace(' ', "");
+            // c*time, time*c, time
+            let c = if arg.eq_ignore_ascii_case("time") { Some(1.0) } else {
+                arg.split_once('*').and_then(|(a, b)| if b.eq_ignore_ascii_case("time") { spice_num(a) } else if a.eq_ignore_ascii_case("time") { spice_num(b) } else { None })
+            }.filter(|c| *c > 0.0);
+            match c {
+                Some(c) if depth == 0 => {
+                    sources.push(format!("Vwhite{n} nw_white{n} 0 dc 0 trnoise(0.288675 {:e} 0 0)", 1.0 / c, n = sources.len() + 1));
+                    out.push_str(&rest[..k]);
+                    out.push_str(&format!("v(nw_white{})", sources.len()));
+                }
+                _ => {
+                    warnings.push(format!("`white({arg})`: nomospice turns white(c*time) into noise (ngspice has no white()); {}", if depth > 0 { "not inside a subcircuit" } else { "write the argument as a number times time" }));
+                    out.push_str(&rest[..=close]);
+                }
+            }
+            rest = &rest[close + 1..];
+        }
+        out.push_str(rest);
+    }
+    // (the noise sources before .end, at the top level)
+    let mut at = out.len();
+    let mut k = 0;
+    for l in out.split_inclusive('\n') {
+        if l.trim().eq_ignore_ascii_case(".end") {
+            at = k;
+        }
+        k += l.len();
+    }
+    out.insert_str(at, &sources.iter().map(|s| format!("{s}\n")).collect::<String>());
+    Some(out)
+}
+
+/// Where a call of `name` starts in `s` (a whole word, `(` after it, blanks between allowed).
+fn find_call(s: &str, name: &str) -> Option<usize> {
+    let low = s.to_ascii_lowercase();
+    let mut from = 0;
+    while let Some(i) = low[from..].find(name).map(|i| from + i) {
+        let before = low[..i].chars().next_back().is_none_or(|c| !(c.is_ascii_alphanumeric() || c == '_'));
+        if before && low[i + name.len()..].trim_start().starts_with('(') {
+            return Some(i);
+        }
+        from = i + name.len();
+    }
+    None
+}
+
+/// The `)` matching the `(` at `open`.
+fn matching(s: &str, open: usize) -> Option<usize> {
+    let mut depth = 0;
+    s[open..].char_indices().find_map(|(i, c)| {
+        depth += match c { '(' => 1, ')' => -1, _ => 0 };
+        (depth == 0).then_some(open + i)
+    })
 }
 
 /// LTspice's random functions as ngspice's, which draw anew each time a deck is read (so each run
@@ -2708,6 +2807,13 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
         lines.push(".param pi=3.141592653589793".into()); // LTspice built-in; a user .param pi comes later and wins
     }
     let includes = directives.iter().any(include) || h.top_includes; // (in a sheet, the top's too: global)
+    if directives.iter().any(|d| d.contains(STARTUP)) {
+        for l in lines.iter_mut() {
+            if let Some(r) = ramped(l) {
+                *l = r;
+            }
+        }
+    }
     lines.extend(directives);
     // after the user's directives (ngspice keeps the first definition, so .include/.lib models win):
     // the libraries (LTspice's stock models as LTspice loads them implicitly, Micro-Cap 12, user
@@ -2905,9 +3011,24 @@ mod tests {
     #[test]
     fn tran_translation() {
         let t = |l: &str| directive(l, &mut vec![]).unwrap();
-        assert_eq!(t(".tran 1u 1m startup"), ".tran 1u 1m");
+        assert_eq!(t(".tran 1u 1m startup"), format!(".tran 1u 1m uic\n{STARTUP}"));
         assert_eq!(t(".tran 0 1m 0 1u uic"), ".tran 1e-6 1m 0 1u uic");
-        assert_eq!(t(".tran 0 {T} startup"), ".tran {(T)/1000} {T}");
+        assert_eq!(t(".tran 0 {T} startup"), format!(".tran {{(T)/1000}} {{T}} uic\n{STARTUP}"));
+        // startup: DC sources ramp up, functions and current sensors stay
+        assert_eq!(ramped("V1 vcc 0 12").as_deref(), Some("V1 vcc 0 PWL(0 0 20u 12)"));
+        assert_eq!(ramped("V2 a 0 DC {Vs} AC 1").as_deref(), Some("V2 a 0 PWL(0 0 20u {Vs}) AC 1"));
+        assert_eq!(ramped("I1 0 b 1m").as_deref(), Some("I1 0 b PWL(0 0 20u 1m)"));
+        assert_eq!(ramped("V3 a 0 SINE(0 1 1k)"), None);
+        assert_eq!(ramped("Vsense_r1 a b 0"), None);
+        assert_eq!(ramped("R1 a b 1k"), None);
+        // white(c*time): a TRNOISE source of its own, before .end; other arguments are said
+        let mut w = vec![];
+        let out = lt_white("B1 n 0 V=white(1e6*time)/10 + white( time*2k )\n.tran 1m\n.end\n", &mut w).unwrap();
+        assert!(out.starts_with("B1 n 0 V=v(nw_white1)/10 + v(nw_white2)\n.tran 1m\nVwhite1 nw_white1 0 dc 0 trnoise(0.288675 1e-6 0 0)\nVwhite2 nw_white2 0 dc 0 trnoise(0.288675 5e-4 0 0)\n.end"), "{out}");
+        assert!(w.is_empty(), "{w:?}");
+        let out = lt_white("B1 n 0 V=white(V(x))\n", &mut w).unwrap();
+        assert!(out.contains("white(V(x))") && w.len() == 1, "{out} {w:?}");
+        assert_eq!(lt_white("B1 n 0 V=1\n", &mut w), None);
         assert_eq!(t(".tran {T}"), ".tran {(T)/1000} {T}");
         assert_eq!(t(".tran 3m"), ".tran 3e-6 3m");
         assert_eq!(t(".tran 1m ; 10 cycles uic"), ".tran 1e-6 1m");
@@ -3031,6 +3152,26 @@ mod tests {
         assert!(nl.text.contains("W1 vdd out V1 CSW") && nl.text.contains(".model CSW CSW("), "{}", nl.text);
         let bare = netlist(&parse_asc(&w.replace("SYMATTR Value V1 CSW", "")), &mut Library::builtin());
         assert!(bare.warnings.iter().any(|m| m.contains("controlling source")), "{:?}", bare.warnings);
+    }
+
+    #[test]
+    fn behavioral_startup_and_white_simulate() {
+        let _s = SIM.lock();
+        // bv as a multiplier: out = 2·V(a)·V(a); .tran startup ramps V1 up from 0 (no operating point)
+        let src = "Version 4\nSHEET 1 880 680\nFLAG 0 16 a\nFLAG 0 96 0\nFLAG 200 16 out\nFLAG 200 96 0\nFLAG 400 16 n\nFLAG 400 96 0\n\
+            SYMBOL voltage 0 0 R0\nSYMATTR InstName V1\nSYMATTR Value 3\nSYMBOL bv 200 0 R0\nSYMATTR InstName B1\nSYMATTR Value V=2*V(a)*V(a)\n\
+            SYMBOL bv 400 0 R0\nSYMATTR InstName B2\nSYMATTR Value V=white(1e5*time)\nTEXT 0 200 Left 2 !.tran 0 2m 0 1u startup\n";
+        let nl = netlist_for_sim(&parse_asc(src), &mut Library::builtin());
+        assert!(nl.text.contains("B1 out 0 V=2*V(a)*V(a)") && nl.text.contains("V1 a 0 PWL(0 0 20u 3)") && nl.text.contains(" uic"), "{}", nl.text);
+        let run = crate::ngspice::run(&prepare(&nl.text, None, &mut vec![])).unwrap();
+        let tr = |e: &str| crate::ngspice::trace(e, &run.scale, run.id).unwrap();
+        let out = tr("v(out)");
+        let at = |t: f64| out.re[out.x.iter().position(|&x| x >= t).unwrap()];
+        assert!(at(0.0).abs() < 1e-3 && (at(1e-3) - 18.0).abs() < 1e-6, "start {} later {}", at(0.0), at(1e-3));
+        // white(): noise of rms 1/√12, new values every 10 µs
+        let n = tr("v(n)");
+        let rms = (n.re.iter().map(|v| v * v).sum::<f64>() / n.re.len() as f64).sqrt();
+        assert!((0.2..0.37).contains(&rms), "rms {rms}");
     }
 
     #[test]
