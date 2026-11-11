@@ -418,8 +418,20 @@ const PROBE = /\b(?:v|i|i[bcdegsx])\s*\([^)]*\)/gi;
 function deckDefs(text: string) {
   if (DEFS?.text === text) return DEFS;
   let depth = 0;
-  // (a line's `;` or `$` comment is not of its body; a body continued on + lines is one line)
-  const top = text.split("\n").filter((l) => { const t = l.trim().toLowerCase(); depth += t.startsWith(".subckt") ? 1 : t.startsWith(".ends") ? -1 : 0; return depth === 0; }).map((l) => l.split(/;|(?<![^\s])\$/)[0]).join("\n").replace(/\n\s*\+\s?/g, " ");
+  // (a line's `;` or `$` comment is not of its body; a statement continued on + lines is one line,
+  // comment lines between them skipped, as SPICE does)
+  const kept = text.split("\n").filter((l) => { const t = l.trim().toLowerCase(); depth += t.startsWith(".subckt") ? 1 : t.startsWith(".ends") ? -1 : 0; return depth === 0; }).map((l) => l.split(/;|(?<![^\s])\$/)[0]);
+  const joined: string[] = [];
+  let last = -1;
+  for (const l of kept) {
+    const t = l.trim();
+    if (t.startsWith("+") && last >= 0) joined[last] += " " + t.slice(1).trim();
+    else {
+      joined.push(l);
+      if (t && !t.startsWith("*")) last = joined.length - 1;
+    }
+  }
+  const top = joined.join("\n");
   // (the top level's .param values too: a body's `Rs` means nothing to ngspice's plot expressions)
   const params = new Map<string, string>();
   for (const m of top.matchAll(/^\s*\.param\s+(.+)$/gim))

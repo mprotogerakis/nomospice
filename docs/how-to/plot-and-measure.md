@@ -48,7 +48,7 @@ The plot's menu switches a frequency axis between logarithmic and linear, sets t
 
 ## Two-port quantities
 
-With `.net I(R1) V1` beside an `.ac` analysis (V1 the source, with an Rser as the reference impedance; R1 the load), *Add trace* offers `S21(V1)`, `S11(V1)` and `Zin(V1)`: transmission and reflection in dB and phase, the input impedance in ohms.
+With `.net I(R1) V1` beside an `.ac` analysis (V1 the source, with an Rser as the reference impedance; R1 the load), *Add trace* offers `S21(V1)`, `S11(V1)` and `Zin(V1)`: transmission, reflection and the input impedance in dB and phase (`mag(Zin(V1))`: the input impedance in ohms).
 
 ## Other choices in the plot's menu
 

@@ -1969,7 +1969,14 @@ pub fn prepare(text: &str, dir: Option<&std::path::Path>, warnings: &mut Vec<Str
     let out = lt_white(&out, x.warnings).unwrap_or(out);
     // .tran … startup: every DC source of the deck ramped up (drawn, written in a directive, in a
     // sheet or an included file)
-    let out = if out.contains(STARTUP) {
+    // (with other analyses in the deck, as `nomospice --mcp` runs a schematic: their operating point
+    // would see the ramps at 0; not ramped then, said)
+    const OTHERS: [&str; 10] = [".op", ".ac", ".dc", ".noise", ".tf", ".pz", ".sens", ".disto", ".pss", ".sp"];
+    let others = out.contains(STARTUP) && deck_lines(&out).iter().any(|l| l.top && !l.skip && OTHERS.contains(&l.head.as_str()));
+    if others {
+        x.warnings.push("`.tran … startup` beside other analyses: the sources are not ramped (their operating point would see them at 0); run the .tran on its own".into());
+    }
+    let out = if out.contains(STARTUP) && !others {
         // (not the title line, nor comments)
         let ls = deck_lines(&out);
         let mut s = String::with_capacity(out.len() + 64);
@@ -2038,7 +2045,7 @@ fn lt_white(text: &str, warnings: &mut Vec<String>) -> Option<String> {
             cur = Some(n);
         } else if ends(l) {
             cur = None;
-        } else if let (Some(s), true) = (&cur, !l.skip && func_named(&l.low, "white")) {
+        } else if let (Some(s), true) = (&cur, !l.skip && func_head(&l.low) == Some("white")) {
             own_in.insert(s.clone());
         }
     }
@@ -2122,10 +2129,7 @@ fn func_head(low: &str) -> Option<&str> {
     let head = [".function", ".func"].into_iter().find(|h| t.len() > h.len() && t.starts_with(h) && t.as_bytes()[h.len()].is_ascii_whitespace())?;
     t[head.len()..].trim_start().split(|c: char| c == '(' || c.is_whitespace()).next()
 }
-/// Whether `low` (a lowercase line) is `.func name(…`.
-fn func_named(low: &str, name: &str) -> bool {
-    func_head(low) == Some(name)
-}
+
 
 /// The names of the deck's `.func`s (`.function` too), lowercase; `top`: its top level's only (a
 /// subcircuit's are local).
@@ -2692,7 +2696,9 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
                     }
                 }
                 let d = directive(line, &mut nl.warnings);
-                skipped = d.is_none();
+                if !l.starts_with('*') {
+                    skipped = d.is_none(); // (a comment between leaves its + lines skipped)
+                }
                 if !l.starts_with('*') {
                     // (a comment between a .tran and its + lines leaves it the last)
                     tran = (l.starts_with(".tran") && d.is_some()).then(|| (directives.len(), uncommented(line).trim_end().to_string()));
@@ -3479,6 +3485,11 @@ mod tests {
         let tc = netlist_for_sim(&parse_asc(&src.replace("!.net I(R1) V1", "!.tran 0 10m steady\\n* soft start\\n+ startup")), &mut Library::builtin());
         assert!(tc.text.contains(&format!(" uic\n{STARTUP}")) && !tc.text.contains("+ startup"), "{}", tc.text); // (a comment between)
         assert_eq!(tc.warnings.iter().filter(|w| w.contains("steady")).count(), 1, "{:?}", tc.warnings); // (said once)
+        let sk = netlist_for_sim(&parse_asc(&src.replace("!.net I(R1) V1", "!.wave out.wav 16 44.1k V(out)\\n* right channel\\n+ V(in)")), &mut Library::builtin());
+        assert!(!sk.text.contains("+ V(in)"), "{}", sk.text); // (a skipped directive's + line after a comment)
+        let mut w = vec![];
+        let both = prepare(&format!("* t\nV1 a 0 5\n.tran 1u 1m uic\n{STARTUP}\n.op\n.end\n"), None, &mut w);
+        assert!(both.0.contains("\nV1 a 0 5\n") && w.iter().any(|m| m.contains("beside other analyses")), "{} {w:?}", both.0); // (with .op: not ramped, said)
         let run = crate::ngspice::run(&prepare(&nl.text, None, &mut vec![])).unwrap();
         let mag = |e: &str| { let t = crate::ngspice::trace(e, &run.scale, run.id).unwrap(); t.re[0].hypot(t.im.as_ref().map_or(0.0, |i| i[0])) };
         let zin = "((v(\"in\")-0)/(-i(v1)))";

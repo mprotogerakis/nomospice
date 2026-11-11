@@ -92,6 +92,7 @@ assert.equal(analysisRoundTrips(".dc lin V1 0 5 0.1"), false);
   assert.equal(analysisLineIndex(note, "tran", true), 0, "a directive's line is");
   assert.deepEqual(analysisOptions([{ text: ".op point is checked first" }, { text: ".tran is great" }, { text: ".tran 0 1m startup" }, { text: ".pz shows poles" }, { text: ".tf is a transfer function" }, { text: ".pz in 0 out 0 vol pz" }]).map((o) => o.kind), ["tran", "pz"], "notes are not analyses");
   assert.equal(stripAnalyses(".param R=1k\n.tran 0 1m\n* c\n+ 0 1u\n.meas tran x AVG V(a)"), ".param R=1k\n* c\n.meas tran x AVG V(a)");
+  assert.equal(stripAnalyses(".tran 0 10m\n; soft start\n+ startup\n.ac dec 10 1 1Meg"), "; soft start"); // (a ; comment between: the + line goes with its .tran)
 }
 { const { f } = parseAnalysis(".sens V(out) dc"); assert.equal(formatAnalysis("sens", { ...f, mode: "ac" }), ".sens V(out) ac dec 10 10 1Meg"); } // `dc` is the mode, not an option
 assert.ok(analysisEditable(".param a=1\n.tran 0 1m") && !analysisEditable(".tran 0 1m\n* c\n+ 0 1u") && !analysisEditable(".param a=1"));
@@ -239,6 +240,8 @@ assert.equal(numInfo("1Meg", "Hz")!.text, "= 1MegHz"); // not "1M", the milli tr
   assert.equal(twoPortIn("S21(V1)", { ...two, text: two.text.replace("V1 V1_rser 0 AC 1", "V1 V1_rser 0 AC 1 SIN(0 1 1k)") }), '(2*v("out")/(1)*sqrt((50)/(50)))'); // (a waveform after it is no phase)
   assert.equal(funcsIn("NF(V(n))", ".param Rs=50\n.func NF(x) {imag(Rs*x)}"), "(imag((50)*(V(n))))"); // (imag() is no probe)
   assert.equal(funcsIn("f(V(a))", ".func f(x) {x*2} $ note"), "((V(a))*2)"); // (a $ comment)
+  assert.equal(funcsIn("NF(V(n))", ".func NF(x)\n* the body\n+ {10*log10(x)}"), "(10*log10((V(n))))"); // (a comment between a .func and its + line)
+  assert.equal(funcsIn("g(2)", ".param a=1\n* c\n+ k=3\n.func g(x) {x*k}"), "((2)*(3))"); // (likewise a .param)
   assert.equal(twoPortIn("S21(V1)", { ...two, nets: [["0", "in"], ["out", "0"]] }), '(2*v("out")/(-1)*sqrt((50)/(50)))'); // (the source upside down: its EMF the other way)
   const one = { ...two, text: two.text.replace("* .net I(R1) V1 ; nomospice: two-port", "* .net V1 ; nomospice: two-port") }; // (a one-port: Zin and S11)
   assert.equal(twoPortIn("Zin(V1)", one), '((v("in")-0)/(-I(V1)))');
