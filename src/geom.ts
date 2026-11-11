@@ -494,7 +494,8 @@ export function twoPortIn(expr: string, nl: Netlist): string {
   if (!vin) return expr;
   const z0 = resolved(line(`R${src}_rser`)?.[3]);
   // (the AC amplitude after the nodes, `AC 1`: a node named ac is none; a parameter: not here)
-  const t = line(src)?.slice(3) ?? [], ac = t.findIndex((x) => /^ac$/i.test(x)), vs = ac >= 0 ? t[ac + 1] ?? "1" : "1";
+  // (no AC part: no drive for S21, the voltages come from elsewhere)
+  const t = line(src)?.slice(3) ?? [], ac = t.findIndex((x) => /^ac$/i.test(x)), vs = ac >= 0 ? t[ac + 1] ?? "1" : "";
   // (a drive of a phase, a number not 0 or a parameter's: not folded in; a waveform after it is none)
   const ph = ac >= 0 ? t[ac + 2] : undefined, phased = !!ph && (ph.startsWith("{") || (Number.isFinite(parseFloat(ph)) && parseFloat(ph) !== 0));
   const drive = nets(src)?.[0] === "0" ? `-${vs}` : vs; // (the source drawn with its + pin at ground: its EMF the other way)

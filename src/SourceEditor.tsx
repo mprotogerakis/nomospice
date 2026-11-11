@@ -69,7 +69,7 @@ export function SourceEditor({ attrs: given, setAttrs, current, spiceLine }: { a
               <NumField key={`${src.func}${i}`} label={a.label} value={src.args[i] ?? ""} set={(v) => setArg(i, v)} unit={a.unit === "y" ? y : a.unit}
                 placeholder={i < lastArg || i < 2 ? a.def : "SPICE default"} autofocus={i === 0} />
             )) : null}
-          {src.func === "TRNOISE" && <p className="text-2xs text-text-tertiary">Gaussian noise, a new value every time step (keep the .tran step no larger). ngspice's: LTspice does not read it (there: white() in a behavioral source, which nomospice reads too).</p>}
+          {src.func === "TRNOISE" && <p className="text-2xs text-text-tertiary">Gaussian noise, a new value every time step (keep the .tran step no larger). ngspice's own, not every simulator reads it; white(c*time) in a behavioral source works too.</p>}
           {nDefs > 0 && (src.args.length > nDefs || more !== null) && (
             <TextField label="More arguments" value={more ?? src.args.slice(nDefs).join(" ")} hint="kept as written (e.g. a cycle count)"
               set={(v) => { setMore(v); update({ ...src, args: [...src.args.slice(0, nDefs), ...tokens(v)] }); }} />

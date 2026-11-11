@@ -1226,6 +1226,11 @@ fn ramped(line: &str) -> Option<String> {
 /// How [`ramped`] writes a source's value, `PWL(0 0 20e-6 5)` (a `.step` of the source steps the
 /// 5; written so, not `20u`, a PWL of the user's own is not taken for one).
 const RAMP: &str = "PWL(0 0 20e-6 ";
+/// The sources `.tran startup` ramped, as the mark names them (lowercase).
+fn ramped_sources(text: &str) -> HashSet<String> {
+    text.lines().find(|l| l.starts_with(STARTUP)).and_then(|l| l.split_once("; ramped:")).map_or_else(HashSet::new, |(_, n)| n.split_whitespace().map(str::to_string).collect())
+}
+
 /// The value a ramp token ends at, `5` of `PWL(0 0 20e-6 5)`: one value, a braced expression or a
 /// number (a PWL of the user's own that starts alike, `PWL(0 0 20e-6 5 1m 3)`, is none).
 fn ramp_end(token: &str) -> Option<&str> {
@@ -1241,10 +1246,12 @@ fn unramped(text: &str) -> String {
         return text.to_string();
     }
     // (and without the mark: a .step of a source in it then puts in a DC value, no ramp)
-    text.split_inclusive('\n').filter(|l| l.trim_end() != STARTUP).map(|l| {
+    let ramped = ramped_sources(text);
+    let ours = |l: &str| l.split_whitespace().next().is_some_and(|n| ramped.contains(&n.to_ascii_lowercase()));
+    text.split_inclusive('\n').filter(|l| !l.starts_with(STARTUP)).map(|l| {
         let sp = token_spans(l);
         match sp.get(3).and_then(|&(a, e)| ramp_end(&l[a..e]).map(|v| (a, e, v))) {
-            Some((a, e, v)) if l.trim_start().starts_with(['V', 'v', 'I', 'i']) => format!("{}{v}{}", &l[..a], &l[e..]),
+            Some((a, e, v)) if ours(l) => format!("{}{v}{}", &l[..a], &l[e..]),
             _ => l.to_string(),
         }
     }).collect()
@@ -1453,7 +1460,7 @@ impl Step {
                 // (ramped up by .tran startup: the value the ramp ends at)
                 // (exactly the ramp, under .tran startup: a PWL of the user's own that starts alike is no ramp)
                 let startup = text.contains(STARTUP);
-                if let Some(&(a, e)) = sp.get(3).filter(|_| startup).filter(|&&(a, e)| ramp_end(&line.line[a..e]).is_some()) {
+                if let Some(&(a, e)) = sp.get(3).filter(|_| startup && ramped_sources(text).contains(&low)).filter(|&&(a, e)| ramp_end(&line.line[a..e]).is_some()) {
                     return Ok(splice(text, &[(line.start + a + RAMP.len(), line.start + e - 1)], v));
                 }
                 // (the DC value where it is written: right after the nodes, or after a `DC` anywhere)
@@ -1964,6 +1971,7 @@ pub fn prepare(text: &str, dir: Option<&std::path::Path>, warnings: &mut Vec<Str
         // (not the title line, nor comments)
         let ls = deck_lines(&out);
         let mut s = String::with_capacity(out.len() + 64);
+        let mut names: Vec<String> = vec![];
         let piece = |i: usize| &out[ls[i].start..ls.get(i + 1).map_or(out.len(), |n| n.start)];
         let mut k = 0;
         while k < ls.len() {
@@ -1986,6 +1994,7 @@ pub fn prepare(text: &str, dir: Option<&std::path::Path>, warnings: &mut Vec<Str
             let joined = (k..n).filter(|&i| !ls[i].skip).map(|i| uncommented(ls[i].line).trim().trim_start_matches('+').trim()).collect::<Vec<_>>().join(" ");
             match ramped(&joined) {
                 Some(r) => {
+                    names.push(joined.split_whitespace().next().unwrap_or("").to_ascii_lowercase());
                     s.push_str(&r);
                     s.push_str(&l.line[uncommented(l.line).trim_end().len()..]); // (the first line's comment)
                     s.push('\n');
@@ -1999,7 +2008,9 @@ pub fn prepare(text: &str, dir: Option<&std::path::Path>, warnings: &mut Vec<Str
                 None => { s.push_str(piece(k)); k += 1; }
             }
         }
-        s
+        // (the sources ramped, named on the mark: only these are taken for ramps later, a PWL of
+        // the user's own that looks alike is none)
+        s.replacen(STARTUP, &format!("{STARTUP} ; ramped: {}", names.join(" ")), 1)
     } else { out };
     Prepared(out, vec![], vec![])
 }
@@ -2032,11 +2043,14 @@ fn lt_white(text: &str, warnings: &mut Vec<String>) -> Option<String> {
     // (one noise source per rate: white(1e5*time) twice is the same noise, as in LTspice; its names
     // none the deck has already)
     let low = text.to_ascii_lowercase();
-    let mut base = 0;
-    while low.contains(&format!("nmsp_white{}", base + 1)) {
-        base += 1;
-    }
-    let (mut out, mut sources, mut cur, mut left) = (String::with_capacity(text.len() + 128), Vec::<(f64, String)>::new(), None::<String>, false);
+    let mut next = 0;
+    let mut fresh = || loop {
+        next += 1;
+        if !low.contains(&format!("nmsp_white{next}")) {
+            break next;
+        }
+    };
+    let (mut out, mut sources, mut cur, mut left) = (String::with_capacity(text.len() + 128), Vec::<(f64, String, u32)>::new(), None::<String>, false);
     for (k, l) in ls.iter().enumerate() {
         let piece = &text[l.start..ls.get(k + 1).map_or(text.len(), |n| n.start)];
         if let Some(n) = name_of(l) {
@@ -2065,10 +2079,14 @@ fn lt_white(text: &str, warnings: &mut Vec<String>) -> Option<String> {
             }.filter(|c| *c > 0.0);
             match c {
                 Some(c) if l.top => {
-                    let n = sources.iter().position(|s| s.0 == c).unwrap_or_else(|| {
-                        sources.push((c, format!("Vnmsp_white{n} nmsp_white{n} 0 dc 0 trnoise(0.288675 {:e} 0 0)", 1.0 / c, n = base + sources.len() + 1)));
-                        sources.len() - 1
-                    }) + base + 1;
+                    let n = match sources.iter().find(|s| s.0 == c) {
+                        Some(s) => s.2,
+                        None => {
+                            let n = fresh();
+                            sources.push((c, format!("Vnmsp_white{n} nmsp_white{n} 0 dc 0 trnoise(0.288675 {:e} 0 0)", 1.0 / c), n));
+                            n
+                        }
+                    };
                     out.push_str(&rest[..k]);
                     out.push_str(&format!("max(min(v(nmsp_white{n}),0.5),-0.5)"));
                 }
@@ -2639,6 +2657,10 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
                     continue;
                 }
                 if skipped && l.starts_with('+') || l == ".end" || l.starts_with(".end ") {
+                    continue;
+                }
+                if l.starts_with(';') {
+                    directives.push(format!("* {}", line[1..].trim())); // (a comment, as a `*` one: between a statement and its + lines too)
                     continue;
                 }
                 // (a statement's + lines, comments between allowed: a .net's onto its comment, before
@@ -3238,15 +3260,19 @@ mod tests {
         assert!(p.0.starts_with("* t\nV1 vcc 0 PWL(0 0 20e-6 12)\nR1 vcc 0 1k\n"), "{}", p.0); // (over + lines)
         let p = prepare(&format!("* t\nV1 vcc 0 ; supply\n* note\n+ 12 Rser=0.1\nR1 vcc 0 1k\n.tran 1u 1m uic\n{STARTUP}\n.end\n"), None, &mut vec![]);
         assert!(p.0.starts_with("* t\nV1 vcc 0 PWL(0 0 20e-6 12) Rser=0.1 ; supply\n* note\nR1 vcc 0 1k\n"), "{}", p.0); // (a comment between, parameters after)
-        let out = parse_step(".step V1 1 5 1").unwrap().apply(&format!("V1 a 0 PWL(0 0 20e-6 {{max(Va, Vb)}})\n.tran 1u 1m uic\n{STARTUP}\n"), 3.0).unwrap();
+        let out = parse_step(".step V1 1 5 1").unwrap().apply(&format!("V1 a 0 PWL(0 0 20e-6 {{max(Va, Vb)}})\n.tran 1u 1m uic\n{STARTUP} ; ramped: v1\n"), 3.0).unwrap();
         assert!(out.starts_with("V1 a 0 PWL(0 0 20e-6 3"), "{out}"); // (a braced end value stepped)
         // a root locus on the deck: its .pz sees the sources as they were
         let p = prepare(&format!("* t\nV1 a 0 5\nR1 a 0 1k\n.tran 1u 1m uic\n{STARTUP}\n.pz a 0 a 0 vol pol\n.end\n"), None, &mut vec![]);
         let pz = p.only_pz().0;
         assert!(pz.contains("\nV1 a 0 5\n") && pz.contains("\n* .tran 1u 1m uic\n") && !pz.contains("* .pz") && !pz.contains(STARTUP), "{pz}");
         assert_eq!(unramped(&format!("V1 a 0 PWL(0 0 20e-6 5 1m 3)\n{STARTUP}\n")).lines().next(), Some("V1 a 0 PWL(0 0 20e-6 5 1m 3)")); // (a PWL of the user's own stays)
-        assert_eq!(unramped(&format!("  Vref n 0 PWL(0 0 20e-6 2.5)\n{STARTUP}\n")).lines().next(), Some("  Vref n 0 2.5")); // (indented, a library's)
+        assert_eq!(unramped(&format!("  Vref n 0 PWL(0 0 20e-6 2.5)\n{STARTUP} ; ramped: vref\n")).lines().next(), Some("  Vref n 0 2.5")); // (indented, a library's)
         assert_eq!(ramp_end("PWL(0 0 20e-6 {a} 1m {b})"), None); // (braced points of the user's own)
+        // (only the sources the pass ramped: one of the user's own written alike stays)
+        let p = prepare(&format!("* t\nV1 a 0 5\nV2 b 0 PWL(0 0 20e-6 3)\n.tran 1u 1m uic\n{STARTUP}\n.pz a 0 a 0 vol pol\n.end\n"), None, &mut vec![]);
+        let pz = p.only_pz().0;
+        assert!(pz.contains("\nV1 a 0 5\n") && pz.contains("\nV2 b 0 PWL(0 0 20e-6 3)\n"), "{pz}");
         let st = parse_step(".step V1 1 5 1").unwrap();
         let out = st.apply(&format!("V1 in 0 AC 1\n.tran 1u 1m uic\n{STARTUP}\n"), 2.0).unwrap();
         assert!(out.starts_with("V1 in 0 PWL(0 0 20e-6 2e0) AC 1\n"), "{out}");
@@ -3268,12 +3294,15 @@ mod tests {
         assert!(out.starts_with(&format!("B1 n 0 V={w1}-{w1}\n")) && !out.contains("nmsp_white2") && w.len() == 1, "{out} {w:?}");
         // a subcircuit with a white() of its own: left alone, nothing said
         let mut w = vec![];
+        let taken = lt_white("B1 n 0 V=white(time)+white(2*time)\nR1 nmsp_white2 0 1k\n", &mut w).unwrap();
+        assert!(taken.contains("Vnmsp_white1 nmsp_white1") && taken.contains("Vnmsp_white3 nmsp_white3") && !taken.contains("Vnmsp_white2"), "{taken}"); // (a name the deck has: skipped)
+        let mut w = vec![];
         let own = ".subckt n a b\n.func white(x) {sin(x)}\nB1 a b V=white(time)\n.ends\nB2 m 0 V=white(time)\n";
         let out = lt_white(own, &mut w).unwrap();
         assert!(out.contains("B1 a b V=white(time)") && out.contains(&format!("B2 m 0 V={w1}")) && w.is_empty(), "{out} {w:?}");
         // a .step of a source ramped up: the ramp's end
         let st = parse_step(".step V1 1 2 1").unwrap();
-        let su = format!("V1 a 0 PWL(0 0 20e-6 5)\n.tran 1m uic\n{STARTUP}\n");
+        let su = format!("V1 a 0 PWL(0 0 20e-6 5)\n.tran 1m uic\n{STARTUP} ; ramped: v1\n");
         assert!(st.apply(&su, 2.0).unwrap().starts_with("V1 a 0 PWL(0 0 20e-6 2"), "{:?}", st.apply(&su, 2.0));
         // (the same PWL without startup is the user's own: a DC value is put in)
         assert!(st.apply("V1 a 0 PWL(0 0 20e-6 5)\n", 2.0).unwrap().contains("PWL(0 0 20e-6 5)"));

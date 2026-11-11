@@ -30,8 +30,8 @@ Written with the directive form (++s++), its tabs in brackets.
 | `.temp` (Temperature) | the circuit temperature |
 | `.include`, `.lib` (Include file) | a model file, whole or one section |
 | `.step` (Text) | runs the analysis once per value: `.step param C list 47n 100n 220n`; also `lin`, `oct`, `dec`, a source's value, `temp`; up to three nested |
-| `.tran … startup` | as in LTspice: no operating point, the DC sources ramped up from 0 over 20 µs (oscillators start) |
-| `.net I(R1) V1` | LTspice's two-port analysis: after an `.ac` run, `S21(V1)`, `S11(V1)` and `Zin(V1)` are traces of the circuit as it is terminated (V1's Rser the input's reference impedance, the load R1 the output's); `S12`, `S22`, `Rin=` and `Rout=` are not computed |
+| `.tran … startup` | no operating point, the DC sources ramped up from 0 over 20 µs (oscillators start) |
+| `.net I(R1) V1` | a two-port analysis: after an `.ac` run, `S21(V1)`, `S11(V1)` and `Zin(V1)` are traces of the circuit as it is terminated (V1's Rser the input's reference impedance, the load R1 the output's); `S12`, `S22`, `Rin=` and `Rout=` are not computed |
 | `.func f(x) {…}` | a function of your own, in values and in trace expressions (`.func NF(x) {10*log10(x*x/(50*4*boltz*300))}`, then *Add trace* `NF(V(inoise))`; for the plot it must stand in the schematic, not in an included file) |
 
 Other dot commands that ngspice knows pass through as they are written.
@@ -51,8 +51,8 @@ SPICE reads a number with a suffix, case-insensitively:
 - `{expression}`: a value computed from parameters, such as `{R*2}`.
 - `mc(x, tol)`: x with a tolerance, uniform within ±tol (as a fraction); `flat(x)`: uniform within ±x; `gauss(x)`: normal with σ = x. They draw anew in each run of a `.step`, so `.step param run 1 100 1` is a Monte Carlo analysis.
 - `Laplace=H(s)` on an `e` or `g` source: a transfer function, any ratio of polynomials in `s`.
-- Independent sources (V, I) are edited in a form: DC, sine, pulse, exponential, FM, noise, piecewise linear (with a preview), an AC amplitude, and series resistance and parallel capacitance. *Noise* is ngspice's `TRNOISE(rms step 1/f-exponent 1/f-amplitude)`, which LTspice does not read.
-- `white(c*time)` in a behavioral source (LTspice's noise function, between -0.5 and 0.5, a new value every 1/c s) becomes a noise source of the same rms.
+- Independent sources (V, I) are edited in a form: DC, sine, pulse, exponential, FM, noise, piecewise linear (with a preview), an AC amplitude, and series resistance and parallel capacitance. *Noise* is ngspice's `TRNOISE(rms step 1/f-exponent 1/f-amplitude)`, which not every simulator reads.
+- `white(c*time)` in a behavioral source (noise between -0.5 and 0.5, a new value every 1/c s) becomes a noise source of the same rms.
 
 ## Trace expressions
 

@@ -351,7 +351,7 @@ export const Waveform = memo(function Waveform() {
           ...(!twin && anyTwin ? [{ side: 1, size: 72, values: () => [], grid: { show: false }, ticks: { show: false }, stroke: "transparent" }] : []),
           ...(twin ? [{ scale: "y2", side: 1, stroke: (() => { const r = pane.series.filter((s) => scaleOf(pane, s) === "y2"); return new Set(r.map((s) => s.t)).size === 1 ? color(r[0].t.slot) : text; })() /* (a .dc family: one trace, several series) */, grid: { show: false }, ticks: { stroke: grid, width: 1 }, size: 72, values: values(pane.unit2), font: "11px IBM Plex Mono" }] : []),
         ],
-        series: [{}, ...pane.series.map((s) => ({ label: s.t.label, scale: scaleOf(pane, s), stroke: color(s.t.slot), width: 2, points: points ? { show: true, size: 4, fill: color(s.t.slot) } : { show: false } }))],
+        series: [{}, ...pane.series.map((s) => ({ label: s.t.label, scale: scaleOf(pane, s), stroke: color(s.t.slot), width: 2, points: points ? { show: (u: uPlot, _s: number, i0: number, i1: number) => i1 - i0 < u.bbox.width / devicePixelRatio / 3, size: 4, fill: color(s.t.slot) } : { show: false } }))], // (marked where they lie apart: zoom in on a long run)
         hooks: {
           ready: [(u) => {
             // click = cursor; a drag (zoom) also ends in a click, so compare with the press position
@@ -510,7 +510,7 @@ export const Waveform = memo(function Waveform() {
           ...(freq ? [{ label: logX ? "Linear x axis" : "Log x axis", hint: !logX && !(xs[0] > 0) ? "it starts at 0" : undefined, disabled: !logX && !(xs[0] > 0), run: () => setPlot({ xlog: !logX, zoom: null }) }] : []),
           { label: "X range…", disabled: !panes.length || polarOn, run: () => useS.setState({ dialog: { k: "xrange", unit: xUnit, log: logX } }) },
           ...(ac && cplx && !polarOn ? [{ label: nophase ? "Show the phase" : "Hide the phase", run: () => setPlot({ nophase: !nophase || undefined }) }] : []),
-          { label: points ? "Hide data points" : "Mark data points", hint: "where the simulator computed", disabled: !panes.length || polarOn, run: () => setPlot({ points: !points || undefined }) },
+          { label: points ? "Hide data points" : "Mark data points", hint: "as fetched, where they lie apart", disabled: !panes.length || polarOn, run: () => setPlot({ points: !points || undefined }) },
           ...(spec ? [{ label: "FFT settings…", hint: `${FFT_WINDOWS[fftOpts.window].label}, ${fftOpts.lin ? "linear" : "dB"}, ${fftOpts.n || "auto"} points`, run: () => useS.setState({ dialog: { k: "fft" } }) }] : []),
           ...(pane ? ["-" as const,
             { label: ax.log ? "Linear y axis" : "Log y axis", hint: db ? `${pane.unit}: no` : !pos ? "nothing above 0" : undefined, disabled: db || (!ax.log && !pos), run: () => setYAxis(key, { ...ax, log: !ax.log || undefined, ...(!ax.log && ax.lo != null && ax.lo <= 0 ? { lo: undefined, hi: undefined } : {}) }) },
