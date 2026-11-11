@@ -234,6 +234,8 @@ assert.equal(numInfo("1Meg", "Hz")!.text, "= 1MegHz"); // not "1M", the milli tr
   assert.equal(twoPortIn("S21(V1)", { ...two, text: two.text.replace("V1 V1_rser 0 AC 1", "V1 V1_rser 0 AC 1 90") }), "S21(V1)"); // (a phased drive: not)
   assert.equal(twoPortIn("S21(V1)", { ...two, text: two.text.replace("V1 V1_rser 0 AC 1", "V1 V1_rser 0 AC 1 SIN(0 1 1k)") }), '(2*v("out")/(1)*sqrt((50)/(50)))'); // (a waveform after it is no phase)
   assert.equal(funcsIn("NF(V(n))", ".param Rs=50\n.func NF(x) {imag(Rs*x)}"), "(imag((50)*(V(n))))"); // (imag() is no probe)
+  assert.equal(funcsIn("f(V(a))", ".func f(x) {x*2} $ note"), "((V(a))*2)"); // (a $ comment)
+  assert.equal(twoPortIn("S21(V1)", { ...two, nets: [["0", "in"], ["out", "0"]] }), '(2*v("out")/(-1)*sqrt((50)/(50)))'); // (the source upside down: its EMF the other way)
   assert.equal(twoPortIn("S21(V1)", { ...two, text: two.text.replace("* .net I(R1) V1", "* .net I(C1) V1") }), "S21(V1)"); // (a load that is no resistor)
   const pv = { ...two, text: two.text.replace("V1 V1_rser 0 AC 1", "V1 V1_rser 0 AC {Vac}") };
   assert.equal(twoPortIn("S21(V1)", pv), "S21(V1)"); // (a parameter as the drive: S21 not, …)

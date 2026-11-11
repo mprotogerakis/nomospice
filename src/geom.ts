@@ -409,7 +409,7 @@ function deckFuncs(text: string) {
   if (FUNCS?.text === text) return FUNCS.defs;
   let depth = 0;
   // (a line's `;` comment is not of its body; a body continued on + lines is one line)
-  const top = text.split("\n").filter((l) => { const t = l.trim().toLowerCase(); depth += t.startsWith(".subckt") ? 1 : t.startsWith(".ends") ? -1 : 0; return depth === 0; }).map((l) => l.split(";")[0]).join("\n").replace(/\n\s*\+\s?/g, " ");
+  const top = text.split("\n").filter((l) => { const t = l.trim().toLowerCase(); depth += t.startsWith(".subckt") ? 1 : t.startsWith(".ends") ? -1 : 0; return depth === 0; }).map((l) => l.split(/;|(?<![^\s])\$/)[0]).join("\n").replace(/\n\s*\+\s?/g, " ");
   // (the top level's .param values too: a body's `Rs` means nothing to ngspice's plot expressions)
   const values = new Map<string, string>();
   for (const m of top.matchAll(/^\s*\.param\s+(.+)$/gim))
@@ -460,6 +460,7 @@ export function twoPortIn(expr: string, nl: Netlist): string {
   // (the AC amplitude after the nodes, `AC 1`: a node named ac is none; a parameter: not here)
   const t = line(src)?.slice(3) ?? [], ac = t.findIndex((x) => /^ac$/i.test(x)), vs = ac >= 0 ? t[ac + 1] ?? "1" : "1";
   const phase = ac >= 0 ? parseFloat(t[ac + 2] ?? "0") : 0, phased = Number.isFinite(phase) && phase !== 0; // (a drive of a phase: not folded in)
+  const drive = nets(src)?.[0] === "0" ? `-${vs}` : vs; // (the source drawn with its + pin at ground: its EMF the other way)
   const zin = `(${vin}/(-I(${src})))`; // (I(V1): into its + pin)
   const r = /^I\((\w+)\)$/i.exec(out);
   // (a resistor of a plain value as the load, an Rser of one as the source's: else no reference)
@@ -473,7 +474,7 @@ export function twoPortIn(expr: string, nl: Netlist): string {
       : f === "zin" ? zin
       : !plain(z0) ? null
       : f === "s11" ? `((${zin}-(${z0}))/(${zin}+(${z0})))`
-      : vl && rl && plain(vs) && !phased ? `(2*${vl}/(${vs})*sqrt((${z0})/(${rl})))` : null); // (S21 alone needs the drive)
+      : vl && rl && plain(vs) && !phased ? `(2*${vl}/(${drive})*sqrt((${z0})/(${rl})))` : null); // (S21 alone needs the drive)
   }
   return e;
 }

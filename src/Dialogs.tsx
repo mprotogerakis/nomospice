@@ -394,7 +394,9 @@ function Sources({ start }: { start?: "add" | "microcap" }) {
 function TraceDialog() {
   const run = useS((s) => s.sim?.run);
   const nl = useS((s) => s.sim?.netlist);
-  const ac = !!run?.plot.startsWith("ac"); // (the two-port quantities: of an .ac result)
+  const ac = !!run?.plot.startsWith("ac");
+  // (the two-port quantities of a .net: of an .ac result, those it can write out; once per run)
+  const twoPort = useMemo(() => (ac && nl ? (NET_DIRECTIVE.exec(nl.text)?.slice(2, 3) ?? []).flatMap((s) => ["S21", "S11", "Zin"].map((f) => `${f}(${s})`)).filter((e) => twoPortIn(e, nl) !== e) : []), [ac, nl]);
   const vectors = run?.vectors ?? [];
   const noise = !!run?.plot.startsWith("noise"); // spectra, no node voltages: plain names
   const raw = noise || !!run?.plot.startsWith("sens"); // sensitivities: no node voltages either
@@ -428,7 +430,7 @@ function TraceDialog() {
       </Field>
       <datalist id="vectors">
         {/* (.net I(R1) V1: its two-port quantities) */}
-        {(ac && nl ? (NET_DIRECTIVE.exec(nl.text)?.slice(2, 3) ?? []).flatMap((s) => ["S21", "S11", "Zin"].map((f) => `${f}(${s})`)).filter((e) => twoPortIn(e, nl) !== e) : []).map((e) => <option key={e} value={e} />)}
+        {twoPort.map((e) => <option key={e} value={e} />)}
         {vectors.filter((v) => v !== run?.scale).map((v) => (
           <option key={v} value={raw ? v : /^[\w+\-.]+#branch$/.test(v) ? `i(${v.replace("#branch", "")})` : /^[\w+\-.]+$/.test(v) ? vexpr(v) : v} />
         ))}

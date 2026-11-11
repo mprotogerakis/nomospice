@@ -1220,6 +1220,21 @@ fn ramped(line: &str) -> Option<String> {
 /// How [`ramped`] writes a source's value, `PWL(0 0 20u 5)` (a `.step` of the source steps the 5).
 const RAMP: &str = "PWL(0 0 20u ";
 
+/// The deck's sources as before `.tran startup` ramped them: for a run of another analysis on it
+/// (a root locus's `.pz`), whose operating point would see them at 0.
+fn unramped(text: &str) -> String {
+    if !text.contains(STARTUP) {
+        return text.to_string();
+    }
+    text.split_inclusive('\n').map(|l| {
+        let sp = token_spans(l);
+        match sp.get(3).filter(|&&(a, e)| l[a..e].starts_with(RAMP) && l[a..e].ends_with(')')) {
+            Some(&(a, e)) if l.starts_with(['V', 'v', 'I', 'i']) => format!("{}{}{}", &l[..a], &l[a + RAMP.len()..e - 1], &l[e..]),
+            _ => l.to_string(),
+        }
+    }).collect()
+}
+
 /// Translate LTspice-only directive syntax to something ngspice accepts.
 fn directive(line: &str, warnings: &mut Vec<String>) -> Option<String> {
     let mut tok = spice_tokens(line).into_iter();
@@ -1287,8 +1302,9 @@ impl Prepared {
     /// or `.meas` would run every step for nothing).
     pub fn only_pz(&self) -> Prepared {
         const OTHER: [&str; 16] = [".tran", ".ac", ".dc", ".op", ".noise", ".tf", ".sens", ".four", ".meas", ".measure", ".disto", ".pss", ".sp", ".hb", ".print", ".plot"];
-        // with their `+` continuation lines
-        let text = deck_lines(&self.0).iter().map(|l| {
+        // with their `+` continuation lines (and the sources as before a `.tran startup` ramped them)
+        let base = unramped(&self.0);
+        let text = deck_lines(&base).iter().map(|l| {
             if !l.skip && OTHER.contains(&l.head.as_str()) { format!("* {}", l.line) } else { l.line.to_string() }
         }).collect::<Vec<_>>().join("\n") + "\n";
         // (random values, mc(): one sample for all the sweep's steps, not a draw per step)
@@ -2029,7 +2045,11 @@ fn lt_white(text: &str, warnings: &mut Vec<String>) -> Option<String> {
                     out.push_str(&format!("max(min(v(nw_white{n}),0.5),-0.5)"));
                 }
                 _ => {
-                    warnings.push(format!("`white({arg})`: nomospice turns white(c*time) into noise (ngspice has no white()); {}", if !l.top { "not inside a subcircuit" } else { "write the argument as a number times time" }));
+                    warnings.push(format!("`white({arg})`: nomospice turns white(c*time) into noise (ngspice has no white()); {}", match (l.top, c) {
+                        (false, Some(_)) => "not inside a subcircuit",
+                        (false, None) => "not inside a subcircuit, and the argument as a number times time",
+                        _ => "write the argument as a number times time",
+                    }));
                     out.push_str(&rest[..=close]);
                 }
             }
@@ -3154,6 +3174,10 @@ mod tests {
         assert!(p.0.starts_with("* t\nV1 vcc 0 PWL(0 0 20u 12) Rser=0.1 ; supply\n* note\nR1 vcc 0 1k\n"), "{}", p.0); // (a comment between, parameters after)
         let out = parse_step(".step V1 1 5 1").unwrap().apply(&format!("V1 a 0 PWL(0 0 20u {{max(Va, Vb)}})\n.tran 1u 1m uic\n{STARTUP}\n"), 3.0).unwrap();
         assert!(out.starts_with("V1 a 0 PWL(0 0 20u 3"), "{out}"); // (a braced end value stepped)
+        // a root locus on the deck: its .pz sees the sources as they were
+        let p = prepare(&format!("* t\nV1 a 0 5\nR1 a 0 1k\n.tran 1u 1m uic\n{STARTUP}\n.pz a 0 a 0 vol pol\n.end\n"), None, &mut vec![]);
+        let pz = p.only_pz().0;
+        assert!(pz.contains("\nV1 a 0 5\n") && pz.contains("\n* .tran 1u 1m uic\n") && !pz.contains("* .pz"), "{pz}");
         let st = parse_step(".step V1 1 5 1").unwrap();
         let out = st.apply(&format!("V1 in 0 AC 1\n.tran 1u 1m uic\n{STARTUP}\n"), 2.0).unwrap();
         assert!(out.starts_with("V1 in 0 PWL(0 0 20u 2e0) AC 1\n"), "{out}");
