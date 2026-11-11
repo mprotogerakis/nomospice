@@ -384,10 +384,10 @@ export function funcsIn(expr: string, text: string): string {
   for (let round = 0; round < 10; round++) {
     const before = expr;
     for (const d of defs) {
-      // (all parameters at once: an argument's own letters are not a parameter's)
-      const re = new RegExp(`\\b(${d.params.join("|")})\\b`, "g");
+      // (all parameters at once: an argument's own letters are not a parameter's; any case, as SPICE)
+      const re = new RegExp(`\\b(${d.params.join("|")})\\b`, "gi"), low = d.params.map((p) => p.toLowerCase());
       expr = replaceCalls(expr, d.name, (args) => args.length !== d.params.length ? null
-        : `(${d.params.length ? d.body.replace(re, (p) => `(${args[d.params.indexOf(p)]})`) : d.body})`);
+        : `(${d.params.length ? d.body.replace(re, (p) => `(${args[low.indexOf(p.toLowerCase())]})`) : d.body})`);
     }
     if (expr === before) break;
   }
@@ -399,9 +399,11 @@ export function funcsIn(expr: string, text: string): string {
  *  Rser, or Rin=, the reference impedance; its AC amplitude) to the load, I(R1) (the voltage across
  *  R1, its value the load) or V(out[,ref]) with Rout=. What it cannot make stays as written. */
 export function twoPortIn(expr: string, nl: Netlist): string {
-  const m = /^\*\s*\.net\s+(\S+)\s+(\S+)(.*)$/im.exec(nl.text);
+  // (`V(out, ref)` with a blank; a voltage source V1 as the input: a current source's port current
+  // is no vector)
+  const m = /^\*\s*\.net\s+([IV]\s*\([^)]*\)|\S+)\s+(V\S*)(.*)$/im.exec(nl.text);
   if (!m || !/\b(s11|s21|zin)\s*\(/i.test(expr)) return expr;
-  const [, out, src, rest] = m;
+  const [, spec, src, rest] = m, out = spec.replace(/\s+/g, "");
   const param = (k: string) => new RegExp(`\\b${k}\\s*=\\s*(\\S+)`, "i").exec(rest)?.[1];
   const line = (name: string) => nl.text.split("\n").find((l) => l.split(/\s+/)[0]?.toLowerCase() === name.toLowerCase())?.split(/\s+/);
   const nets = (inst: string) => nl.nets[nl.insts.findIndex((x) => x.toLowerCase() === inst.toLowerCase())];

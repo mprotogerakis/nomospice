@@ -65,14 +65,30 @@ const drawEl = (it: Extract<Item, { t: "draw" }>) => (
   <polyline points={outline(it).map((q) => q.join(",")).join(" ")} vectorEffect="non-scaling-stroke" strokeDasharray={DASH[it.style ?? 0]} strokeLinejoin="round" />
 );
 
-function SymbolGraphics({ def }: { def: SymbolDef }) {
+/** `texts`: the symbol's own texts too (a preview; on the canvas each part draws them upright,
+ *  see SymTexts) */
+function SymbolGraphics({ def, texts = true }: { def: SymbolDef; texts?: boolean }) {
   return (
     <g id={`sym-${def.name}`} fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round">
       {def.shapes.map(([k, p], i) => shapeEl(k, p, i))}
-      {def.texts?.map(([x, y, just, size, t], i) => (
-        <text key={`t${i}`} x={x} y={y} fill="currentColor" stroke="none" fontSize={8 + 3 * size} dominantBaseline="middle"
-          textAnchor={/^right/i.test(just) ? "end" : /^left/i.test(just) ? "start" : "middle"}>{t}</text>
-      ))}
+      {texts && <SymTexts def={def} />}
+    </g>
+  );
+}
+
+/** A symbol's TEXT lines (≥1, 1D …), placed as the part is turned but upright, never mirrored. */
+function SymTexts({ def, it }: { def: SymbolDef; it?: Extract<Item, { t: "sym" }> }) {
+  return (
+    <g fill="currentColor" stroke="none">
+      {def.texts?.map(([x, y, just, size, t], i) => {
+        const [dx, dy] = it ? xform(it.rot, x, y) : [x, y];
+        // (Left: the text runs from x to the right; turned or mirrored, where that right now points)
+        const run = /^left/i.test(just) ? 1 : /^right/i.test(just) ? -1 : 0, ux = it ? xform(it.rot, run, 0)[0] : run;
+        return (
+          <text key={i} x={(it?.x ?? 0) + dx} y={(it?.y ?? 0) + dy} fontSize={8 + 3 * size} dominantBaseline="middle"
+            textAnchor={ux > 0 ? "start" : ux < 0 ? "end" : "middle"}>{t}</text>
+        );
+      })}
     </g>
   );
 }
@@ -194,6 +210,7 @@ const ItemView = memo(function ItemView({ it, lib, leftward }: { it: Shape; lib:
         <g>
           {def ? <use href={`#sym-${def.name}`} transform={matrix(it.rot, it.x, it.y)} />
             : <rect x={it.x - 16} y={it.y - 16} width={32} height={32} strokeDasharray="4 3" />}
+          {def?.texts && <SymTexts def={def} it={it} />}
           {def && (def.pin_labels || def.pins.some((p) => p.just)) && <PinLabels it={it} def={def} />}
           <g stroke="none"><SymLabels it={it} def={def} /></g>
         </g>
@@ -210,7 +227,7 @@ function ExportSvg({ items, lib }: { items: Item[]; lib: Record<string, SymbolDe
   const defs = [...new Set(items.flatMap((it) => (it.t === "sym" ? [defOf(lib, it)] : [])).filter((d): d is SymbolDef => !!d))];
   return (
     <svg xmlns="http://www.w3.org/2000/svg">
-      <defs>{defs.map((d) => <SymbolGraphics key={d.name} def={d} />)}</defs>
+      <defs>{defs.map((d) => <SymbolGraphics key={d.name} def={d} texts={false} />)}</defs>
       <g data-content="" fill="none" strokeLinecap="round">
         {items.map((it, i) => isShape(it) && (
           <g key={i} color={colorOf(it)} stroke="currentColor" strokeWidth={it.t === "wire" ? 2 : 1.6}>
@@ -338,13 +355,21 @@ export const Schematic = memo(function Schematic() {
   // the operating point (.op, fresh): node voltages by net, part currents by name (I(R1), a
   // source's v1#branch; a .step run's per step, `out [R=1k]`)
   const opNow = !!sim?.run?.plot.startsWith("op") && !stale;
-  const opRows = (match: (n: string) => boolean) => sim?.run?.op.filter(([n]) => match(n)) ?? [];
-  const named = (want: string) => (n: string) => n.toLowerCase() === want.toLowerCase() || n.toLowerCase().startsWith(`${want.toLowerCase()} [`);
+  // (looked up by name, once per run: the overlay asks for every part on every render)
+  const opByName = useMemo(() => {
+    const m = new Map<string, [string, number, number, string][]>();
+    for (const r of sim?.run?.op ?? []) {
+      const k = r[0].replace(/ \[[^\]]*\]$/, "").toLowerCase();
+      m.set(k, [...(m.get(k) ?? []), r]);
+    }
+    return m;
+  }, [sim]);
+  const opRows = (name: string) => opByName.get(name.toLowerCase()) ?? [];
   const opCurrent = (i: number, pin?: number) => {
     if (!nets) return null;
     const label = partCurrent(nets, i, pin), inst = nets.insts[i] ?? "";
-    const rows = label ? opRows(named(label)) : [];
-    const got = rows.length ? rows : inst ? opRows(named(`${inst}#branch`)) : [];
+    const rows = label ? opRows(label) : [];
+    const got = rows.length ? rows : inst ? opRows(`${inst}#branch`) : [];
     return got.length ? `${label || `I(${inst})`} = ${got.map((r) => si(r[1], "A", 4)).join(" / ")}` : null;
   };
   /** Values written beside the net labels and the parts (the canvas menu's Show operating point) */
@@ -404,8 +429,7 @@ export const Schematic = memo(function Schematic() {
     let op = "";
     // stale results: auto net names (N001 ...) may now denote other nodes, so no value
     // (a .step run: the net's value per step, `out [R=1k]`, in order)
-    const own = (n: string) => !!hoverNet && (n.toLowerCase() === hoverNet.toLowerCase() || n.toLowerCase().startsWith(`${hoverNet.toLowerCase()} [`));
-    const vs = hoverNet && opNow ? opRows(own) : [];
+    const vs = hoverNet && opNow ? opRows(hoverNet) : [];
     if (vs.length) op = ` = ${vs.map((v) => v[1].toPrecision(5)).join(" / ")} V`;
     // a part: its current, as the operating point lists it
     const part = !hoverNet && opNow && hover >= 0 && items[hover]?.t === "sym" ? opCurrent(hover, hoverPin) : null;
@@ -814,7 +838,7 @@ export const Schematic = memo(function Schematic() {
           <pattern id="grid" width={gap} height={gap} patternUnits="userSpaceOnUse" x={view.x % gap} y={view.y % gap}>
             <circle cx={0.75} cy={0.75} r={Math.min(1.2, 0.6 * view.k)} fill="var(--sch-grid)" />
           </pattern>
-          {defs.map((d) => <SymbolGraphics key={d.name} def={d} />)}
+          {defs.map((d) => <SymbolGraphics key={d.name} def={d} texts={false} />)}
         </defs>
         {gap > 4 && <rect width="100%" height="100%" fill="url(#grid)" />}
         <g data-world transform={`translate(${view.x} ${view.y}) scale(${view.k})`} fill="none" strokeLinecap="round">
@@ -864,7 +888,7 @@ export const Schematic = memo(function Schematic() {
               {items.map((it, i) => {
                 if (it.t === "flag" && !/^(0|gnd)$/i.test(it.name)) {
                   // (beside the label's box, on the side away from its wire)
-                  const v = opRows(named(nets.nets[i]?.[0] ?? "\u0000")), left = leftward.has(`${it.x},${it.y}`), r = labelRect(it, left);
+                  const v = opRows(nets.nets[i]?.[0] ?? ""), left = leftward.has(`${it.x},${it.y}`), r = labelRect(it, left);
                   return v.length ? <text key={`op${i}`} x={left ? r[0] - 4 : r[2] + 4} y={it.y} dominantBaseline="middle" textAnchor={left ? "end" : "start"}>{v.map((x) => si(x[1], "V", 4)).join(" / ")}</text> : null;
                 }
                 if (it.t !== "sym") return null;

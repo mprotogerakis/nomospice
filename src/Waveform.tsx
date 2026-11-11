@@ -315,7 +315,7 @@ export const Waveform = memo(function Waveform() {
       } } : {});
       const yRange = rangeOf(span);
       // the left axis as set: log, a fixed range (on a log axis, only one above 0)
-      const ax = yAxes[axisKey(pane.unit, spec)] ?? {};
+      const ax = yAxes[axisKey(pane.key ?? pane.unit, spec)] ?? {}; // (a pane of its own: its own settings)
       const logY = !!ax.log && !span && positive(pane); // (nothing above 0: linear)
       const fixed = ax.lo != null && ax.hi != null && (!logY || ax.lo > 0) ? { range: (): uPlot.Range.MinMax => [ax.lo!, ax.hi!] } : {};
       // (a log axis hands the ticks it does not label over as null)
@@ -455,8 +455,10 @@ export const Waveform = memo(function Waveform() {
   // an x range set by number (X range…): onto the plots, unless they show it already
   useEffect(() => useS.subscribe((s, p) => {
     const z = s.plot.zoom, u = plots.current[0];
-    if (!z || z === p.plot.zoom || !u || (u.scales.x.min === z[0] && u.scales.x.max === z[1])) return;
-    u.setScale("x", { min: z[0], max: z[1] });
+    if (z === p.plot.zoom || !u) return;
+    // (emptied: all of it again)
+    const [lo, hi] = z ?? [u.data[0][0], u.data[0][u.data[0].length - 1]];
+    if (u.scales.x.min !== lo || u.scales.x.max !== hi) u.setScale("x", { min: lo, max: hi });
   }), []);
 
   useEffect(() => {
@@ -483,7 +485,7 @@ export const Waveform = memo(function Waveform() {
         // the spectrum of A–B, else of what is shown, else of the whole run
         const range: [number, number] = a != null && b != null && a !== b ? [Math.min(a, b), Math.max(a, b)] : zoom ?? [Math.min(xs[0], xs[xs.length - 1]), Math.max(xs[0], xs[xs.length - 1])];
         const pane = panes[paneEls.current.findIndex((el) => el?.contains(e.target as Node))];
-        const key = pane ? axisKey(pane.unit, spec) : "", ax = yAxes[key] ?? {};
+        const key = pane ? axisKey(pane.key ?? pane.unit, spec) : "", ax = yAxes[key] ?? {};
         const db = pane?.unit === "dB" || pane?.unit === "°";
         const pos = !!pane && positive(pane);
         openMenu(e.clientX, e.clientY, [

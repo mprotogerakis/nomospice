@@ -1176,9 +1176,9 @@ pub fn spice_tokens(s: &str) -> Vec<&str> {
     out
 }
 
-/// `.tran … startup` leaves this line after its `.tran … uic`: the netlist's DC sources are then
-/// ramped up (see [`ramped`]).
-const STARTUP: &str = "* startup: the DC sources ramped up from 0 over 20 µs, no operating point (LTspice's .tran startup)";
+/// `.tran … startup` leaves this line after its `.tran … uic`: `prepare` then ramps the deck's DC
+/// sources up (see [`ramped`]).
+const STARTUP: &str = "* startup: the DC sources ramped up from 0 over 20 us, no operating point (LTspice's .tran startup)"; // (ASCII: the deck is)
 
 /// An independent source's line `V1 a b 5` (or `DC 5`, an AC part after it) as one that ramps up
 /// from 0 over the first 20 µs, as LTspice's `.tran startup` does; None: not such a source (a
@@ -1892,7 +1892,11 @@ pub fn prepare(text: &str, dir: Option<&std::path::Path>, warnings: &mut Vec<Str
         std::borrow::Cow::Borrowed(_) => None, // (nothing to translate: not copied)
     };
     let out = translated.unwrap_or(out);
-    Prepared(lt_white(&out, x.warnings).unwrap_or(out), vec![], vec![])
+    let out = lt_white(&out, x.warnings).unwrap_or(out);
+    // .tran … startup: every DC source of the deck ramped up (drawn, written in a directive, in a
+    // sheet or an included file)
+    let out = if out.contains(STARTUP) { out.split_inclusive('\n').map(|l| ramped(l.trim_end()).map_or(l.to_string(), |r| r + "\n")).collect() } else { out };
+    Prepared(out, vec![], vec![])
 }
 
 /// LTspice's noise function `white(x)` (between -0.5 and 0.5, a new value at each integer x, in
@@ -1901,18 +1905,24 @@ pub fn prepare(text: &str, dir: Option<&std::path::Path>, warnings: &mut Vec<Str
 /// 1/c seconds. Other arguments, and white() in a subcircuit (its node would be local there), are
 /// said and left. None: no white() in the deck.
 fn lt_white(text: &str, warnings: &mut Vec<String>) -> Option<String> {
-    if !crate::laplace::calls(text, &["white"]) {
+    // (`.func white(x) …`: the deck's own)
+    let own = text.lines().any(|l| {
+        let t = l.trim_start().to_ascii_lowercase();
+        (t.starts_with(".func ") || t.starts_with(".function ")) && t.split(|c: char| c.is_whitespace() || c == '(').filter(|w| !w.is_empty()).nth(1) == Some("white")
+    });
+    if own || !crate::laplace::calls(text, &["white"]) {
         return None;
     }
     let (mut out, mut sources, mut depth) = (String::with_capacity(text.len() + 128), vec![], 0);
     for line in text.split_inclusive('\n') {
         let t = line.trim_start().to_ascii_lowercase();
         depth += i32::from(t.starts_with(".subckt")) - i32::from(t.starts_with(".ends"));
-        if !t.starts_with('b') || !crate::laplace::calls(line, &["white"]) {
+        let code = uncommented(line); // (not in a `;` comment)
+        if !t.starts_with('b') || !crate::laplace::calls(code, &["white"]) {
             out.push_str(line);
             continue;
         }
-        let mut rest = line;
+        let mut rest = code;
         while let Some(k) = find_call(rest, "white") {
             let open = k + rest[k..].find('(').unwrap_or(0);
             let close = matching(rest, open);
@@ -1936,6 +1946,7 @@ fn lt_white(text: &str, warnings: &mut Vec<String>) -> Option<String> {
             rest = &rest[close + 1..];
         }
         out.push_str(rest);
+        out.push_str(&line[code.len()..]);
     }
     // (the noise sources before .end, at the top level)
     let mut at = out.len();
@@ -2086,6 +2097,7 @@ pub fn prepare_warnings(text: &str, dir: Option<&std::path::Path>, warnings: &mu
     x.warn_behavioural();
     let expanded = crate::laplace::rewrite(&std::mem::take(&mut x.out), x.warnings);
     lt_random(&expanded, x.warnings); // (mc(1k): said while editing too)
+    lt_white(&expanded, x.warnings); // (white(V(x)) too)
     ltspice_meas(&expanded, &[], warnings); // a .meas left out is said before a run too (the schematic's own: included files are read only by a run)
 }
 
@@ -2662,13 +2674,16 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
         if call.is_some() && def.block && block.is_none() && h.refused.get(&name).is_some_and(|w| !w.is_empty()) {
             h.quiet.insert(model.clone());
         }
+        // (a subcircuit symbol's default parameters belong to its default model: opamp2's Slew=…
+        // are no TL072's)
+        let defaults = prefix != 'X' || def.value.split_whitespace().next().is_some_and(|d| d.eq_ignore_ascii_case(&model));
         if "DQMXJS".contains(prefix) && model.is_empty() {
             nl.warnings.push(format!("{inst}: no model or subcircuit named (its Value is empty)"));
         } else if "DQMXJSWO".contains(prefix) && !model.is_empty() && block.is_none() && !defined(&model) && !used_models.contains(&model) {
             used_models.push(model);
         }
         let extra: Vec<String> = ["Value2", "SpiceLine", "SpiceLine2"].iter()
-            .filter_map(|k| attrs.get(*k).cloned().or_else(|| (*k == "SpiceLine").then(|| def.spice_line.clone())))
+            .filter_map(|k| attrs.get(*k).cloned().or_else(|| (*k == "SpiceLine" && defaults).then(|| def.spice_line.clone())))
             .filter(|s| !s.is_empty()).map(|s| one_line(&s)).collect();
         // LTspice accepts Rser=... in Value too: value and extras go through one pass
         let (rest, parasitics) = lt_instance_params(prefix, &inst, &format!("{value} {}", extra.join(" ")), &mut nl.warnings);
@@ -2833,13 +2848,6 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
         lines.push(".param pi=3.141592653589793".into()); // LTspice built-in; a user .param pi comes later and wins
     }
     let includes = directives.iter().any(include) || h.top_includes; // (in a sheet, the top's too: global)
-    if directives.iter().any(|d| d.contains(STARTUP)) {
-        for l in lines.iter_mut() {
-            if let Some(r) = ramped(l) {
-                *l = r;
-            }
-        }
-    }
     lines.extend(directives);
     // after the user's directives (ngspice keeps the first definition, so .include/.lib models win):
     // the libraries (LTspice's stock models as LTspice loads them implicitly, Micro-Cap 12, user
@@ -3055,6 +3063,10 @@ mod tests {
         let out = lt_white("B1 n 0 V=white(V(x))\n", &mut w).unwrap();
         assert!(out.contains("white(V(x))") && w.len() == 1, "{out} {w:?}");
         assert_eq!(lt_white("B1 n 0 V=1\n", &mut w), None);
+        // not in a comment; a deck's own white() stays
+        let out = lt_white("B1 n 0 V=white(time) ; was white(2*time)\n", &mut w).unwrap();
+        assert!(out.starts_with("B1 n 0 V=v(nw_white1) ; was white(2*time)\n") && !out.contains("nw_white2"), "{out}");
+        assert_eq!(lt_white(".func white(x) {sin(x)}\nB1 n 0 V=white(time)\n", &mut w), None);
         assert_eq!(t(".tran {T}"), ".tran {(T)/1000} {T}");
         assert_eq!(t(".tran 3m"), ".tran 3e-6 3m");
         assert_eq!(t(".tran 1m ; 10 cycles uic"), ".tran 1e-6 1m");
@@ -3188,8 +3200,9 @@ mod tests {
             SYMBOL voltage 0 0 R0\nSYMATTR InstName V1\nSYMATTR Value 3\nSYMBOL bv 200 0 R0\nSYMATTR InstName B1\nSYMATTR Value V=2*V(a)*V(a)\n\
             SYMBOL bv 400 0 R0\nSYMATTR InstName B2\nSYMATTR Value V=white(1e5*time)\nTEXT 0 200 Left 2 !.tran 0 2m 0 1u startup\n";
         let nl = netlist_for_sim(&parse_asc(src), &mut Library::builtin());
-        assert!(nl.text.contains("B1 out 0 V=2*V(a)*V(a)") && nl.text.contains("V1 a 0 PWL(0 0 20u 3)") && nl.text.contains(" uic"), "{}", nl.text);
-        let run = crate::ngspice::run(&prepare(&nl.text, None, &mut vec![])).unwrap();
+        let deck = prepare(&nl.text, None, &mut vec![]);
+        assert!(nl.text.contains("B1 out 0 V=2*V(a)*V(a)") && deck.0.contains("V1 a 0 PWL(0 0 20u 3)") && deck.0.contains(" uic"), "{}", deck.0);
+        let run = crate::ngspice::run(&deck).unwrap();
         let tr = |e: &str| crate::ngspice::trace(e, &run.scale, run.id).unwrap();
         let out = tr("v(out)");
         let at = |t: f64| out.re[out.x.iter().position(|&x| x >= t).unwrap()];
@@ -3229,6 +3242,11 @@ mod tests {
         assert_eq!(pins("dff"), ["D", "C", "Q", "Qn"]);
         assert_eq!(def("and2").texts, vec![(0, 18, "Center".to_string(), 2, "&".to_string())]);
         assert_eq!((def("bv").prefix.as_str(), def("ltline").prefix.as_str(), def("ltline").value.as_str()), ("B", "O", "LTRA"));
+        // opamp2's default parameters go with its own model only
+        let op = |v: &str| netlist(&parse_asc(&format!("SYMBOL opamp2 0 0 R0\nSYMATTR InstName U1\n{v}TEXT 0 200 Left 2 !.op\n")), &mut Library::builtin()).text;
+        assert!(op("").contains("opamp2 Aol=100K GBW=10Meg Slew=10Meg Vsat=0.1"), "{}", op(""));
+        let tl = op("SYMATTR Value TL072\n");
+        assert!(tl.lines().any(|l| l.starts_with("XU1") && l.trim_end().ends_with("TL072")), "{tl}");
     }
 
     #[test]

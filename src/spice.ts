@@ -234,7 +234,7 @@ export function sample(s: Source, n = 240): [number, number][] | null {
       const [na, nt] = p;
       if (!(nt > 0)) return null;
       let seed = 12345;
-      const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2 ** 31) + 0.5) / 2 ** 31;
+      const rnd = () => ((seed = (Math.imul(seed, 1103515245) + 12345) >>> 0) + 0.5) / 2 ** 32; // (imul: exact in 32 bits)
       const g = Array.from({ length: 52 }, () => na * Math.sqrt(-2 * Math.log(rnd())) * Math.cos(2 * Math.PI * rnd()));
       end = 50 * nt;
       f = (t) => { const k = Math.min(Math.floor(t / nt), 50), x = t / nt - k; return g[k] + (g[k + 1] - g[k]) * x; };
