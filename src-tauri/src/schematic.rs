@@ -1952,13 +1952,13 @@ pub fn prepare(text: &str, dir: Option<&std::path::Path>, warnings: &mut Vec<Str
     // (with other analyses in the deck, as `nomospice --mcp` runs a schematic: their operating point
     // would see the ramps at 0; not ramped then, said)
     const OTHERS: [&str; 10] = [".op", ".ac", ".dc", ".noise", ".tf", ".pz", ".sens", ".disto", ".pss", ".sp"];
-    let others = out.contains(STARTUP) && deck_lines(&out).iter().any(|l| !l.skip && OTHERS.contains(&l.head.as_str()));
+    let ls = if out.contains(STARTUP) { deck_lines(&out) } else { vec![] };
+    let others = ls.iter().any(|l| !l.skip && OTHERS.contains(&l.head.as_str()));
     if others {
         x.warnings.push("`.tran … startup` beside other analyses: the sources are not ramped (their operating point would see them at 0); run the .tran on its own".into());
     }
-    let out = if out.contains(STARTUP) && !others {
+    let out = if !ls.is_empty() && !others {
         // (not the title line, nor comments)
-        let ls = deck_lines(&out);
         let mut s = String::with_capacity(out.len() + 64);
         let mut names: Vec<String> = vec![];
         let piece = |i: usize| &out[ls[i].start..ls.get(i + 1).map_or(out.len(), |n| n.start)];
@@ -2006,7 +2006,7 @@ pub fn prepare(text: &str, dir: Option<&std::path::Path>, warnings: &mut Vec<Str
 
 /// LTspice's noise function `white(x)` (between -0.5 and 0.5, a new value at each integer x, in
 /// between interpolated) in a B source: ngspice has none, so `white(c*time)` becomes the voltage of
-/// a noise source of its own, ngspice's TRNOISE with the same rms (1/√12, its σ 0.3235 as the clip leaves it) and a new value every
+/// a noise source of its own, ngspice's TRNOISE, its new values of the same rms (1/√12: σ 0.3235, clipped) and a new value every
 /// 1/c seconds, kept within ±0.5 as LTspice's is. Other arguments, and white() in a subcircuit (its
 /// node would be local there), are said and left; a subcircuit with a `.func white` of its own is
 /// left alone. None: no white() in the deck.
@@ -2615,13 +2615,17 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
             let mut control = false; // a sheet's `.control` block: all of it goes
             let mut stepping = false; // ... of a .step: they belong to it
             for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
+                // (a comment line of LTspice's `;` or ngspice's `#`, `$`: SPICE's `* ` from here on, also
+                // between a statement and its + lines; `* `: `*#` would be a command line)
+                let star = line.strip_prefix([';', '#', '$']).map(|r| format!("* {}", r.trim()));
+                let line = star.as_deref().unwrap_or(line);
                 let l = line.to_lowercase();
                 if sub {
                     // (a sheet: its definitions and parts; its commands with their `+` lines go)
                     let head = l.split_whitespace().next().unwrap_or("");
                     let more = head.starts_with('+');
                     control = (control || head == ".control") && head != ".endc";
-                    if head.starts_with(['*', ';']) {
+                    if head.starts_with('*') {
                         continue; // (a comment: no use in its subcircuit, and a dropped command's `+` lines still go)
                     }
                     // (its analyses, .meas, .options …: the sheet's own test bench, unsaid)
@@ -2632,8 +2636,8 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
                 }
                 // (each line without its inline comment: a `;` must not swallow the next line's values;
                 // comment lines between a .step and its + lines skipped, as SPICE does)
-                if stepping && (l.starts_with('*') || l.starts_with(';')) {
-                    directives.push(format!("* {}", line.trim_start_matches(['*', ';']).trim())); // (kept, as a comment)
+                if stepping && l.starts_with('*') {
+                    directives.push(line.to_string()); // (kept, as a comment)
                     continue;
                 }
                 if stepping && l.starts_with('+') {
@@ -2649,10 +2653,6 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
                     continue;
                 }
                 if skipped && l.starts_with('+') || l == ".end" || l.starts_with(".end ") {
-                    continue;
-                }
-                if l.starts_with(';') {
-                    directives.push(format!("* {}", line[1..].trim())); // (a comment, as a `*` one: between a statement and its + lines too)
                     continue;
                 }
                 // (a statement's + lines, comments between allowed: a .net's onto its comment, before
@@ -3441,7 +3441,7 @@ mod tests {
         let out = tr("v(out)");
         let at = |t: f64| out.re[out.x.iter().position(|&x| x >= t).unwrap()];
         assert!(at(0.0).abs() < 1e-3 && (at(1e-3) - 18.0).abs() < 1e-6, "start {} later {}", at(0.0), at(1e-3));
-        // white(): noise of rms 1/√12, new values every 10 µs
+        // white(): noise, new values of rms 1/√12 every 10 µs (in between interpolated: lower)
         let n = tr("v(n)");
         let rms = (n.re.iter().map(|v| v * v).sum::<f64>() / n.re.len() as f64).sqrt();
         assert!((0.2..0.37).contains(&rms), "rms {rms}");
@@ -3471,6 +3471,8 @@ mod tests {
         assert!(tr.text.contains(&format!(" uic\n{STARTUP}")) && !tr.text.contains("+ startup"), "{}", tr.text); // (startup on a + line)
         let tc = netlist_for_sim(&parse_asc(&src.replace("!.net I(R1) V1", "!.tran 0 10m steady\\n* soft start\\n+ startup")), &mut Library::builtin());
         assert!(tc.text.contains(&format!(" uic\n{STARTUP}")) && !tc.text.contains("+ startup"), "{}", tc.text); // (a comment between)
+        let th = netlist_for_sim(&parse_asc(&src.replace("!.net I(R1) V1", "!.tran 0 10m\\n# note\\n+ startup")), &mut Library::builtin());
+        assert!(th.text.contains(&format!(" uic\n{STARTUP}")) && th.text.contains("\n* note\n"), "{}", th.text); // (a # comment between, as SPICE's *)
         assert_eq!(tc.warnings.iter().filter(|w| w.contains("steady")).count(), 1, "{:?}", tc.warnings); // (said once)
         let sk = netlist_for_sim(&parse_asc(&src.replace("!.net I(R1) V1", "!.wave out.wav 16 44.1k V(out)\\n* right channel\\n+ V(in)")), &mut Library::builtin());
         assert!(!sk.text.contains("+ V(in)"), "{}", sk.text); // (a skipped directive's + line after a comment)

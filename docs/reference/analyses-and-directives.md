@@ -52,8 +52,8 @@ SPICE reads a number with a suffix, case-insensitively:
 - `mc(x, tol)`: x with a tolerance, uniform within ±tol (as a fraction); `flat(x)`: uniform within ±x; `gauss(x)`: normal with σ = x. They draw anew in each run of a `.step`, so `.step param run 1 100 1` is a Monte Carlo analysis.
 - `Laplace=H(s)` on an `e` or `g` source: a transfer function, any ratio of polynomials in `s`.
 - Independent sources (V, I) are edited in a form: DC, sine, pulse, exponential, FM, noise, piecewise linear (with a preview), an AC amplitude, and series resistance and parallel capacitance. *Noise* is ngspice's `TRNOISE(rms step 1/f-exponent 1/f-amplitude)`, which not every simulator reads.
-- `white(c*time)` in a behavioral source (noise between -0.5 and 0.5, a new value every 1/c s) becomes a noise source of the same rms (Gaussian, clipped at ±0.5).
+- `white(c*time)` in a behavioral source (noise between -0.5 and 0.5, a new value every 1/c s) becomes a noise source whose new values have the same rms (Gaussian, clipped at ±0.5).
 
 ## Trace expressions
 
-*Add trace* takes ngspice expressions: `V(out)`, `V(a,b)`, `I(R1)`, `Ib(Q1)` (a pin's current), `P(R1)` (a two-pin part's power), arithmetic on them, functions such as `db()`, `ph()`, `group_delay()`, your own `.func`, and with `.net` the two-port's `S21(V1)`, `S11(V1)`, `Zin(V1)`. Units follow from the expression: a voltage times a current is in watts, an integral of power in joules.
+*Add trace* takes ngspice expressions: `V(out)`, `V(a,b)`, `I(R1)`, `Ib(Q1)` (a pin's current), `P(R1)` (a two-pin part's power), arithmetic on them, functions such as `db()`, `ph()`, `group_delay()`, your own `.func` and `.param` values (not one a `.step` varies), and with `.net` the two-port's `S21(V1)`, `S11(V1)`, `Zin(V1)`. Units follow from the expression: a voltage times a current is in watts, an integral of power in joules.
