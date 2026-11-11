@@ -428,7 +428,7 @@ function deckDefs(text: string) {
     if (t.startsWith("+") && last >= 0) joined[last] += " " + t.slice(1).trim();
     else {
       joined.push(l);
-      if (t && !t.startsWith("*")) last = joined.length - 1;
+      if (t && !/^[*#]/.test(t)) last = joined.length - 1; // (`;`, `$` comments are cut above)
     }
   }
   const top = joined.join("\n");

@@ -318,7 +318,7 @@ export function continuation(lines: string[], li: number) {
   for (let j = li + 1; j < lines.length; j++) {
     const t = lines[j].trim();
     if (t.startsWith("+")) out.push(j);
-    else if (t && !t.startsWith("*") && !t.startsWith(";")) break; // (comments between: * and ; alike)
+    else if (t && !/^[*;#$]/.test(t)) break; // (comments between: *, ; # and $ alike, as the netlist reads them)
   }
   return out;
 }

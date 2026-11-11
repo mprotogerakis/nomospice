@@ -993,7 +993,7 @@ struct DeckLine<'a> {
     low: String,
     /// outside `.subckt … .ends`
     top: bool,
-    /// a comment (`*`, `;`) or blank line (SPICE skips these, also between a line and its `+` continuations)
+    /// a comment (`*`, `;`, `#`, `$`) or blank line (SPICE skips these, also between a line and its `+` continuations)
     skip: bool,
     /// lowercase first token of the statement this line belongs to (`.param` for its `+` lines too)
     head: String,
@@ -1013,7 +1013,7 @@ fn deck_lines(text: &str) -> Vec<DeckLine<'_>> {
         let low = line.to_ascii_lowercase();
         let first = low.split_whitespace().next().unwrap_or("").to_string();
         match first.as_str() { ".subckt" => sub += 1, ".ends" => sub = (sub - 1).max(0), _ => {} } // a stray .ends must not hide the rest
-        let skip = first.is_empty() || first.starts_with(['*', ';']);
+        let skip = first.is_empty() || first.starts_with(['*', ';', '#', '$']);
         if !skip && !first.starts_with('+') {
             head = first.clone();
         }
@@ -1239,11 +1239,12 @@ fn ramp_end(token: &str) -> Option<&str> {
     token.strip_prefix(RAMP).and_then(|r| r.strip_suffix(')')).filter(|v| braced(v) || !v.contains([' ', '(']))
 }
 
-/// A comment line of LTspice's (`;`) as SPICE's `* …`: a + line after it then continues the
-/// statement before, as LTspice reads it (ngspice would join it to the comment), and every pass
-/// here reads it alike. None: no such line.
+/// A comment line of LTspice's (`;`) or ngspice's (`#`, `$`) as SPICE's `* …`: a + line after it
+/// then continues the statement before, as LTspice and ngspice read it (ngspice would join one to a
+/// `;` line), and every pass here reads it alike; `* `, not `*`: ngspice makes a `#` a `*`, and
+/// `*#` is a command line. None: no such line.
 fn starred(line: &str) -> Option<String> {
-    line.trim_start().strip_prefix(';').map(|r| format!("* {}", r.trim()))
+    line.trim_start().strip_prefix([';', '#', '$']).map(|r| format!("* {}", r.trim()))
 }
 
 /// Translate LTspice-only directive syntax to something ngspice accepts.
@@ -2314,7 +2315,8 @@ impl Expander<'_> {
                 self.warnings.push(".control blocks are not executed (security)".into());
                 continue;
             }
-            if l.starts_with("*#") {
+            if l.starts_with("*#") || l.starts_with("##") {
+                // (`##…` too: ngspice makes the first # a *)
                 self.warnings.push(format!("`{t}`: *# command lines are not executed (security)"));
                 continue;
             }
@@ -3473,8 +3475,8 @@ mod tests {
         assert!(tr.text.contains(&format!(" uic\n{STARTUP}")) && !tr.text.contains("+ startup"), "{}", tr.text); // (startup on a + line)
         let tc = netlist_for_sim(&parse_asc(&src.replace("!.net I(R1) V1", "!.tran 0 10m steady\\n* soft start\\n+ startup")), &mut Library::builtin());
         assert!(tc.text.contains(&format!(" uic\n{STARTUP}")) && !tc.text.contains("+ startup"), "{}", tc.text); // (a comment between)
-        let th = netlist_for_sim(&parse_asc(&src.replace("!.net I(R1) V1", "!.tran 0 10m\\n; note\\n+ startup")), &mut Library::builtin());
-        assert!(th.text.contains(&format!(" uic\n{STARTUP}")) && th.text.contains("\n* note\n"), "{}", th.text); // (a ; comment between, as SPICE's *)
+        let th = netlist_for_sim(&parse_asc(&src.replace("!.net I(R1) V1", "!.tran 0 10m\\n# note\\n+ startup")), &mut Library::builtin());
+        assert!(th.text.contains(&format!(" uic\n{STARTUP}")) && th.text.contains("\n* note\n"), "{}", th.text); // (a # comment between, as SPICE's *)
         assert_eq!(tc.warnings.iter().filter(|w| w.contains("steady")).count(), 1, "{:?}", tc.warnings); // (said once)
         let sk = netlist_for_sim(&parse_asc(&src.replace("!.net I(R1) V1", "!.wave out.wav 16 44.1k V(out)\\n* right channel\\n+ V(in)")), &mut Library::builtin());
         assert!(!sk.text.contains("+ V(in)"), "{}", sk.text); // (a skipped directive's + line after a comment)
@@ -4308,6 +4310,9 @@ SYMBOL half 400 300 R0\nSYMATTR InstName U4\nSYMATTR Value R=3k\nFLAG 352 300 a\
         assert!(text.text().contains(".op"));
         let text = prepare("* t\n*# shell touch /tmp/nomospice-pwned\n.op\n.end\n", None, &mut vec![]);
         assert!(!text.text().contains("shell"), "{}", text.text());
+        // (ngspice makes a line's first # a *: `##shell` would be `*#shell`)
+        let text = prepare("* t\n##shell touch /tmp/nomospice-pwned\n  ##shell touch /tmp/nomospice-pwned\n# note\n.op\n.end\n", None, &mut vec![]);
+        assert!(!text.text().contains("shell") && text.text().contains("* note\n"), "{}", text.text());
         assert!(nl.nets[0][0].chars().all(|c| c.is_ascii_alphanumeric() || c == '_'), "{:?}", nl.nets[0]);
         assert!(crate::ngspice::trace("v(a);shell ls", "", 0).is_err());
     }

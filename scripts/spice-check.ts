@@ -5,6 +5,7 @@ import {
   tokens, formatAnalysis, formatIc, formatInclude, formatMeas, formatModel, formatParams, formatSource, numInfo, parseAnalysis,
   parseIc, parseInclude, parseMeas, parseModel, parseParams, parseSource, sample, si, spiceNum, directiveKind, analysisRoundTrips, analysisEditable, analysisOptions, analysisLineIndex, at, integrate, stripAnalyses, portablePaths, sourceRoundTrips,
   exprUnit, FFT_WINDOWS, type FftWindow, unitTimes, fftSize, fftFreqs, spectrum, getParam, setParam, balanced, paramValue,
+  continuation,
 } from "../src/spice.ts";
 
 // numbers and the classic pitfalls
@@ -251,6 +252,7 @@ assert.equal(numInfo("1Meg", "Hz")!.text, "= 1MegHz"); // not "1M", the milli tr
   assert.equal(funcsIn("NF(V(n))+g(1)", st), "NF(V(n))+((1)*2)"); // (a .func over a stepped parameter: left …)
   assert.match(funcsLeft("NF(V(n))", st)!, /NF\(\): its \.func uses Rs/); // (… and said)
   assert.equal(funcsLeft("g(1)", st), null);
+  assert.deepEqual(continuation([".tran 1m", "# c", "$ d", "; e", "+ startup", ".op"], 0), [4]); // (comment lines between a statement and its + lines)
   { const k = ".param K=1\n* .step param K list 1 2 (nomospice: one run per step)\n.func twice(x) {2*x}";
     assert.equal(funcsIn("twice(K)+twice(V(a))", k), "(2*(K))+(2*(V(a)))"); assert.match(funcsLeft(funcsIn("twice(K)", k), k)!, /uses K, which/); // (a stepped .param as an argument: left as its name, said)
     assert.match(funcsLeft("V(a)*K2", k + "\n.param K2={2*K}")!, /uses K2 \(of K\)/); assert.equal(funcsLeft("twice(P(K))+V(K)", k), null); } // (bare; a part or node of its name)
