@@ -169,7 +169,7 @@ export async function playScene() {
   await getCurrentWindow().setFocus().catch(() => {});
   try {
     await sleep(1500); // (the window's first layout, the examples loaded)
-    const mod = await import(/* @vite-ignore */ file.startsWith("/") ? `/@fs${encodeURI(file)}.js` : `/docs/scenes/${file}.js`);
+    const mod = await import(/* @vite-ignore */ file.startsWith("/") ? `/@fs${file.split("/").map(encodeURIComponent).join("/")}.js` : `/docs/scenes/${file}.js`);
     await mod.default(api);
   } catch (e) {
     await invoke("scene_log", { message: String(e instanceof Error ? e.stack ?? e.message : e) }).catch(() => {});

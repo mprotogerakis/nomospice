@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import type { GitStatus, Item, Netlist, Shape, Sim, SymbolDef, Trace, TraceData } from "./types";
 import { defOf, pinLine, prefixOf, symKey, vexpr, type Lib } from "./geom";
-import { ANALYSIS, ANY_ANALYSIS, analysisLineIndex, analysisOptions, continuation, expandPowers, parseAnalysis, stripAnalyses, type Analysis } from "./spice";
+import { ANALYSIS, ANY_ANALYSIS, analysisLineIndex, analysisOptions, continuation, expandPowers, parseAnalysis, POWER_CALL, stripAnalyses, type Analysis } from "./spice";
 
 export type Tool =
   | { k: "select" }
@@ -293,8 +293,12 @@ async function fetchTrace(t: Trace): Promise<Trace> {
   const run = get().sim?.run;
   if (!run) return { ...t, data: undefined, error: "no simulation results: run the simulation" };
   const nl = get().sim!.netlist; // (the one the results were computed with)
-  if ((t.power || /\bP\(/i.test(t.expr)) && !powerMode(get().sim)) return { ...t, data: undefined, error: "power: only in .tran and .dc results" };
-  const expr = expandPowers(t.expr, (n) => powerExpr(nl, nl.insts.findIndex((x) => x.toLowerCase() === n.toLowerCase())));
+  if ((t.power || POWER_CALL.test(t.expr)) && !powerMode(get().sim)) return { ...t, data: undefined, error: "power: only in .tran and .dc results" };
+  // P(D1) by the name it is drawn with (its trace's, Plot power P(D1)), or its netlist's (XD1)
+  const p = (n: string) => `p(${n.toLowerCase()})`;
+  const expr = expandPowers(t.expr, (n) => powerExpr(nl, nl.insts.findIndex((x, j) => powerName(partCurrent(nl, j)).toLowerCase() === p(n) || x.toLowerCase() === n.toLowerCase())));
+  const left = POWER_CALL.exec(expr)?.[1];
+  if (left) return { ...t, data: undefined, error: `P(${left}): no such two-pin part; P() is the power of a part with two pins, by its name (its menu's Plot power)` };
   try {
     return { ...t, data: await invoke<TraceData>("trace", { expr, scale: run.scale, run: run.id }), error: undefined };
   } catch (e) {
@@ -594,7 +598,7 @@ export function partCurrent(nl: Netlist, i: number, pin?: number) {
  *  so net names always come from the netlist the results were computed with. `ref`: the black
  *  probe of a differential one (another wire/label), V(net,ref); on ground or the same net: V(net). */
 export async function probe(target: Item, power = false, pin?: number, ref?: Item) {
-  if (!canProbe(target, pin)) return; // only things that can be plotted are worth a re-simulation
+  if (!canProbe(target, pin) && !(ref && ref !== target)) return; // (ground: only as a differential probe's red end) // only things that can be plotted are worth a re-simulation
   await idle();
   if (get().stale) await simulate();
   const { sim, items, stale } = get();
@@ -611,8 +615,8 @@ export async function probe(target: Item, power = false, pin?: number, ref?: Ite
   } else {
     const net = sim.netlist.nets[i]?.[0], j = ref ? items.indexOf(ref) : -1;
     const to = j >= 0 ? sim.netlist.nets[j]?.[0] : undefined;
-    if (!net || net === "0" || (ref && j < 0)) return;
-    if (to && to !== "0" && to !== net) await addTraceNow(`V(${net},${to})`, `${vexpr(net)}-${vexpr(to)}`, "V");
-    else await addTraceNow(`V(${net})`, vexpr(net), "V");
+    if (!net || (ref && j < 0)) return;
+    if (to && to !== "0" && to !== net) await addTraceNow(`V(${net},${to})`, `${vexpr(net)}-${vexpr(to)}`, "V"); // (from ground: V(0,b))
+    else if (net !== "0") await addTraceNow(`V(${net})`, vexpr(net), "V");
   }
 }

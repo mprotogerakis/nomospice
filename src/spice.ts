@@ -678,7 +678,9 @@ export function exprUnit(expr: string, vector: (name: string) => string = () => 
 /** `P(R1)` in a trace expression: what `power(name)` gives for that part (the voltage across it
  *  times its current); a name it gives nothing for stays as written. */
 export const expandPowers = (expr: string, power: (name: string) => string) =>
-  expr.replace(/\bP\(\s*([^()\s,]+)\s*\)/gi, (m, name: string) => ((p) => (p ? `(${p})` : m))(power(name)));
+  expr.replace(new RegExp(POWER_CALL.source, "gi"), (m, name: string) => ((p) => (p ? `(${p})` : m))(power(name)));
+/** A part's power in a trace expression, `P(R1)` (its name: group 1). */
+export const POWER_CALL = /\bP\s*\(\s*([^()\s,]+)\s*\)/i;
 
 // The spectrum of a transient trace (the plot's FFT view).
 

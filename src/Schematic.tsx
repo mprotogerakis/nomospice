@@ -22,7 +22,7 @@ type Drag =
   | { k: "move"; start: Pt; plan: (dx: number, dy: number) => Item[]; moved: boolean; index: number; at: Pt; base: Item[]; pin?: number }
   | { k: "box"; start: Pt; end: Pt }
   /** LTspice's differential probe: red on wire/label `from`, black on what the pointer is over */
-  | { k: "diff"; from: number; to: number; at: Pt; base: Item[] };
+  | { k: "diff"; from: number; to: number; at: Pt; base: Item[]; sx: number; sy: number; moved: boolean };
 
 // SwiftFlow viewport constants (Models/Viewport.swift, FitViewOptions.swift)
 const MIN_ZOOM = 0.1, MAX_ZOOM = 6, FIT_PADDING = 80, FIT_MAX = 2.5, ZOOM_STEP = 1.2;
@@ -516,9 +516,9 @@ export const Schematic = memo(function Schematic() {
           : (dx: number, dy: number) => (built ??= dragPlan(items, lib, chosen))(dx, dy);
         drag.current = { k: "move", start: g, plan, moved: false, index: i, at: [0, 0], base: items, pin: probing ? pinAt(items[i], p) : undefined };
         // probing, a wire or label: a drag is LTspice's differential probe, a click its plain one
-        // (wires move with the move tool or a modifier)
+        // (wires move with the move tool or a modifier; from ground: V(0,b))
         const it = items[i];
-        if (probing && tool.k === "select" && !mods.current && (it.t === "wire" || it.t === "flag") && canProbe(it)) drag.current = { k: "diff", from: i, to: i, at: p, base: items };
+        if (probing && tool.k === "select" && !mods.current && (it.t === "wire" || it.t === "flag")) drag.current = { k: "diff", from: i, to: i, at: p, base: items, sx: e.clientX, sy: e.clientY, moved: false };
       } else if (e.shiftKey) {
         drag.current = { k: "box", start: p, end: p };
       } else {
@@ -549,10 +549,20 @@ export const Schematic = memo(function Schematic() {
       d.at = [dx, dy];
       if (d.moved) setPreview(d.plan(dx, dy));
     } else if (d.k === "diff") {
+      if (Math.hypot(e.clientX - d.sx, e.clientY - d.sy) > 3) d.moved = true; // (less: a click, if a shaky one)
+      if (!d.moved) return;
       d.to = hit(items, lib, p, 6 / view.k, false);
       setHover(d.to);
       setDiffProbe({ from: d.from, a: d.at, b: p });
     } else (d.end = p), setBoxSel([d.start, p]);
+  };
+
+  /** The pointer taken away (a system gesture): the drag ends, nothing done. */
+  const onPointerCancel = () => {
+    drag.current = null;
+    setPreview(null);
+    setBoxSel(null);
+    setDiffProbe(null);
   };
 
   const onPointerUp = () => {
@@ -571,7 +581,7 @@ export const Schematic = memo(function Schematic() {
       else if (!d.moved && probing && !mods.current && useS.getState().items === d.base) probe(d.base[d.index], false, d.pin);
     } else if (d?.k === "diff") {
       // released on a wire or label: V(from,to) (on ground or its own net, a click: V(from))
-      const to = d.base[d.to];
+      const to = d.base[d.moved ? d.to : d.from];
       if ((to?.t === "wire" || to?.t === "flag") && useS.getState().items === d.base) probe(d.base[d.from], false, undefined, to);
     } else if (d?.k === "pan" && !d.moved) useS.setState({ sel: [] });
     else if (d?.k === "box") {
@@ -757,6 +767,7 @@ export const Schematic = memo(function Schematic() {
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
+        onPointerCancel={onPointerCancel}
         onPointerLeave={() => setHover(-1)}
         onContextMenu={onContextMenu}
         onDoubleClick={onDoubleClick}

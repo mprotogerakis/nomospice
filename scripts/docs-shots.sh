@@ -18,11 +18,13 @@ cd "$(dirname "$0")/.."
 export NGSPICE_LIB
 # (commits a scene makes: not the author's own name in the pictures)
 export GIT_AUTHOR_NAME="nomospice docs" GIT_AUTHOR_EMAIL="docs@nomospice.invalid" GIT_COMMITTER_NAME="nomospice docs" GIT_COMMITTER_EMAIL="docs@nomospice.invalid"
-names=${*:-$(for f in docs/scenes/*.js; do basename "$f" .js; done)}
+[ $# -gt 0 ] || set -- $(for f in docs/scenes/*.js; do basename "$f" .js; done)
 work=$(mktemp -d)
+k=0
 trap 'rm -rf "$work"' EXIT
 data="$HOME/Library/Application Support/de.nomospice.docs"
-for n in $names; do
+for n in "$@"; do
+  k=$((k + 1))
   case $n in
     */*) # (a scene file: absolute, without .js, for the app; the pictures beside its scenes folder)
       case $n in /*) ;; *) n=$start/$n ;; esac
@@ -36,17 +38,18 @@ for n in $names; do
   echo "scene $n"
   # (a process group of its own: pnpm, cargo and the app end together)
   set -m
-  NOMOSPICE_SCENES=$file NOMOSPICE_SHOTS=$img NOMOSPICE_SCENE_WORK=$work/$n \
-    pnpm tauri dev --config '{"identifier":"de.nomospice.docs"}' >"$work/$n.log" 2>&1 &
+  log=$work/$k-$n.log # (numbered: two sites' scenes may share a name)
+  NOMOSPICE_SCENES=$file NOMOSPICE_SHOTS=$img NOMOSPICE_SCENE_WORK=$work/$k-$n \
+    pnpm tauri dev --config '{"identifier":"de.nomospice.docs"}' >"$log" 2>&1 &
   app=$!
   set +m
   # (a scene stuck, say on a native dialog it cannot answer: ended after 10 minutes)
-  ( sleep 600; echo "scene $n: timed out" >>"$work/$n.log"; kill -- -$app ) 2>/dev/null &
+  ( sleep 600; echo "scene $n: timed out" >>"$log"; kill -- -$app ) 2>/dev/null &
   dog=$!
   ok=0; wait $app || ok=$?
   kill $dog 2>/dev/null; wait $dog 2>/dev/null || true # (reaped quietly; killed, it returns 143)
-  if [ $ok -ne 0 ]; then tail -20 "$work/$n.log"; exit 1; fi
-  if [ -f "$img/$n/ERROR.png" ]; then echo "scene $n failed: $img/$n/ERROR.png"; grep -A3 "^scene:" "$work/$n.log" | head -8; exit 1; fi
+  if [ $ok -ne 0 ]; then tail -20 "$log"; exit 1; fi
+  if [ -f "$img/$n/ERROR.png" ]; then echo "scene $n failed: $img/$n/ERROR.png"; grep -A3 "^scene:" "$log" | head -8; exit 1; fi
   # (a palette per picture: a quarter of the size, no visible difference; pngquant if there is one)
   if command -v pngquant >/dev/null; then pngquant --quality=80-95 --skip-if-larger --force --ext .png "$img/$n"/*.png || true; fi
   ls "$img/$n"
