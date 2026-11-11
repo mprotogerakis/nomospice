@@ -311,8 +311,8 @@ export function stripAnalyses(text: string) {
   return lines.filter((_, i) => !drop.has(i)).join("\n");
 }
 
-/** The lines after `li` that continue its statement: its `+` lines (blank and `*` lines between
- *  them are skipped, as SPICE does). */
+/** The lines after `li` that continue its statement: its `+` lines (blank and comment lines, `*`,
+ *  `;`, `#`, `$`, between them are skipped, as the netlist reads them). */
 export function continuation(lines: string[], li: number) {
   const out: number[] = [];
   for (let j = li + 1; j < lines.length; j++) {

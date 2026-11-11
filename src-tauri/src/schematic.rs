@@ -707,7 +707,7 @@ pub fn netlist_items(text: &str) -> Vec<Item> {
                 }
             }
             // (a comment line in it: no command)
-            _ if control => dropped += usize::from(!low.is_empty() && !low.starts_with('*')),
+            _ if control => dropped += usize::from(!low.is_empty() && !low.starts_with('*') && !low.starts_with(COMMENT_LINE)),
             _ => body.push(l.to_string()),
         }
     }
@@ -1013,7 +1013,7 @@ fn deck_lines(text: &str) -> Vec<DeckLine<'_>> {
         let low = line.to_ascii_lowercase();
         let first = low.split_whitespace().next().unwrap_or("").to_string();
         match first.as_str() { ".subckt" => sub += 1, ".ends" => sub = (sub - 1).max(0), _ => {} } // a stray .ends must not hide the rest
-        let skip = first.is_empty() || first.starts_with(['*', ';', '#', '$']);
+        let skip = first.is_empty() || first.starts_with('*') || first.starts_with(COMMENT_LINE);
         if !skip && !first.starts_with('+') {
             head = first.clone();
         }
@@ -1244,8 +1244,10 @@ fn ramp_end(token: &str) -> Option<&str> {
 /// `;` line), and every pass here reads it alike; `* `, not `*`: ngspice makes a `#` a `*`, and
 /// `*#` is a command line. None: no such line.
 fn starred(line: &str) -> Option<String> {
-    line.trim_start().strip_prefix([';', '#', '$']).map(|r| format!("* {}", r.trim()))
+    line.trim_start().strip_prefix(COMMENT_LINE).map(|r| format!("* {}", r.trim()))
 }
+/// What else than `*` starts a comment line (see [`starred`]).
+const COMMENT_LINE: [char; 3] = [';', '#', '$'];
 
 /// Translate LTspice-only directive syntax to something ngspice accepts.
 fn directive(line: &str, warnings: &mut Vec<String>) -> Option<String> {
@@ -2279,9 +2281,9 @@ impl Expander<'_> {
     /// Diode element lines (`D<name> a k MODEL ...`) in the expanded deck decide which of the
     /// behavioural models matter.
     fn warn_behavioural(&mut self) {
-        // logical lines: trimmed (subckt bodies are often indented), `+` continuations joined
+        // logical lines: trimmed (subckt bodies are often indented), `+` continuations joined (over comments)
         let mut logical: Vec<String> = vec![];
-        for l in self.out.lines().map(str::trim) {
+        for l in self.out.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('*')) {
             match (l.strip_prefix('+'), logical.last_mut()) {
                 (Some(cont), Some(last)) => (last.push(' '), last.push_str(cont)).1,
                 _ => logical.push(l.to_string()),
@@ -2295,7 +2297,16 @@ impl Expander<'_> {
 
     fn expand(&mut self, text: &str, dir: Option<&std::path::Path>, section: Option<&str>, depth: usize) {
         let (mut in_section, mut control, mut found) = (section.is_none(), false, section.is_none());
-        for (n, line) in text.lines().enumerate() {
+        for (n, raw) in text.lines().enumerate() {
+            // the line as it goes out, and as every check below reads it (one of the line before
+            // would let `Ω.control` through): libngspice rejects the whole deck on non-ASCII bytes
+            // (`10µ`, `4.7μF`, `10kΩ`); a comment line starred
+            let ascii: String = raw.chars().filter(|c| *c != 'Ω').map(|c| match c {
+                'µ' | 'μ' => 'u',
+                c if c.is_ascii() => c,
+                _ => '_',
+            }).collect();
+            let line = starred(&ascii).unwrap_or(ascii);
             let t = line.trim();
             let l = t.to_lowercase();
             let tok: Vec<&str> = t.split_whitespace().collect();
@@ -2315,8 +2326,7 @@ impl Expander<'_> {
                 self.warnings.push(".control blocks are not executed (security)".into());
                 continue;
             }
-            if l.starts_with("*#") || l.starts_with("##") {
-                // (`##…` too: ngspice makes the first # a *)
+            if l.starts_with("*#") {
                 self.warnings.push(format!("`{t}`: *# command lines are not executed (security)"));
                 continue;
             }
@@ -2334,12 +2344,12 @@ impl Expander<'_> {
                 }
             }
             if (l.starts_with(".inc") || l.starts_with(".lib")) && !(depth == 0 && n == 0) {
-                self.include(t, &l, tok.len(), dir, depth);
+                self.include(raw.trim(), &l, tok.len(), dir, depth); // (the file's name as written: non-ASCII letters too)
                 continue;
             }
             // LTspice's behavioural diode (Ron/Roff/Vfwd/Vrev) becomes an XSPICE device in ngspice:
             // without its code models loaded the whole deck fails to parse, so say why up front
-            if !l.starts_with('+') {
+            if !l.starts_with(['+', '*']) {
                 let t: Vec<&str> = l.split(|c: char| c.is_whitespace() || c == '(').filter(|s| !s.is_empty()).collect();
                 self.diode = (t.first() == Some(&".model") && t.get(2) == Some(&"d")).then(|| t[1].to_string());
             }
@@ -2349,14 +2359,7 @@ impl Expander<'_> {
                     self.diode = None; // once per model
                 }
             }
-            let star = starred(t);
-            let line = star.as_deref().unwrap_or(line);
-            // libngspice rejects the whole deck on non-ASCII bytes (`10µ`, `4.7μF`, `10kΩ`)
-            self.out.extend(line.chars().filter(|c| *c != 'Ω').map(|c| match c {
-                'µ' | 'μ' => 'u',
-                c if c.is_ascii() => c,
-                _ => '_',
-            }));
+            self.out.push_str(&line);
             self.out.push('\n');
         }
         if !found {
@@ -3477,6 +3480,8 @@ mod tests {
         assert!(tc.text.contains(&format!(" uic\n{STARTUP}")) && !tc.text.contains("+ startup"), "{}", tc.text); // (a comment between)
         let th = netlist_for_sim(&parse_asc(&src.replace("!.net I(R1) V1", "!.tran 0 10m\\n# note\\n+ startup")), &mut Library::builtin());
         assert!(th.text.contains(&format!(" uic\n{STARTUP}")) && th.text.contains("\n* note\n"), "{}", th.text); // (a # comment between, as SPICE's *)
+        let ts = netlist_for_sim(&parse_asc(&src.replace("!.net I(R1) V1", "!.tran 0 10m\\n; note\\n+ startup")), &mut Library::builtin());
+        assert!(ts.text.contains(&format!(" uic\n{STARTUP}")) && ts.text.contains("\n* note\n"), "{}", ts.text); // (likewise a ; one)
         assert_eq!(tc.warnings.iter().filter(|w| w.contains("steady")).count(), 1, "{:?}", tc.warnings); // (said once)
         let sk = netlist_for_sim(&parse_asc(&src.replace("!.net I(R1) V1", "!.wave out.wav 16 44.1k V(out)\\n* right channel\\n+ V(in)")), &mut Library::builtin());
         assert!(!sk.text.contains("+ V(in)"), "{}", sk.text); // (a skipped directive's + line after a comment)
@@ -4310,9 +4315,11 @@ SYMBOL half 400 300 R0\nSYMATTR InstName U4\nSYMATTR Value R=3k\nFLAG 352 300 a\
         assert!(text.text().contains(".op"));
         let text = prepare("* t\n*# shell touch /tmp/nomospice-pwned\n.op\n.end\n", None, &mut vec![]);
         assert!(!text.text().contains("shell"), "{}", text.text());
-        // (ngspice makes a line's first # a *: `##shell` would be `*#shell`)
-        let text = prepare("* t\n##shell touch /tmp/nomospice-pwned\n  ##shell touch /tmp/nomospice-pwned\n# note\n.op\n.end\n", None, &mut vec![]);
-        assert!(!text.text().contains("shell") && text.text().contains("* note\n"), "{}", text.text());
+        // (ngspice makes a line's first # a *: `##shell` would be `*#shell`; an Ω before a line's
+        // start is dropped on the way out: the checks read the line as it goes out)
+        let text = prepare("* t\n##shell touch /tmp/nomospice-pwned\n  ##shell touch /tmp/nomospice-pwned\nΩ*# shell touch /tmp/nomospice-pwned\nΩ.control\nshell touch /tmp/nomospice-pwned\nΩ.endc\n# note\n.op\n.end\n", None, &mut vec![]);
+        let out = text.text();
+        assert!(out.lines().all(|l| !l.trim_start().starts_with(['#', '.']) || l == ".op" || l == ".end") && !out.contains("\nshell") && !out.contains("*#") && out.contains("* note\n"), "{out}");
         assert!(nl.nets[0][0].chars().all(|c| c.is_ascii_alphanumeric() || c == '_'), "{:?}", nl.nets[0]);
         assert!(crate::ngspice::trace("v(a);shell ls", "", 0).is_err());
     }
