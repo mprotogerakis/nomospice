@@ -623,7 +623,7 @@ const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot, fixed, s
                 // already; not the Bode panes, nor in a spectrum)
                 ...(t.data?.im || t.data?.constant || fixed ? [] : panes.filter((p) => p.own && !p.key && p.unit !== "dB" && p.unit !== "°" && p.unit !== t.unit && !p.series.some((s) => s.t === t) && p.series.every((s) => s.u === p.unit || s.u === t.unit)).map((p) => ({ label: `Into the ${p.unit || "unitless"} pane`, hint: "its right axis", run: () => setTracePane(t.expr, p.unit) }))),
                 ...(t.pane == null && !fixed && !t.data?.im && !t.data?.constant && !alone(t) ? [{ label: "Into a pane of its own", hint: `apart from the other ${t.unit || "unitless"} traces`, run: () => setTracePane(t.expr, "#") }] : []),
-                ...(t.pane === "#" ? [{ label: `Back into the ${t.unit || "unitless"} pane`, run: () => setTracePane(t.expr, undefined) }] : []),
+                ...(t.pane === "#" && !fixed && !t.data?.im ? [{ label: `Back into the ${t.unit || "unitless"} pane`, run: () => setTracePane(t.expr, undefined) }] : []),
                 ...(t.pane != null && t.pane !== "#" && !fixed && !t.data?.im ? [{ label: moved(t) ? `Back to its own pane (${t.unit || "unitless"})` : `Not into the ${t.pane || "unitless"} pane any more`, hint: moved(t) ? undefined : "it would go there with traces of its own", run: () => setTracePane(t.expr, undefined) }] : []),
                 // (an .ac result: -dφ/dω, how long a band of frequencies takes through it)
                 ...(t.data?.im && plot.startsWith("ac") ? [{ label: "Plot group delay", hint: `τg(${t.label})`, run: () => void addTrace(`τg(${t.label})`, `group_delay(${t.expr})`, exprUnit(`group_delay(${t.expr})`, undefined, xUnit)) }] : []),

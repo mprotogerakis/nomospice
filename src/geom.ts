@@ -378,24 +378,39 @@ function replaceCalls(expr: string, name: string, f: (args: string[]) => string 
  *  expressions know none. A call becomes its body, each parameter its argument in parentheses;
  *  calls of other functions in it too (10 rounds at most: a recursive one stops there). */
 export function funcsIn(expr: string, text: string): string {
-  // (the top level's: a subcircuit's .func is its own)
-  let depth = 0;
-  const top = text.split("\n").filter((l) => { const t = l.trim().toLowerCase(); depth += t.startsWith(".subckt") ? 1 : t.startsWith(".ends") ? -1 : 0; return depth === 0; }).join("\n");
-  const defs = [...top.matchAll(/^\s*\.func(?:tion)?\s+(\w+)\s*\(([^)]*)\)\s*=?\s*(.+?)\s*$/gim)].map((m) => ({
-    name: m[1], params: m[2].split(/[\s,]+/).filter(Boolean), body: m[3].replace(/^\{(.*)\}$/, "$1").replace(/^'(.*)'$/, "$1"),
-  }));
+  const defs = deckFuncs(text);
+  if (!defs.length) return expr;
   for (let round = 0; round < 10; round++) {
     const before = expr;
     for (const d of defs) {
       // (all parameters at once: an argument's own letters are not a parameter's; any case, as SPICE)
       const re = new RegExp(`\\b(${d.params.join("|")})\\b`, "gi"), low = d.params.map((p) => p.toLowerCase());
-      expr = replaceCalls(expr, d.name, (args) => args.length !== d.params.length ? null
-        : `(${d.params.length ? d.body.replace(re, (p) => `(${args[low.indexOf(p.toLowerCase())]})`) : d.body})`);
+      expr = replaceCalls(expr, d.name, (given) => {
+        const args = given.length === 1 && !given[0] ? [] : given; // (`vt()`: none)
+        return args.length !== d.params.length ? null : `(${d.params.length ? d.body.replace(re, (p) => `(${args[low.indexOf(p.toLowerCase())]})`) : d.body})`;
+      });
     }
     if (expr === before) break;
   }
   return expr;
 }
+
+/** The top level's `.func`s of a netlist (a subcircuit's are its own), parsed once per text (the
+ *  traces of a run all ask). */
+let FUNCS: { text: string; defs: { name: string; params: string[]; body: string }[] } | null = null;
+function deckFuncs(text: string) {
+  if (FUNCS?.text === text) return FUNCS.defs;
+  let depth = 0;
+  const top = text.split("\n").filter((l) => { const t = l.trim().toLowerCase(); depth += t.startsWith(".subckt") ? 1 : t.startsWith(".ends") ? -1 : 0; return depth === 0; }).join("\n");
+  const defs = [...top.matchAll(/^\s*\.func(?:tion)?\s+(\w+)\s*\(([^)]*)\)\s*=?\s*(.+?)\s*$/gim)].map((m) => ({
+    name: m[1], params: m[2].split(/[\s,]+/).filter(Boolean), body: m[3].replace(/^\{(.*)\}$/, "$1").replace(/^'(.*)'$/, "$1"),
+  }));
+  FUNCS = { text, defs };
+  return defs;
+}
+
+/** A two-port quantity of `.net` in a trace expression: S21(V1), S11(V1), Zin(V1). */
+export const TWO_PORT_CALL = /\b(s11|s21|zin)\s*\(/i;
 
 /** `.net <out> <V source> …` as it stands in the run's netlist: the output (`I(R1)`, `V(out, ref)`
  *  with blanks), the source (a voltage source), the rest (Rin=, Rout=). */
@@ -409,10 +424,11 @@ export function twoPortIn(expr: string, nl: Netlist): string {
   // (`V(out, ref)` with a blank; a voltage source V1 as the input: a current source's port current
   // is no vector)
   const m = NET_DIRECTIVE.exec(nl.text);
-  if (!m || !/\b(s11|s21|zin)\s*\(/i.test(expr)) return expr;
+  if (!m || !TWO_PORT_CALL.test(expr)) return expr;
   const [, spec, src, rest] = m, out = spec.replace(/\s+/g, "");
   const param = (k: string) => new RegExp(`\\b${k}\\s*=\\s*(\\S+)`, "i").exec(rest)?.[1];
-  const line = (name: string) => nl.text.split("\n").find((l) => l.split(/\s+/)[0]?.toLowerCase() === name.toLowerCase())?.split(/\s+/);
+  const lines = nl.text.split("\n");
+  const line = (name: string) => lines.find((l) => l.split(/\s+/)[0]?.toLowerCase() === name.toLowerCase())?.split(/\s+/);
   const nets = (inst: string) => nl.nets[nl.insts.findIndex((x) => x.toLowerCase() === inst.toLowerCase())];
   const across = (p?: string[]) => (p?.length === 2 ? `(${vexpr(p[0])}-${vexpr(p[1])})` : "");
   const vin = across(nets(src));

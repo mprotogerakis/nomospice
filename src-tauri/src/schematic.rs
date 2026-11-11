@@ -974,7 +974,7 @@ const BUILTIN_MODELS: &[(&str, &str)] = &[
     ("dff", ".subckt dff d c q qn params: Vhigh=5 Vlow=0 Td=10n\nB1 mi 0 V=V(c)<{(Vhigh+Vlow)/2} ? V(d) : V(m)\nR1 mi m 10\nC1 m 0 {Td/10}\nRm m 0 1G\nB2 si 0 V=V(c)>{(Vhigh+Vlow)/2} ? V(m) : V(s)\nR2 si s 10\nC2 s 0 {Td/10}\nRs s 0 1G\nB3 qo 0 V=V(s)>{(Vhigh+Vlow)/2} ? {Vhigh} : {Vlow}\nR3 qo q 10\nC3 q 0 {Td/10}\nB4 qno 0 V=V(s)>{(Vhigh+Vlow)/2} ? {Vlow} : {Vhigh}\nR4 qno qn 10\nC4 qn 0 {Td/10}\nRd d 0 1G\nRc c 0 1G\n.ends dff"),
 ];
 
-/// Subcircuits that are always nomospice's own (the symbols' models), never a library's of that name.
+/// Subcircuits of nomospice's own symbols (their models when placed by those symbols).
 const OWN_MODELS: [&str; 9] = ["opamp", "opamp2", "and2", "nand2", "or2", "nor2", "xor2", "not", "dff"];
 
 /// Byte spans of `line`'s [`spice_tokens`] (they are slices of it).
@@ -1192,8 +1192,10 @@ fn ramped(line: &str) -> Option<String> {
     let v = t.get(3 + dc)?;
     let rest = &t[4 + dc..];
     let value = spice_num(v).filter(|x| *x != 0.0).is_some() || (v.starts_with('{') && v.ends_with('}'));
-    (value && rest.first().is_none_or(|r| r.eq_ignore_ascii_case("ac"))).then(|| format!("{} {} {} PWL(0 0 20u {v}){}", t[0], t[1], t[2], rest.iter().map(|r| format!(" {r}")).collect::<String>()))
+    (value && rest.first().is_none_or(|r| r.eq_ignore_ascii_case("ac"))).then(|| format!("{} {} {} {RAMP}{v}){}", t[0], t[1], t[2], rest.iter().map(|r| format!(" {r}")).collect::<String>()))
 }
+/// How [`ramped`] writes a source's value, `PWL(0 0 20u 5)` (a `.step` of the source steps the 5).
+const RAMP: &str = "PWL(0 0 20u ";
 
 /// Translate LTspice-only directive syntax to something ngspice accepts.
 fn directive(line: &str, warnings: &mut Vec<String>) -> Option<String> {
@@ -1394,6 +1396,10 @@ impl Step {
                 let line = &lines[at];
                 // `V1 a b 5` or `V1 a b DC 5 …`: the DC value (a SINE or PULSE has none to step)
                 let sp = token_spans(line.line);
+                // (ramped up by .tran startup: the value the ramp ends at)
+                if let Some(&(a, e)) = sp.get(3).filter(|&&(a, e)| line.line[a..e].starts_with(RAMP) && line.line[a..e].ends_with(')')) {
+                    return Ok(splice(text, &[(line.start + a + RAMP.len(), line.start + e - 1)], v));
+                }
                 // (the DC value where it is written: right after the nodes, or after a `DC` anywhere)
                 let k = sp.iter().skip(3).position(|&(a, e)| line.line[a..e].eq_ignore_ascii_case("dc")).map_or(3, |p| p + 4);
                 match sp.get(k).filter(|&&(a, e)| spice_num(&line.line[a..e]).is_some() || line.line[a..e].starts_with('{')) {
@@ -1906,16 +1912,11 @@ pub fn prepare(text: &str, dir: Option<&std::path::Path>, warnings: &mut Vec<Str
 /// said and left. None: no white() in the deck.
 fn lt_white(text: &str, warnings: &mut Vec<String>) -> Option<String> {
     // (`.func white(x) …` of the deck's top level: its own; a subcircuit's is that subcircuit's)
-    let mut level = 0;
-    let own = text.lines().any(|l| {
-        let t = l.trim_start().to_ascii_lowercase();
-        level += i32::from(t.starts_with(".subckt")) - i32::from(t.starts_with(".ends"));
-        level == 0 && (t.starts_with(".func ") || t.starts_with(".function ")) && t.split(|c: char| c.is_whitespace() || c == '(').filter(|w| !w.is_empty()).nth(1) == Some("white")
-    });
-    if own || !crate::laplace::calls(text, &["white"]) {
+    if !crate::laplace::calls(text, &["white"]) || deck_funcs(text, true).iter().any(|f| f == "white") {
         return None;
     }
-    let (mut out, mut sources, mut depth) = (String::with_capacity(text.len() + 128), vec![], 0);
+    // (one noise source per rate: white(1e5*time) twice is the same noise, as in LTspice)
+    let (mut out, mut sources, mut depth) = (String::with_capacity(text.len() + 128), Vec::<(f64, String)>::new(), 0);
     for line in text.split_inclusive('\n') {
         let t = line.trim_start().to_ascii_lowercase();
         depth += i32::from(t.starts_with(".subckt")) - i32::from(t.starts_with(".ends"));
@@ -1936,9 +1937,12 @@ fn lt_white(text: &str, warnings: &mut Vec<String>) -> Option<String> {
             }.filter(|c| *c > 0.0);
             match c {
                 Some(c) if depth == 0 => {
-                    sources.push(format!("Vwhite{n} nw_white{n} 0 dc 0 trnoise(0.288675 {:e} 0 0)", 1.0 / c, n = sources.len() + 1));
+                    let n = sources.iter().position(|s| s.0 == c).unwrap_or_else(|| {
+                        sources.push((c, format!("Vwhite{n} nw_white{n} 0 dc 0 trnoise(0.288675 {:e} 0 0)", 1.0 / c, n = sources.len() + 1)));
+                        sources.len() - 1
+                    }) + 1;
                     out.push_str(&rest[..k]);
-                    out.push_str(&format!("v(nw_white{})", sources.len()));
+                    out.push_str(&format!("v(nw_white{n})"));
                 }
                 _ => {
                     warnings.push(format!("`white({arg})`: nomospice turns white(c*time) into noise (ngspice has no white()); {}", if depth > 0 { "not inside a subcircuit" } else { "write the argument as a number times time" }));
@@ -1959,8 +1963,27 @@ fn lt_white(text: &str, warnings: &mut Vec<String>) -> Option<String> {
         }
         k += l.len();
     }
-    out.insert_str(at, &sources.iter().map(|s| format!("{s}\n")).collect::<String>());
+    out.insert_str(at, &sources.iter().map(|s| format!("{}\n", s.1)).collect::<String>());
+    // (a white() on a `+` line or in a .func body is not translated: said)
+    if out.lines().any(|l| !l.trim_start().starts_with(['*', 'b', 'B']) && crate::laplace::calls(uncommented(l), &["white"])) {
+        warnings.push("`white()` only becomes noise in a behavioral source's own line (not on a + line or in a .func): ngspice has no white()".into());
+    }
     Some(out)
+}
+
+/// The names of the deck's `.func`s (`.function` too), lowercase; `top`: its top level's only (a
+/// subcircuit's are local).
+fn deck_funcs(text: &str, top: bool) -> Vec<String> {
+    let mut level = 0;
+    text.lines().filter_map(|l| {
+        let t = l.trim_start();
+        let low = t.to_ascii_lowercase();
+        level += i32::from(low.starts_with(".subckt")) - i32::from(low.starts_with(".ends"));
+        // (bytes: a comment's ö at byte 5 is no place to cut a str)
+        let b = t.as_bytes();
+        let head = [&b".function"[..], b".func"].into_iter().find(|h| b.len() > h.len() && b[..h.len()].eq_ignore_ascii_case(h) && b[h.len()].is_ascii_whitespace())?;
+        (!top || level == 0).then(|| t[head.len()..].trim_start().split(|c: char| c == '(' || c.is_whitespace()).next().unwrap_or("").to_ascii_lowercase())
+    }).collect()
 }
 
 /// Where a call of `name` starts in `s` (a whole word, `(` after it, blanks between allowed).
@@ -1999,14 +2022,8 @@ fn lt_random<'a>(text: &'a str, warnings: &mut Vec<String>) -> std::borrow::Cow<
     if !calls(text) {
         return std::borrow::Cow::Borrowed(text);
     }
-    // (`.func gauss(x) …`: the deck's own)
-    let own: Vec<String> = text.lines().filter_map(|l| {
-        let t = l.trim_start().as_bytes();
-        // (bytes: a comment's ö at byte 5 is no place to cut a str; LTspice also spells it .function)
-        let head = [&b".function"[..], b".func"].into_iter().find(|h| t.len() > h.len() && t[..h.len()].eq_ignore_ascii_case(h) && t[h.len()].is_ascii_whitespace())?;
-        let rest = l.trim_start()[head.len()..].trim_start();
-        Some(rest.split(|c: char| c == '(' || c.is_whitespace()).next().unwrap_or("").to_ascii_lowercase())
-    }).collect();
+    // (`.func gauss(x) …`: the deck's own; LTspice also spells it .function)
+    let own = deck_funcs(text, false);
     let (mut out, mut param) = (String::with_capacity(text.len() + 64), false);
     for line in text.split_inclusive('\n') {
         let t = line.trim_start();
@@ -2048,13 +2065,7 @@ fn random_calls(s: &str, all: bool, own: &[String], warnings: &mut Vec<String>) 
             .flatten();
         // its arguments: up to the matching parenthesis (an unclosed one: left as it is)
         let open = call.map(|f| s.len() - s[k + f.len()..].trim_start().len());
-        let close = open.and_then(|open| {
-            let mut depth = 0;
-            s[open..].char_indices().find_map(|(i, c)| {
-                depth += match c { '(' => 1, ')' => -1, _ => 0 };
-                (depth == 0).then_some(open + i)
-            })
-        });
+        let close = open.and_then(|open| matching(s, open));
         let (Some(f), Some(open), Some(close)) = (call, open, close) else {
             let c = s[k..].chars().next().unwrap_or(' ');
             if !quoted {
@@ -2564,6 +2575,9 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
 
     let mut lines = if sub { vec![] } else { vec!["* nomospice netlist".to_string()] };
     let mut used_models = vec![];
+    // (models of nomospice's own subcircuit symbols placed here: ours, whatever a library has of
+    // that name; a library's AND2 placed by its own box symbol stays the library's)
+    let mut own_used: HashSet<String> = HashSet::new();
     let one_line = |s: &str| s.replace(['\n', '\r'], " ");
     let spice_inst = |inst: &str, prefix: char| {
         let inst = net_name(inst);
@@ -2682,6 +2696,9 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
         if "DQMXJS".contains(prefix) && model.is_empty() {
             nl.warnings.push(format!("{inst}: no model or subcircuit named (its Value is empty)"));
         } else if "DQMXJSWO".contains(prefix) && !model.is_empty() && block.is_none() && !defined(&model) && !used_models.contains(&model) {
+            if builtin_symbol(&def.name) && OWN_MODELS.contains(&model.as_str()) {
+                own_used.insert(model.clone());
+            }
             used_models.push(model);
         }
         let extra: Vec<String> = ["Value2", "SpiceLine", "SpiceLine2"].iter()
@@ -2860,7 +2877,7 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
             continue;
         }
         let builtin = BUILTIN_MODELS.iter().find(|(n, _)| *n == m).map(|(_, t)| t.to_string());
-        let lib = if OWN_MODELS.contains(&m.as_str()) { None } else { crate::library::definitions(&m, &mut h.emitted) };
+        let lib = if own_used.contains(&m) { None } else { crate::library::definitions(&m, &mut h.emitted) };
         let def = match (lib, builtin) {
             (Some(defs), _) => Some(defs.join("\n")),
             (None, Some(text)) => h.emitted.insert(m.clone()).then_some(text),
@@ -3069,6 +3086,12 @@ mod tests {
         let out = lt_white("B1 n 0 V=white(time) ; was white(2*time)\n", &mut w).unwrap();
         assert!(out.starts_with("B1 n 0 V=v(nw_white1) ; was white(2*time)\n") && !out.contains("nw_white2"), "{out}");
         assert_eq!(lt_white(".func white(x) {sin(x)}\nB1 n 0 V=white(time)\n", &mut w), None);
+        let mut w = vec![];
+        let out = lt_white("B1 n 0 V=white(1e5*time)-white(1e5*time)\nB2 m 0 V=1\n+ +white(time)\n", &mut w).unwrap();
+        assert!(out.starts_with("B1 n 0 V=v(nw_white1)-v(nw_white1)\n") && !out.contains("nw_white2") && w.len() == 1, "{out} {w:?}");
+        // a .step of a source ramped up: the ramp's end
+        let st = parse_step(".step V1 1 2 1").unwrap();
+        assert!(st.apply("V1 a 0 PWL(0 0 20u 5)\n.tran 1m\n", 2.0).unwrap().starts_with("V1 a 0 PWL(0 0 20u 2"), "{:?}", st.apply("V1 a 0 PWL(0 0 20u 5)\n", 2.0));
         assert_eq!(t(".tran {T}"), ".tran {(T)/1000} {T}");
         assert_eq!(t(".tran 3m"), ".tran 3e-6 3m");
         assert_eq!(t(".tran 1m ; 10 cycles uic"), ".tran 1e-6 1m");

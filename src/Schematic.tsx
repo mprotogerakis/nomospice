@@ -79,11 +79,14 @@ function SymTexts({ def, it }: { def: SymbolDef; it: Extract<Item, { t: "sym" }>
   return (
     <g fill="currentColor" stroke="none">
       {def.texts?.map(([x, y, just, size, t], i) => {
-        const [dx, dy] = xform(it.rot, x, y);
-        // (Left: the text runs from x to the right; turned or mirrored, where that right now points)
-        const run = /^left/i.test(just) ? 1 : /^right/i.test(just) ? -1 : 0, ux = xform(it.rot, run, 0)[0];
+        const [dx, dy] = xform(it.rot, x, y), [px, py] = [it.x + dx, it.y + dy];
+        // (Left: the text runs from x to the right; turned or mirrored, where that right now points;
+        // LTspice's VLeft …: upwards, the text turned; Top/Bottom: below/above the point)
+        const v = /^v/i.test(just), j = just.replace(/^v/i, "");
+        const run = /^left/i.test(j) ? 1 : /^right/i.test(j) ? -1 : 0, ux = v ? run : xform(it.rot, run, 0)[0];
         return (
-          <text key={i} x={it.x + dx} y={it.y + dy} fontSize={8 + 3 * size} dominantBaseline="middle"
+          <text key={i} x={px} y={py} fontSize={8 + 3 * size} transform={v ? `rotate(-90 ${px} ${py})` : undefined}
+            dominantBaseline={/^top/i.test(j) ? "hanging" : /^bottom/i.test(j) ? "auto" : "middle"}
             textAnchor={ux > 0 ? "start" : ux < 0 ? "end" : "middle"}>{t}</text>
         );
       })}
