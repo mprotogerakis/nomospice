@@ -303,9 +303,9 @@ async function fetchTrace(t: Trace): Promise<Trace> {
   const run = get().sim?.run;
   if (!run) return { ...t, data: undefined, error: "no simulation results: run the simulation" };
   const nl = get().sim!.netlist; // (the one the results were computed with)
-  const left = funcsLeft(t.expr, nl.text);
-  if (left) return { ...t, data: undefined, error: left };
   const pre = withDefs(t.expr, nl), expr = powersIn(pre, nl);
+  const left = funcsLeft(pre, nl.text); // (a .func not written out, called by the user or by another .func)
+  if (left) return { ...t, data: undefined, error: left };
   const unknown = POWER_ANY.test(expr); // (P() of whatever: exprUnit's watts, so ours to explain)
   if ((t.power || expr !== pre || unknown) && !powerMode(get().sim)) return { ...t, data: undefined, error: "power: only in .tran and .dc results" };
   if (TWO_PORT_CALL.test(expr) || (TWO_PORT_CALL.test(t.expr) && !run.plot.startsWith("ac")))

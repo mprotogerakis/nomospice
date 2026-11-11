@@ -436,7 +436,7 @@ export const Schematic = memo(function Schematic() {
     // a part: its current, as the operating point lists it
     const part = !hoverNet && opNow && hover >= 0 && items[hover]?.t === "sym" ? opCurrent(hover, hoverPin) : null;
     useStatus.setState({ net: hoverNet ? hoverNet + op : part, zoom: view.k });
-  }, [hoverNet, view.k, sim, stale, hover, hoverPin]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [hoverNet, view.k, sim, stale, hover, hoverPin, nets, items]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     const cancel = () => (wireStart ? setWireStart(null) : useS.setState({ tool: { k: "select" } }));
     window.addEventListener("nomospice:cancel", cancel);

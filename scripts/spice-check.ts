@@ -244,6 +244,11 @@ assert.equal(numInfo("1Meg", "Hz")!.text, "= 1MegHz"); // not "1M", the milli tr
   assert.equal(funcsIn("NF(V(n))+g(1)", st), "NF(V(n))+((1)*2)"); // (a .func over a stepped parameter: left …)
   assert.match(funcsLeft("NF(V(n))", st)!, /NF\(\): its \.func uses Rs/); // (… and said)
   assert.equal(funcsLeft("g(1)", st), null);
+  const st2 = ".param Rs=50 k={2*Rs}\n* .step dec param Rs 1 10k 10\n.func NF(x) {x*k}\n.func h(y) {NF(y)*2}";
+  assert.match(funcsLeft("NF(V(n))", st2)!, /uses k \(of Rs\)/); // (a .step dec; through another parameter)
+  assert.equal(funcsIn("h(V(n))", st2), "(NF((V(n)))*2)"); assert.match(funcsLeft(funcsIn("h(V(n))", st2), st2)!, /NF\(\)/); // (called by another .func)
+  const pl = { ...two, text: two.text.replace("R1 out 0 50", ".param RL=50\nR1 out 0 {RL}") };
+  assert.equal(twoPortIn("S21(V1)", pl), '(2*v("out")/(1)*sqrt((50)/(50)))'); // (a load of a .param value)
   assert.equal(twoPortIn("S21(V1)", { ...two, text: two.text.replace("* .net I(R1) V1", "* .net I(C1) V1") }), "S21(V1)"); // (a load that is no resistor)
   const pv = { ...two, text: two.text.replace("V1 V1_rser 0 AC 1", "V1 V1_rser 0 AC {Vac}") };
   assert.equal(twoPortIn("S21(V1)", pv), "S21(V1)"); // (a parameter as the drive: S21 not, …)

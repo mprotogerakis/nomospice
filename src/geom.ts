@@ -405,37 +405,52 @@ export function funcsIn(expr: string, text: string): string {
 
 /** The top level's `.func`s of a netlist (a subcircuit's are its own), parsed once per text (the
  *  traces of a run all ask). */
-let FUNCS: { text: string; defs: { name: string; params: string[]; body: string; withParams: (body: string) => string; stepped?: string }[] } | null = null;
-function deckFuncs(text: string) {
-  if (FUNCS?.text === text) return FUNCS.defs;
+type FuncDef = { name: string; params: string[]; body: string; withParams: (body: string) => string; stepped?: string };
+/** The top level's .func and .param definitions of a netlist (a subcircuit's are its own), parsed
+ *  once per text (the traces of a run all ask). */
+let DEFS: { text: string; funcs: FuncDef[]; params: Map<string, string>; lines: string[] } | null = null;
+function deckDefs(text: string) {
+  if (DEFS?.text === text) return DEFS;
   let depth = 0;
-  // (a line's `;` comment is not of its body; a body continued on + lines is one line)
+  // (a line's `;` or `$` comment is not of its body; a body continued on + lines is one line)
   const top = text.split("\n").filter((l) => { const t = l.trim().toLowerCase(); depth += t.startsWith(".subckt") ? 1 : t.startsWith(".ends") ? -1 : 0; return depth === 0; }).map((l) => l.split(/;|(?<![^\s])\$/)[0]).join("\n").replace(/\n\s*\+\s?/g, " ");
-  // (the top level's .param values too: a body's `Rs` means nothing to ngspice's plot expressions)
-  const values = new Map<string, string>();
-  for (const m of top.matchAll(/^\s*\.param\s+(.+)$/gim))
-    for (const p of m[1].matchAll(/(\w+)\s*=\s*(\{[^}]*\}|'[^']*'|\S+)/g)) values.set(p[1].toLowerCase(), p[2].replace(/^[{']|[}']$/g, ""));
-  // (a parameter .step varies: its value differs per step, one expression cannot hold them)
-  const stepped = [...top.matchAll(/^\*\s*\.step\s+param\s+(\w+)/gim)].map((m) => m[1]); // (as written: said by that name)
-  const names = values.size ? new RegExp(`\\b(${[...values.keys()].join("|")})\\b(?!\\s*\\()`, "gi") : null;
   const probe = /\b(?:v|i|i[bcdegsx])\s*\([^)]*\)/gi; // (a node's name is no parameter's; imag() is no probe)
+  // (the top level's .param values too: a body's `Rs` means nothing to ngspice's plot expressions)
+  const params = new Map<string, string>();
+  for (const m of top.matchAll(/^\s*\.param\s+(.+)$/gim))
+    for (const p of m[1].matchAll(/(\w+)\s*=\s*(\{[^}]*\}|'[^']*'|\S+)/g)) params.set(p[1].toLowerCase(), p[2].replace(/^[{']|[}']$/g, ""));
+  // (a parameter .step varies, and each whose value depends on one: a value per step, which one
+  // expression cannot hold; by the name it is stepped as, said so)
+  const roots = new Map<string, string>();
+  for (const m of top.matchAll(/^\*\s*\.step\s+(?:(?:dec|oct|lin)\s+)?param\s+(\w+)/gim)) roots.set(m[1].toLowerCase(), m[1]);
+  const mentions = (body: string) => (roots.size ? body.replace(probe, "").match(new RegExp(`\\b(${[...roots.keys()].join("|")})\\b(?!\\s*\\()`, "i"))?.[1] : undefined);
+  for (let round = 0; round < 8; round++) {
+    let more = false;
+    for (const [k, v] of params) {
+      const hit = roots.has(k) ? undefined : mentions(v);
+      if (hit) roots.set(k, roots.get(hit.toLowerCase())!), (more = true);
+    }
+    if (!more) break;
+  }
+  const names = params.size ? new RegExp(`\\b(${[...params.keys()].join("|")})\\b(?!\\s*\\()`, "gi") : null;
   const withParams = (body: string) => {
     if (!names) return body;
     for (let round = 0; round < 8; round++) {
       const before = body;
-      body = body.split(probe).reduce((o, seg, k, segs) => o + seg.replace(names, (n) => `(${values.get(n.toLowerCase())})`) + (body.match(probe)?.[k] ?? ""), "");
+      body = body.split(probe).reduce((o, seg, k) => o + seg.replace(names, (n) => `(${params.get(n.toLowerCase())})`) + (body.match(probe)?.[k] ?? ""), "");
       if (body === before) break;
     }
     return body;
   };
-  const defs = [...top.matchAll(/^\s*\.func(?:tion)?\s+(\w+)\s*\(([^)]*)\)\s*=?\s*(.+?)\s*$/gim)].map((m) => {
+  const funcs = [...top.matchAll(/^\s*\.func(?:tion)?\s+(\w+)\s*\(([^)]*)\)\s*=?\s*(.+?)\s*$/gim)].map((m): FuncDef => {
     const body = m[3].replace(/^\{(.*)\}$/, "$1").replace(/^'(.*)'$/, "$1");
-    const uses = stepped.find((n) => new RegExp(`\\b${n}\\b(?!\\s*\\()`, "i").test(body.replace(probe, "")));
-    return { name: m[1], params: m[2].split(/[\s,]+/).filter(Boolean), body, withParams, stepped: uses };
+    const hit = mentions(body), root = hit && roots.get(hit.toLowerCase());
+    return { name: m[1], params: m[2].split(/[\s,]+/).filter(Boolean), body, withParams, stepped: hit && (root?.toLowerCase() === hit.toLowerCase() ? hit : `${hit} (of ${root})`) };
   });
-  FUNCS = { text, defs };
-  return defs;
+  DEFS = { text, funcs, params, lines: text.split("\n") };
+  return DEFS;
 }
+const deckFuncs = (text: string) => deckDefs(text).funcs;
 
 /** Why a `.func` call in `expr` is not written out (see funcsIn): its body uses a parameter that
  *  `.step` varies, which one expression cannot hold per step. */
@@ -462,13 +477,15 @@ export function twoPortIn(expr: string, nl: Netlist): string {
   const m = NET_DIRECTIVE.exec(nl.text);
   if (!m || /\b(rin|rout)\s*=/i.test(m[3])) return expr;
   const [, spec, src] = m, out = (spec ?? "").replace(/\s+/g, ""); // (`.net V1`, a one-port: Zin and S11 only)
-  const lines = nl.text.split("\n");
+  const { lines, params } = deckDefs(nl.text);
   const line = (name: string) => lines.find((l) => l.split(/\s+/)[0]?.toLowerCase() === name.toLowerCase())?.split(/\s+/);
+  // (a value `{RL}` of a .param: the value itself, where that is a number)
+  const resolved = (x?: string) => ((m) => (m ? params.get(m[1].toLowerCase()) ?? x : x))(x ? /^\{\s*(\w+)\s*\}$/.exec(x) : null);
   const nets = (inst: string) => nl.nets[nl.insts.findIndex((x) => x.toLowerCase() === inst.toLowerCase())];
   const across = (p?: string[]) => (p?.length === 2 ? `(${vexpr(p[0])}-${vexpr(p[1])})` : "");
   const vin = across(nets(src));
   if (!vin) return expr;
-  const z0 = line(`R${src}_rser`)?.[3];
+  const z0 = resolved(line(`R${src}_rser`)?.[3]);
   // (the AC amplitude after the nodes, `AC 1`: a node named ac is none; a parameter: not here)
   const t = line(src)?.slice(3) ?? [], ac = t.findIndex((x) => /^ac$/i.test(x)), vs = ac >= 0 ? t[ac + 1] ?? "1" : "1";
   const phase = ac >= 0 ? parseFloat(t[ac + 2] ?? "0") : 0, phased = Number.isFinite(phase) && phase !== 0; // (a drive of a phase: not folded in)
@@ -479,7 +496,7 @@ export function twoPortIn(expr: string, nl: Netlist): string {
   const plain = (x?: string) => !!x && /^[\d.]+(e[-+]?\d+)?[a-zµ]*$/i.test(x);
   // (the load to ground: its node's voltage, whichever way the resistor is drawn)
   const loadV = (p?: string[]) => (p?.length !== 2 ? "" : p[0] === "0" ? vexpr(p[1]) : p[1] === "0" ? vexpr(p[0]) : across(p));
-  const [vl, rl] = r && /^r/i.test(r[1]) && plain(line(r[1])?.[3]) ? [loadV(nets(r[1])), line(r[1])?.[3]] : ["", undefined];
+  const [vl, rl] = r && /^r/i.test(r[1]) && plain(resolved(line(r[1])?.[3])) ? [loadV(nets(r[1])), resolved(line(r[1])?.[3])] : ["", undefined];
   let e = expr;
   for (const f of ["zin", "s11", "s21"]) {
     e = replaceCalls(e, f, ([s]) => s?.toLowerCase() !== src.toLowerCase() ? null
