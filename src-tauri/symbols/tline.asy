@@ -1,0 +1,26 @@
+Version 4
+SymbolType CELL
+RECTANGLE Normal -32 -24 32 24
+LINE Normal -48 -16 -32 -16
+LINE Normal -48 16 -32 16
+LINE Normal 32 -16 48 -16
+LINE Normal 32 16 48 16
+LINE Normal -32 -8 32 -8
+LINE Normal -32 8 32 8
+WINDOW 0 -32 -36 Left 2
+WINDOW 3 -32 40 Left 2
+SYMATTR Value Td=50n Z0=50
+SYMATTR Prefix T
+SYMATTR Description Lossless transmission line: delay Td, impedance Z0
+PIN -48 -16 NONE 0
+PINATTR PinName I1
+PINATTR SpiceOrder 1
+PIN -48 16 NONE 0
+PINATTR PinName R1
+PINATTR SpiceOrder 2
+PIN 48 -16 NONE 0
+PINATTR PinName I2
+PINATTR SpiceOrder 3
+PIN 48 16 NONE 0
+PINATTR PinName R2
+PINATTR SpiceOrder 4

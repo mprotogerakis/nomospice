@@ -24,6 +24,8 @@ export interface SymbolDef {
   pins: { x: number; y: number; name: string; just?: string; off?: number }[];
   shapes: [string, number[]][];
   windows: Record<string, [number, number]>;
+  /** texts drawn with the symbol: x, y, justification (Left, Right, Center …), LTspice size, text */
+  texts?: [number, number, string, number, string][];
   /** draw pin names (generated boxes for library subcircuits) */
   pin_labels: boolean;
   /** a hierarchical block: the schematic it stands for (its subcircuit) */

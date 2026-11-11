@@ -69,6 +69,10 @@ function SymbolGraphics({ def }: { def: SymbolDef }) {
   return (
     <g id={`sym-${def.name}`} fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round">
       {def.shapes.map(([k, p], i) => shapeEl(k, p, i))}
+      {def.texts?.map(([x, y, just, size, t], i) => (
+        <text key={`t${i}`} x={x} y={y} fill="currentColor" stroke="none" fontSize={8 + 3 * size} dominantBaseline="middle"
+          textAnchor={/^right/i.test(just) ? "end" : /^left/i.test(just) ? "start" : "middle"}>{t}</text>
+      ))}
     </g>
   );
 }

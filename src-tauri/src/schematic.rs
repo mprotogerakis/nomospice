@@ -80,6 +80,9 @@ pub struct SymbolDef {
     pub shapes: Vec<(String, Vec<i32>)>,
     /// WINDOW 0 (InstName) and 3 (Value) anchors.
     pub windows: BTreeMap<u8, (i32, i32)>,
+    /// `TEXT x y Left 2 &`: x, y, justification (Left, Right, Center …), size (LTspice's 0–7), text
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub texts: Vec<(i32, i32, String, i32, String)>,
     /// draw pin names (generated subckt boxes)
     pub pin_labels: bool,
     /// a hierarchical block: the schematic it stands for (`<name>.asc` next to it), netlisted as a
@@ -142,7 +145,8 @@ macro_rules! builtin {
 }
 const BUILTIN_SYMBOLS: &[(&str, &str)] = builtin!(
     "res", "cap", "polcap", "ind", "voltage", "current", "diode", "schottky", "zener", "led", "npn", "pnp",
-    "nmos", "pmos", "njf", "pjf", "opamp", "e", "g", "jumper", "sw", "csw", "bv", "bi"
+    "nmos", "pmos", "njf", "pjf", "opamp", "e", "g", "jumper", "sw", "csw", "bv", "bi",
+    "tline", "ltline", "opamp2", "and2", "nand2", "or2", "nor2", "xor2", "not", "dff"
 );
 
 pub fn parse_asy(name: &str, src: &str) -> SymbolDef {
@@ -162,6 +166,7 @@ pub fn parse_asy(name: &str, src: &str) -> SymbolDef {
             Some("WINDOW") => {
                 d.windows.insert(num(1) as u8, (num(2), num(3)));
             }
+            Some("TEXT") if tok.len() > 5 => d.texts.push((num(1), num(2), tok[3].to_string(), num(4), rest(5))),
             Some("SymbolType") => d.block = tok.get(1).is_some_and(|t| t.eq_ignore_ascii_case("block")),
             Some("PIN") => {
                 let just = tok.get(3).filter(|j| !j.eq_ignore_ascii_case("none")).map_or(String::new(), |j| j.to_ascii_uppercase());
@@ -952,7 +957,25 @@ const BUILTIN_MODELS: &[(&str, &str)] = &[
     ("2n3904", ".model 2N3904 NPN(IS=12f BF=180 VAF=80 IKF=0.15 BR=2 RB=10 RC=0.5 RE=0.3 CJE=6p VJE=0.75 MJE=0.35 CJC=3p VJC=0.75 MJC=0.33 TF=0.45n TR=150n XTB=1.5)"),
     ("2n3906", ".model 2N3906 PNP(IS=12f BF=150 VAF=60 IKF=0.12 BR=2 RB=10 RC=0.6 RE=0.3 CJE=8p VJE=0.75 MJE=0.35 CJC=4p VJC=0.75 MJC=0.33 TF=0.6n TR=200n XTB=1.5)"),
     ("opamp", ".subckt opamp inn inp out params: Aol=100K GBW=10Meg\nG1 0 n inp inn 1m\nR1 n 0 {Aol*1k}\nC1 n 0 {1/(6.2832*1k*GBW)}\nE1 out 0 n 0 1\n.ends opamp"),
+    // with supplies (LTspice's opamp2 pins): a transconductance into R‖C around mid-supply (the
+    // dominant pole; GBW = gm/2πC), its current limited (slew rate = Imax/C), that node kept within
+    // the supplies (no wind-up), the output limited to the supplies less Vsat
+    ("opamp2", ".subckt opamp2 inp inn vp vn out params: Aol=100K GBW=10Meg Slew=10Meg Vsat=0.1 Rout=1\n.param Cc=1n gm={6.2832*GBW*Cc} Imax={Slew*Cc}\nBm mid 0 V=(V(vp)+V(vn))/2\nB1 0 x I=max(min({gm}*V(inp,inn), {Imax}), -{Imax})\nR1 x mid {Aol/gm}\nC1 x mid {Cc}\nB2 x 0 I=V(x)>V(vp) ? V(x)-V(vp) : (V(x)<V(vn) ? V(x)-V(vn) : 0)\nB3 o 0 V=max(min(V(x), V(vp)-{Vsat}), V(vn)+{Vsat})\nR2 o out {Rout}\nR3 vp vn 1Meg\n.ends opamp2"),
+    // 10 m of 50 Ω coax (RG58-like: 250 nH/m, 100 pF/m, some loss)
+    ("ltra", ".model LTRA LTRA(R=0.1 L=250n G=0 C=100p LEN=10)"),
+    // logic gates and a D flip-flop of behavioral sources (levels Vlow/Vhigh, threshold halfway;
+    // the output through an RC of time constant Td); an open input reads low
+    ("and2", ".subckt and2 a b y params: Vhigh=5 Vlow=0 Td=10n\nB1 o 0 V=(V(a)>{(Vhigh+Vlow)/2} && V(b)>{(Vhigh+Vlow)/2}) ? {Vhigh} : {Vlow}\nR1 o y 10\nC1 y 0 {Td/10}\nRa a 0 1G\nRb b 0 1G\n.ends and2"),
+    ("nand2", ".subckt nand2 a b y params: Vhigh=5 Vlow=0 Td=10n\nB1 o 0 V=(V(a)>{(Vhigh+Vlow)/2} && V(b)>{(Vhigh+Vlow)/2}) ? {Vlow} : {Vhigh}\nR1 o y 10\nC1 y 0 {Td/10}\nRa a 0 1G\nRb b 0 1G\n.ends nand2"),
+    ("or2", ".subckt or2 a b y params: Vhigh=5 Vlow=0 Td=10n\nB1 o 0 V=(V(a)>{(Vhigh+Vlow)/2} || V(b)>{(Vhigh+Vlow)/2}) ? {Vhigh} : {Vlow}\nR1 o y 10\nC1 y 0 {Td/10}\nRa a 0 1G\nRb b 0 1G\n.ends or2"),
+    ("nor2", ".subckt nor2 a b y params: Vhigh=5 Vlow=0 Td=10n\nB1 o 0 V=(V(a)>{(Vhigh+Vlow)/2} || V(b)>{(Vhigh+Vlow)/2}) ? {Vlow} : {Vhigh}\nR1 o y 10\nC1 y 0 {Td/10}\nRa a 0 1G\nRb b 0 1G\n.ends nor2"),
+    ("xor2", ".subckt xor2 a b y params: Vhigh=5 Vlow=0 Td=10n\nB1 o 0 V=(V(a)>{(Vhigh+Vlow)/2}) ? ((V(b)>{(Vhigh+Vlow)/2}) ? {Vlow} : {Vhigh}) : ((V(b)>{(Vhigh+Vlow)/2}) ? {Vhigh} : {Vlow})\nR1 o y 10\nC1 y 0 {Td/10}\nRa a 0 1G\nRb b 0 1G\n.ends xor2"),
+    ("not", ".subckt not a y params: Vhigh=5 Vlow=0 Td=10n\nB1 o 0 V=V(a)>{(Vhigh+Vlow)/2} ? {Vlow} : {Vhigh}\nR1 o y 10\nC1 y 0 {Td/10}\nRa a 0 1G\n.ends not"),
+    ("dff", ".subckt dff d c q qn params: Vhigh=5 Vlow=0 Td=10n\nB1 mi 0 V=V(c)<{(Vhigh+Vlow)/2} ? V(d) : V(m)\nR1 mi m 10\nC1 m 0 {Td/10}\nRm m 0 1G\nB2 si 0 V=V(c)>{(Vhigh+Vlow)/2} ? V(m) : V(s)\nR2 si s 10\nC2 s 0 {Td/10}\nRs s 0 1G\nB3 qo 0 V=V(s)>{(Vhigh+Vlow)/2} ? {Vhigh} : {Vlow}\nR3 qo q 10\nC3 q 0 {Td/10}\nB4 qno 0 V=V(s)>{(Vhigh+Vlow)/2} ? {Vlow} : {Vhigh}\nR4 qno qn 10\nC4 qn 0 {Td/10}\nRd d 0 1G\nRc c 0 1G\n.ends dff"),
 ];
+
+/// Subcircuits that are always nomospice's own (the symbols' models), never a library's of that name.
+const OWN_MODELS: [&str; 9] = ["opamp", "opamp2", "and2", "nand2", "or2", "nor2", "xor2", "not", "dff"];
 
 /// Byte spans of `line`'s [`spice_tokens`] (they are slices of it).
 fn token_spans(line: &str) -> Vec<(usize, usize)> {
@@ -2638,7 +2661,7 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
         }
         if "DQMXJS".contains(prefix) && model.is_empty() {
             nl.warnings.push(format!("{inst}: no model or subcircuit named (its Value is empty)"));
-        } else if "DQMXJSW".contains(prefix) && !model.is_empty() && block.is_none() && !defined(&model) && !used_models.contains(&model) {
+        } else if "DQMXJSWO".contains(prefix) && !model.is_empty() && block.is_none() && !defined(&model) && !used_models.contains(&model) {
             used_models.push(model);
         }
         let extra: Vec<String> = ["Value2", "SpiceLine", "SpiceLine2"].iter()
@@ -2824,7 +2847,7 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
             continue;
         }
         let builtin = BUILTIN_MODELS.iter().find(|(n, _)| *n == m).map(|(_, t)| t.to_string());
-        let lib = if m == "opamp" { None } else { crate::library::definitions(&m, &mut h.emitted) };
+        let lib = if OWN_MODELS.contains(&m.as_str()) { None } else { crate::library::definitions(&m, &mut h.emitted) };
         let def = match (lib, builtin) {
             (Some(defs), _) => Some(defs.join("\n")),
             (None, Some(text)) => h.emitted.insert(m.clone()).then_some(text),
@@ -3172,6 +3195,55 @@ mod tests {
         let n = tr("v(n)");
         let rms = (n.re.iter().map(|v| v * v).sum::<f64>() / n.re.len() as f64).sqrt();
         assert!((0.2..0.37).contains(&rms), "rms {rms}");
+    }
+
+    #[test]
+    fn new_symbols_parse() {
+        let def = |n: &str| parse_asy(n, BUILTIN_SYMBOLS.iter().find(|s| s.0 == n).unwrap().1);
+        let pins = |n: &str| def(n).pins.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
+        // LTspice's pin order (opamp2, tline), the subcircuits' port order (gates, dff)
+        assert_eq!(pins("opamp2"), ["In+", "In-", "V+", "V-", "OUT"]);
+        assert_eq!(pins("tline"), ["I1", "R1", "I2", "R2"]);
+        assert_eq!(pins("dff"), ["D", "C", "Q", "Qn"]);
+        assert_eq!(def("and2").texts, vec![(0, 18, "Center".to_string(), 2, "&".to_string())]);
+        assert_eq!((def("bv").prefix.as_str(), def("ltline").prefix.as_str(), def("ltline").value.as_str()), ("B", "O", "LTRA"));
+    }
+
+    #[test]
+    fn opamp2_gates_and_lines_simulate() {
+        let _s = SIM.lock();
+        let model = |n: &str| BUILTIN_MODELS.iter().find(|m| m.0 == n).unwrap().1;
+        let run = |body: &str, models: &[&str]| {
+            let deck = format!("* test\n{body}\n{}\n.end\n", models.iter().map(|m| model(m)).collect::<Vec<_>>().join("\n"));
+            crate::ngspice::run(&prepare(&deck, None, &mut vec![])).unwrap()
+        };
+        let tr = |r: &crate::ngspice::Run, e: &str| {
+            let t = crate::ngspice::trace(e, &r.scale, r.id).unwrap();
+            move |at: f64| t.re[t.x.iter().position(|&x| x >= at).unwrap()]
+        };
+        // opamp2 as a follower on one 5 V supply: no swing below Vsat above 0 V, 1 V/µs up to 3 V
+        let r = run("V1 vcc 0 5\nV2 in 0 PULSE(-1 3 10u 1n 1n 20u 40u)\nX1 in out vcc 0 out opamp2 Aol=100K GBW=10Meg Slew=1Meg Vsat=0.1\n.tran 10n 40u", &["opamp2"]);
+        let out = tr(&r, "v(out)");
+        assert!((out(5e-6) - 0.1).abs() < 0.02 && (out(30e-6) - 3.0).abs() < 0.02, "clipped {} high {}", out(5e-6), out(30e-6));
+        assert!((out(11.5e-6) - 1.6).abs() < 0.3, "slewing {}", out(11.5e-6));
+        // gates: a high in [0,1µ) and [2µ,3µ), b in [0,2µ); a D flip-flop takes a at each rising clock edge
+        let r = run("Va a 0 PULSE(0 5 0 1n 1n 1u 2u)\nVb b 0 PULSE(0 5 0 1n 1n 2u 4u)\nVc c 0 PULSE(0 5 0.25u 1n 1n 0.5u 1u)\n\
+            X1 a b y1 and2\nX2 a b y2 or2\nX3 a b y3 xor2\nX4 a b y4 nand2\nX5 a b y5 nor2\nX6 a y6 not\nX7 a c q qn dff\n.tran 1n 4u",
+            &["and2", "or2", "xor2", "nand2", "nor2", "not", "dff"]);
+        for (y, want) in [("y1", [5., 0., 0., 0.]), ("y2", [5., 5., 5., 0.]), ("y3", [0., 5., 5., 0.]), ("y4", [0., 5., 5., 5.]), ("y5", [0., 0., 0., 5.]), ("y6", [0., 5., 0., 5.])] {
+            let v = tr(&r, &format!("v({y})"));
+            let got = [0.5e-6, 1.5e-6, 2.5e-6, 3.5e-6].map(|t| (v(t) * 10.0).round() / 10.0);
+            assert_eq!(got, want, "{y}");
+        }
+        let q = tr(&r, "v(q)");
+        let got = [0.75e-6, 1.1e-6, 1.75e-6, 2.75e-6, 3.75e-6].map(|t| (q(t) * 10.0).round() / 10.0);
+        assert_eq!(got, [5., 5., 0., 5., 0.], "q at the edges only");
+        // a 50 Ω line of 100 ns between 50 Ω: half the step, 100 ns late; the lossy one (10 m of coax) runs
+        let r = run("V1 s 0 PULSE(0 2 10n 1n 1n 1u 2u)\nRs s in 50\nT1 in 0 out 0 Z0=50 Td=100n\nRl out 0 50\n\
+            V2 s2 0 PULSE(0 2 10n 1n 1n 1u 2u)\nRs2 s2 in2 50\nO1 in2 0 out2 0 LTRA\nRl2 out2 0 50\n.tran 1n 400n", &["ltra"]);
+        let (out, out2) = (tr(&r, "v(out)"), tr(&r, "v(out2)"));
+        assert!(out(80e-9).abs() < 0.01 && (out(200e-9) - 1.0).abs() < 0.02, "line {} {}", out(80e-9), out(200e-9));
+        assert!(out2(30e-9).abs() < 0.05 && out2(300e-9) > 0.8, "lossy {} {}", out2(30e-9), out2(300e-9));
     }
 
     #[test]
