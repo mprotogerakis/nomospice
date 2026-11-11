@@ -213,14 +213,14 @@ assert.equal(numInfo("1Meg", "Hz")!.text, "= 1MegHz"); // not "1M", the milli tr
   assert.equal(funcsIn("NF(V(inoise))", funcs), "(10*log10((V(inoise))*(V(inoise))/(50*4*boltz*300)))");
   assert.equal(funcsIn("twice(V(a,b))+sq(1)", funcs), "(2*(((V(a,b)))*(1)))+sq(1)"); // (sq of a wrong count of arguments: left)
   // .net I(R1) V1: Zin, S11, S21 of V1 (Rser 50, AC 1) into R1 (50 Ω)
-  const two = { text: "V1 V1_rser 0 AC 1\nRV1_rser in V1_rser 50\nR1 out 0 50\n* .net I(R1) V1", nets: [["in", "0"], ["out", "0"]], insts: ["V1", "R1"], probes: [], pin_currents: [], sheets: [], warnings: [] };
+  const two = { text: "V1 V1_rser 0 AC 1\nRV1_rser in V1_rser 50\nR1 out 0 50\n* .net I(R1) V1 ; nomospice: two-port", nets: [["in", "0"], ["out", "0"]], insts: ["V1", "R1"], probes: [], pin_currents: [], sheets: [], warnings: [] };
   assert.equal(twoPortIn("Zin(V1)", two), '((v("in")-0)/(-I(V1)))');
   assert.equal(twoPortIn("S11(v1)", two), '((((v("in")-0)/(-I(V1)))-(50))/(((v("in")-0)/(-I(V1)))+(50)))');
   assert.equal(twoPortIn("S21(V1)", two), '(2*v("out")/(1)*sqrt((50)/(50)))');
   assert.equal(twoPortIn("S21(V2)", two), "S21(V2)");
-  assert.equal(twoPortIn("S21(V1)", { ...two, text: two.text.replace("* .net I(R1) V1", "* .net V(out) V1") }), "S21(V1)"); // (no Rout=: no load to refer to)
-  assert.equal(twoPortIn("S21(V1)", { ...two, text: two.text.replace("* .net I(R1) V1", "* .net I(R1) V1 Rin=75") }), "S21(V1)"); // (other reference impedances: not from one drive)
-  assert.equal(twoPortIn("Zin(I1)", { ...two, text: two.text.replace("* .net I(R1) V1", "* .net I(R1) I1") }), "Zin(I1)"); // (a current source: left, said)
+  assert.equal(twoPortIn("S21(V1)", { ...two, text: two.text.replace("* .net I(R1) V1 ; nomospice: two-port", "* .net V(out) V1 ; nomospice: two-port") }), "S21(V1)"); // (no Rout=: no load to refer to)
+  assert.equal(twoPortIn("S21(V1)", { ...two, text: two.text.replace("* .net I(R1) V1 ; nomospice: two-port", "* .net I(R1) V1 Rin=75 ; nomospice: two-port") }), "S21(V1)"); // (other reference impedances: not from one drive)
+  assert.equal(twoPortIn("Zin(I1)", { ...two, text: two.text.replace("* .net I(R1) V1 ; nomospice: two-port", "* .net I(R1) I1 ; nomospice: two-port") }), "Zin(I1)"); // (a current source: left, said)
   assert.equal(funcsIn("NF(V(n))", ".func NF(X) {x*X}"), "((V(n))*(V(n)))"); // (parameters in any case)
   assert.equal(funcsIn("g(1)", ".subckt amp a b\n.func g(x) {x*10}\n.ends amp"), "g(1)"); // (a subcircuit's .func is its own)
   assert.equal(funcsIn("V(out)/vt()", ".func vt() {boltz*300/echarge}"), "V(out)/(boltz*300/echarge)"); // (no parameters)
@@ -236,22 +236,24 @@ assert.equal(numInfo("1Meg", "Hz")!.text, "= 1MegHz"); // not "1M", the milli tr
   assert.equal(funcsIn("NF(V(n))", ".param Rs=50\n.func NF(x) {imag(Rs*x)}"), "(imag((50)*(V(n))))"); // (imag() is no probe)
   assert.equal(funcsIn("f(V(a))", ".func f(x) {x*2} $ note"), "((V(a))*2)"); // (a $ comment)
   assert.equal(twoPortIn("S21(V1)", { ...two, nets: [["0", "in"], ["out", "0"]] }), '(2*v("out")/(-1)*sqrt((50)/(50)))'); // (the source upside down: its EMF the other way)
-  const one = { ...two, text: two.text.replace("* .net I(R1) V1", "* .net V1") }; // (a one-port: Zin and S11)
+  const one = { ...two, text: two.text.replace("* .net I(R1) V1 ; nomospice: two-port", "* .net V1 ; nomospice: two-port") }; // (a one-port: Zin and S11)
   assert.equal(twoPortIn("Zin(V1)", one), '((v("in")-0)/(-I(V1)))');
   assert.equal(twoPortIn("S21(V1)", one), "S21(V1)");
   assert.equal(exprUnit("S21(V1)"), ""); assert.equal(exprUnit("Zin(V1)"), "Ω"); assert.equal(exprUnit("Zin(V1)/2"), "Ω"); // (db() of it: the dialog's rule)
-  const st = ".param Rs=50\n* .step param Rs list 50 100\n.func NF(x) {x/Rs}\n.func g(x) {x*2}";
+  const st = ".param Rs=50\n* .step param Rs list 50 100 (nomospice: one run per step)\n.func NF(x) {x/Rs}\n.func g(x) {x*2}";
   assert.equal(funcsIn("NF(V(n))+g(1)", st), "NF(V(n))+((1)*2)"); // (a .func over a stepped parameter: left …)
   assert.match(funcsLeft("NF(V(n))", st)!, /NF\(\): its \.func uses Rs/); // (… and said)
   assert.equal(funcsLeft("g(1)", st), null);
-  const st2 = ".param Rs=50 k={2*Rs}\n* .step dec param Rs 1 10k 10\n.func NF(x) {x*k}\n.func h(y) {NF(y)*2}";
+  assert.equal(funcsLeft("NF(V(n))", st.replace(" (nomospice: one run per step)", "")), null); // (a .step the user commented out: none)
+  assert.equal(twoPortIn("Zin(V1)", { ...two, text: "V1 V1_rser 0 AC 1\nRV1_rser in V1_rser 50\nR1 out 0 50\n* .net I(R1) V1" }), "Zin(V1)"); // (likewise a .net)
+  const st2 = ".param Rs=50 k={2*Rs}\n* .step dec param Rs 1 10k 10 (nomospice: one run per step)\n.func NF(x) {x*k}\n.func h(y) {NF(y)*2}";
   assert.match(funcsLeft("NF(V(n))", st2)!, /uses k \(of Rs\)/); // (a .step dec; through another parameter)
   assert.equal(funcsIn("h(V(n))", st2), "(NF((V(n)))*2)"); assert.match(funcsLeft(funcsIn("h(V(n))", st2), st2)!, /NF\(\)/); // (called by another .func)
   const pl = { ...two, text: two.text.replace("R1 out 0 50", ".param RL=50\nR1 out 0 {RL}") };
   assert.equal(twoPortIn("S21(V1)", pl), '(2*v("out")/(1)*sqrt((50)/(50)))'); // (a load of a .param value)
-  assert.equal(twoPortIn("S21(V1)", { ...pl, text: pl.text + "\n* .step param RL list 50 100" }), "S21(V1)"); // (one .step varies: not)
+  assert.equal(twoPortIn("S21(V1)", { ...pl, text: pl.text + "\n* .step param RL list 50 100 (nomospice: one run per step)" }), "S21(V1)"); // (one .step varies: not)
   assert.equal(funcsIn("vd(out,in)", ".func vd(a,b) {V(a)-V(b)}"), "(V(out)-V(in))"); // (a parameter inside a probe: the name as given)
-  assert.equal(twoPortIn("S21(V1)", { ...two, text: two.text.replace("* .net I(R1) V1", "* .net I(C1) V1") }), "S21(V1)"); // (a load that is no resistor)
+  assert.equal(twoPortIn("S21(V1)", { ...two, text: two.text.replace("* .net I(R1) V1 ; nomospice: two-port", "* .net I(C1) V1 ; nomospice: two-port") }), "S21(V1)"); // (a load that is no resistor)
   const pv = { ...two, text: two.text.replace("V1 V1_rser 0 AC 1", "V1 V1_rser 0 AC {Vac}") };
   assert.equal(twoPortIn("S21(V1)", pv), "S21(V1)"); // (a parameter as the drive: S21 not, …)
   assert.equal(twoPortIn("Zin(V1)", pv), '((v("in")-0)/(-I(V1)))'); // (… Zin and S11 still)

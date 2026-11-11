@@ -1179,6 +1179,9 @@ pub fn spice_tokens(s: &str) -> Vec<&str> {
     out
 }
 
+/// How a `.net` is kept in the netlist (a comment the plot reads; a `* .net` of the user's is none).
+const NET_MARK: &str = "; nomospice: two-port";
+
 /// `.tran … startup` leaves this line after its `.tran … uic`: `prepare` then ramps the deck's DC
 /// sources up (see [`ramped`]).
 const STARTUP: &str = "* startup: the DC sources ramped up from 0 over 20 us, no operating point (LTspice's .tran startup)"; // (ASCII: the deck is)
@@ -1217,10 +1220,11 @@ fn ramped(line: &str) -> Option<String> {
     }
     (value && ac_only).then(|| format!("{} {} {} {RAMP}{v}){}{}", t[0], t[1], t[2], rest.iter().map(|r| format!(" {r}")).collect::<String>(), &line[code.trim_end().len()..]))
 }
-/// How [`ramped`] writes a source's value, `PWL(0 0 20u 5)` (a `.step` of the source steps the 5).
-const RAMP: &str = "PWL(0 0 20u ";
-/// The value a ramp token ends at, `5` of `PWL(0 0 20u 5)`: one value, a braced expression or a
-/// number (a PWL of the user's own that starts alike, `PWL(0 0 20u 5 1m 3)`, is none).
+/// How [`ramped`] writes a source's value, `PWL(0 0 20e-6 5)` (a `.step` of the source steps the
+/// 5; written so, not `20u`, a PWL of the user's own is not taken for one).
+const RAMP: &str = "PWL(0 0 20e-6 ";
+/// The value a ramp token ends at, `5` of `PWL(0 0 20e-6 5)`: one value, a braced expression or a
+/// number (a PWL of the user's own that starts alike, `PWL(0 0 20e-6 5 1m 3)`, is none).
 fn ramp_end(token: &str) -> Option<&str> {
     token.strip_prefix(RAMP).and_then(|r| r.strip_suffix(')')).filter(|v| (v.starts_with('{') && v.ends_with('}')) || !v.contains([' ', '(']))
 }
@@ -1278,7 +1282,7 @@ fn directive(line: &str, warnings: &mut Vec<String>) -> Option<String> {
         }
         // LTspice's two-port analysis: kept as a comment, the plot makes S11(V1), S21(V1), Zin(V1)
         // of it (an .ac result's vectors)
-        Some(".net") => Some(format!("* {}", uncommented(line).trim())),
+        Some(".net") => Some(format!("* {} {NET_MARK}", uncommented(line).trim())),
         Some(".wave" | ".savebias" | ".loadbias") => {
             warnings.push(format!("`{line}` is LTspice-only and was skipped"));
             None
@@ -1957,6 +1961,12 @@ pub fn prepare(text: &str, dir: Option<&std::path::Path>, warnings: &mut Vec<Str
         let mut k = 0;
         while k < ls.len() {
             let l = &ls[k];
+            // (a source's statement only: the rest as it is, without looking ahead)
+            if k == 0 || l.skip || !l.low.trim_start().starts_with(['v', 'i']) {
+                s.push_str(piece(k));
+                k += 1;
+                continue;
+            }
             // (a source over + lines, comments between them allowed: ramped as one line, its
             // continuations then gone, the comments kept; each line's own comment off before)
             let mut n = k + 1;
@@ -1967,7 +1977,7 @@ pub fn prepare(text: &str, dir: Option<&std::path::Path>, warnings: &mut Vec<Str
                 n -= 1;
             }
             let joined = (k..n).filter(|&i| !ls[i].skip).map(|i| uncommented(ls[i].line).trim().trim_start_matches('+').trim()).collect::<Vec<_>>().join(" ");
-            match (k > 0 && !l.skip && !l.line.trim_start().starts_with('+')).then(|| ramped(&joined)).flatten() {
+            match ramped(&joined) {
                 Some(r) => {
                     s.push_str(&r);
                     s.push_str(&l.line[uncommented(l.line).trim_end().len()..]); // (the first line's comment)
@@ -2616,6 +2626,13 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
                 if skipped && l.starts_with('+') || l == ".end" || l.starts_with(".end ") {
                     continue;
                 }
+                // (a .net's + lines: onto its comment, before the mark; not onto the line before)
+                if l.starts_with('+') && directives.last().is_some_and(|d| d.ends_with(NET_MARK)) {
+                    let d = directives.last_mut().unwrap();
+                    d.truncate(d.len() - NET_MARK.len());
+                    d.push_str(&format!("{} {NET_MARK}", uncommented(line)[1..].trim()));
+                    continue;
+                }
                 let d = directive(line, &mut nl.warnings);
                 skipped = d.is_none();
                 directives.extend(d);
@@ -2782,7 +2799,7 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
         }
         // (nomospice's own subcircuit symbols: their default parameters belong to their own model,
         // opamp2's Slew=… are no TL072's; any other symbol's apply whatever its Value, as in LTspice)
-        let defaults = !own_model(&def.value.to_lowercase()) || def.value.eq_ignore_ascii_case(&model);
+        let defaults = !(builtin_symbol(&def.name) && own_model(&def.value.to_lowercase())) || def.value.eq_ignore_ascii_case(&model);
         if builtin_symbol(&def.name) && own_model(&model) {
             own_used.insert(model.clone());
         }
@@ -2794,7 +2811,8 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
         let extra: Vec<String> = ["Value2", "SpiceLine", "SpiceLine2"].iter()
             .filter_map(|k| attrs.get(*k).cloned().or_else(|| (*k == "SpiceLine" && defaults).then(|| {
                 // (a parameter given in Value is not followed by its default: ngspice takes the last)
-                let given: Vec<String> = spice_tokens(&value).iter().filter_map(|t| t.split_once('=').map(|(k, _)| k.to_ascii_lowercase())).collect();
+                let written = format!("{value} {}", attrs.get("Value2").map_or("", String::as_str)); // (Value2's too)
+                let given: Vec<String> = spice_tokens(&written).iter().filter_map(|t| t.split_once('=').map(|(k, _)| k.to_ascii_lowercase())).collect();
                 spice_tokens(&def.spice_line).into_iter().filter(|t| !t.split_once('=').is_some_and(|(k, _)| given.contains(&k.to_ascii_lowercase()))).collect::<Vec<_>>().join(" ")
             })))
             .filter(|s| !s.is_empty()).map(|s| one_line(&s)).collect();
@@ -3163,32 +3181,32 @@ mod tests {
         assert_eq!(t(".tran 0 1m 0 1u uic"), ".tran 1e-6 1m 0 1u uic");
         assert_eq!(t(".tran 0 {T} startup"), format!(".tran {{(T)/1000}} {{T}} uic\n{STARTUP}"));
         // startup: DC sources ramp up, functions and current sensors stay
-        assert_eq!(ramped("V1 vcc 0 12").as_deref(), Some("V1 vcc 0 PWL(0 0 20u 12)"));
-        assert_eq!(ramped("V2 a 0 DC {Vs} AC 1").as_deref(), Some("V2 a 0 PWL(0 0 20u {Vs}) AC 1"));
-        assert_eq!(ramped("I1 0 b 1m").as_deref(), Some("I1 0 b PWL(0 0 20u 1m)"));
+        assert_eq!(ramped("V1 vcc 0 12").as_deref(), Some("V1 vcc 0 PWL(0 0 20e-6 12)"));
+        assert_eq!(ramped("V2 a 0 DC {Vs} AC 1").as_deref(), Some("V2 a 0 PWL(0 0 20e-6 {Vs}) AC 1"));
+        assert_eq!(ramped("I1 0 b 1m").as_deref(), Some("I1 0 b PWL(0 0 20e-6 1m)"));
         assert_eq!(ramped("V3 a 0 SINE(0 1 1k)"), None);
-        assert_eq!(ramped("Vsense_r1 a b 0").as_deref(), Some("Vsense_r1 a b PWL(0 0 20u 0)")); // (stays 0; steppable)
+        assert_eq!(ramped("Vsense_r1 a b 0").as_deref(), Some("Vsense_r1 a b PWL(0 0 20e-6 0)")); // (stays 0; steppable)
         assert_eq!(ramped("R1 a b 1k"), None);
-        assert_eq!(ramped("V1 vcc 0 12 ; supply").as_deref(), Some("V1 vcc 0 PWL(0 0 20u 12) ; supply"));
+        assert_eq!(ramped("V1 vcc 0 12 ; supply").as_deref(), Some("V1 vcc 0 PWL(0 0 20e-6 12) ; supply"));
         assert_eq!(ramped("V1 in 0 DC 0 AC 1 SIN(0 1 1k)"), None); // (a waveform of its own after the AC part)
         // the ramp pass: not the title line; a stepped source without a DC value ramps too
         let p = prepare(&format!("Vref test 1 2\nV1 a 0 5\n.tran 1u 1m uic\n{STARTUP}\n.end\n"), None, &mut vec![]);
-        assert!(p.0.starts_with("Vref test 1 2\nV1 a 0 PWL(0 0 20u 5)\n"), "{}", p.0);
+        assert!(p.0.starts_with("Vref test 1 2\nV1 a 0 PWL(0 0 20e-6 5)\n"), "{}", p.0);
         let p = prepare(&format!("* t\nV1 vcc 0\n+ 12\nR1 vcc 0 1k\n.tran 1u 1m uic\n{STARTUP}\n.end\n"), None, &mut vec![]);
-        assert!(p.0.starts_with("* t\nV1 vcc 0 PWL(0 0 20u 12)\nR1 vcc 0 1k\n"), "{}", p.0); // (over + lines)
+        assert!(p.0.starts_with("* t\nV1 vcc 0 PWL(0 0 20e-6 12)\nR1 vcc 0 1k\n"), "{}", p.0); // (over + lines)
         let p = prepare(&format!("* t\nV1 vcc 0 ; supply\n* note\n+ 12 Rser=0.1\nR1 vcc 0 1k\n.tran 1u 1m uic\n{STARTUP}\n.end\n"), None, &mut vec![]);
-        assert!(p.0.starts_with("* t\nV1 vcc 0 PWL(0 0 20u 12) Rser=0.1 ; supply\n* note\nR1 vcc 0 1k\n"), "{}", p.0); // (a comment between, parameters after)
-        let out = parse_step(".step V1 1 5 1").unwrap().apply(&format!("V1 a 0 PWL(0 0 20u {{max(Va, Vb)}})\n.tran 1u 1m uic\n{STARTUP}\n"), 3.0).unwrap();
-        assert!(out.starts_with("V1 a 0 PWL(0 0 20u 3"), "{out}"); // (a braced end value stepped)
+        assert!(p.0.starts_with("* t\nV1 vcc 0 PWL(0 0 20e-6 12) Rser=0.1 ; supply\n* note\nR1 vcc 0 1k\n"), "{}", p.0); // (a comment between, parameters after)
+        let out = parse_step(".step V1 1 5 1").unwrap().apply(&format!("V1 a 0 PWL(0 0 20e-6 {{max(Va, Vb)}})\n.tran 1u 1m uic\n{STARTUP}\n"), 3.0).unwrap();
+        assert!(out.starts_with("V1 a 0 PWL(0 0 20e-6 3"), "{out}"); // (a braced end value stepped)
         // a root locus on the deck: its .pz sees the sources as they were
         let p = prepare(&format!("* t\nV1 a 0 5\nR1 a 0 1k\n.tran 1u 1m uic\n{STARTUP}\n.pz a 0 a 0 vol pol\n.end\n"), None, &mut vec![]);
         let pz = p.only_pz().0;
         assert!(pz.contains("\nV1 a 0 5\n") && pz.contains("\n* .tran 1u 1m uic\n") && !pz.contains("* .pz"), "{pz}");
-        assert_eq!(unramped(&format!("V1 a 0 PWL(0 0 20u 5 1m 3)\n{STARTUP}\n")).lines().next(), Some("V1 a 0 PWL(0 0 20u 5 1m 3)")); // (a PWL of the user's own stays)
-        assert_eq!(unramped(&format!("  Vref n 0 PWL(0 0 20u 2.5)\n{STARTUP}\n")).lines().next(), Some("  Vref n 0 2.5")); // (indented, a library's)
+        assert_eq!(unramped(&format!("V1 a 0 PWL(0 0 20e-6 5 1m 3)\n{STARTUP}\n")).lines().next(), Some("V1 a 0 PWL(0 0 20e-6 5 1m 3)")); // (a PWL of the user's own stays)
+        assert_eq!(unramped(&format!("  Vref n 0 PWL(0 0 20e-6 2.5)\n{STARTUP}\n")).lines().next(), Some("  Vref n 0 2.5")); // (indented, a library's)
         let st = parse_step(".step V1 1 5 1").unwrap();
         let out = st.apply(&format!("V1 in 0 AC 1\n.tran 1u 1m uic\n{STARTUP}\n"), 2.0).unwrap();
-        assert!(out.starts_with("V1 in 0 PWL(0 0 20u 2e0) AC 1\n"), "{out}");
+        assert!(out.starts_with("V1 in 0 PWL(0 0 20e-6 2e0) AC 1\n"), "{out}");
         // white(c*time): a TRNOISE source of its own, before .end; other arguments are said
         let mut w = vec![];
         let out = lt_white("B1 n 0 V=white(1e6*time)/10 + white( time*2k )\n.tran 1m\n.end ; done\n", &mut w).unwrap();
@@ -3212,12 +3230,13 @@ mod tests {
         assert!(out.contains("B1 a b V=white(time)") && out.contains(&format!("B2 m 0 V={w1}")) && w.is_empty(), "{out} {w:?}");
         // a .step of a source ramped up: the ramp's end
         let st = parse_step(".step V1 1 2 1").unwrap();
-        let su = format!("V1 a 0 PWL(0 0 20u 5)\n.tran 1m uic\n{STARTUP}\n");
-        assert!(st.apply(&su, 2.0).unwrap().starts_with("V1 a 0 PWL(0 0 20u 2"), "{:?}", st.apply(&su, 2.0));
+        let su = format!("V1 a 0 PWL(0 0 20e-6 5)\n.tran 1m uic\n{STARTUP}\n");
+        assert!(st.apply(&su, 2.0).unwrap().starts_with("V1 a 0 PWL(0 0 20e-6 2"), "{:?}", st.apply(&su, 2.0));
         // (the same PWL without startup is the user's own: a DC value is put in)
-        assert!(st.apply("V1 a 0 PWL(0 0 20u 5)\n", 2.0).unwrap().contains("PWL(0 0 20u 5)"));
+        assert!(st.apply("V1 a 0 PWL(0 0 20e-6 5)\n", 2.0).unwrap().contains("PWL(0 0 20e-6 5)"));
+        assert!(st.apply(&format!("V1 a 0 PWL(0 0 20u 5)\n{STARTUP}\n"), 2.0).unwrap().contains("DC 2e0 PWL(0 0 20u 5)")); // (written 20u: the user's own)
         // (a PWL of the user's own: no DC value to step, one put after the nodes)
-        assert!(st.apply("V1 a 0 PWL(0 0 20u 5 1m 3)\n", 2.0).unwrap().contains("PWL(0 0 20u 5 1m 3)"));
+        assert!(st.apply("V1 a 0 PWL(0 0 20e-6 5 1m 3)\n", 2.0).unwrap().contains("PWL(0 0 20e-6 5 1m 3)"));
         assert_eq!(t(".tran {T}"), ".tran {(T)/1000} {T}");
         assert_eq!(t(".tran 3m"), ".tran 3e-6 3m");
         assert_eq!(t(".tran 1m ; 10 cycles uic"), ".tran 1e-6 1m");
@@ -3352,7 +3371,7 @@ mod tests {
             SYMBOL bv 400 0 R0\nSYMATTR InstName B2\nSYMATTR Value V=white(1e5*time)\nTEXT 0 200 Left 2 !.tran 0 2m 0 1u startup\n";
         let nl = netlist_for_sim(&parse_asc(src), &mut Library::builtin());
         let deck = prepare(&nl.text, None, &mut vec![]);
-        assert!(nl.text.contains("B1 out 0 V=2*V(a)*V(a)") && deck.0.contains("V1 a 0 PWL(0 0 20u 3)") && deck.0.contains(" uic"), "{}", deck.0);
+        assert!(nl.text.contains("B1 out 0 V=2*V(a)*V(a)") && deck.0.contains("V1 a 0 PWL(0 0 20e-6 3)") && deck.0.contains(" uic"), "{}", deck.0);
         let run = crate::ngspice::run(&deck).unwrap();
         let tr = |e: &str| crate::ngspice::trace(e, &run.scale, run.id).unwrap();
         let out = tr("v(out)");
@@ -3374,7 +3393,10 @@ mod tests {
             SYMBOL res 96 0 R0\nSYMATTR InstName R2\nSYMATTR Value 50\nSYMBOL res 192 0 R0\nSYMATTR InstName R1\nSYMATTR Value 50\n\
             TEXT 0 200 Left 2 !.net I(R1) V1\nTEXT 0 232 Left 2 !.ac lin 2 1k 2k\n";
         let nl = netlist_for_sim(&parse_asc(src), &mut Library::builtin());
-        assert!(nl.text.contains("* .net I(R1) V1") && nl.text.contains("RV1_rser in V1_rser 50") && !nl.warnings.iter().any(|w| w.contains(".net")), "{}\n{:?}", nl.text, nl.warnings);
+        assert!(nl.text.contains(&format!("* .net I(R1) V1 {NET_MARK}")) && nl.text.contains("RV1_rser in V1_rser 50") && !nl.warnings.iter().any(|w| w.contains(".net")), "{}\n{:?}", nl.text, nl.warnings);
+        // (its + lines onto its comment, not onto the .ac before it)
+        let plus = netlist_for_sim(&parse_asc(&src.replace("!.net I(R1) V1", "!.ac dec 10 1 1Meg\\n.net I(R1) V1\\n+ Rout=75")), &mut Library::builtin());
+        assert!(plus.text.contains(&format!("* .net I(R1) V1 Rout=75 {NET_MARK}")) && plus.text.contains(".ac dec 10 1 1Meg\n"), "{}", plus.text);
         let run = crate::ngspice::run(&prepare(&nl.text, None, &mut vec![])).unwrap();
         let mag = |e: &str| { let t = crate::ngspice::trace(e, &run.scale, run.id).unwrap(); t.re[0].hypot(t.im.as_ref().map_or(0.0, |i| i[0])) };
         let zin = "((v(\"in\")-0)/(-i(v1)))";
@@ -3403,6 +3425,7 @@ mod tests {
         let x = |nl: &str| nl.lines().find(|l| l.starts_with("XU1")).unwrap_or("").to_string();
         assert_eq!(x(&own), "XU1 N001 N002 N003 N004 N005 opamp2 Slew=1Meg Aol=100K GBW=10Meg Vsat=0.1");
         assert_eq!(x(&tl), "XU1 N001 N002 N003 N004 N005 TL072");
+        assert_eq!(x(&op("SYMATTR Value opamp2\nSYMATTR Value2 Slew=1Meg\n")), "XU1 N001 N002 N003 N004 N005 opamp2 Slew=1Meg Aol=100K GBW=10Meg Vsat=0.1"); // (Value2's parameter too)
     }
 
     #[test]

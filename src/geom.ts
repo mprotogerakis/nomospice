@@ -391,8 +391,8 @@ export function funcsIn(expr: string, text: string): string {
     for (const d of defs) {
       // (all parameters at once: an argument's own letters are not a parameter's; any case, as SPICE)
       // (not a function's name: a parameter v is no V(out))
-      const re = new RegExp(`\\b(${d.params.join("|")})\\b(?!\\s*\\()`, "gi"), low = d.params.map((p) => p.toLowerCase());
       if (d.stepped) continue; // (see funcsLeft)
+      const re = new RegExp(`\\b(${d.params.join("|")})\\b(?!\\s*\\()`, "gi"), low = d.params.map((p) => p.toLowerCase());
       expr = replaceCalls(expr, d.name, (given) => {
         const args = given.length === 1 && !given[0] ? [] : given; // (`vt()`: none)
         if (args.length !== d.params.length) return null;
@@ -429,7 +429,8 @@ function deckDefs(text: string) {
   // (a parameter .step varies, and each whose value depends on one: a value per step, which one
   // expression cannot hold; by the name it is stepped as, said so)
   const roots = new Map<string, string>();
-  for (const m of top.matchAll(/^\*\s*\.step\s+(?:(?:dec|oct|lin)\s+)?param\s+(\w+)/gim)) roots.set(m[1].toLowerCase(), m[1]);
+  // (the netlist's own: a `* .step` the user commented out is none)
+  for (const m of top.matchAll(/^\*\s*\.step\s+(?:(?:dec|oct|lin)\s+)?param\s+(\w+).*\(nomospice: one run per step\)\s*$/gim)) roots.set(m[1].toLowerCase(), m[1]);
   const mentions = (body: string) => (roots.size ? body.replace(probe, "").match(new RegExp(`\\b(${[...roots.keys()].join("|")})\\b(?!\\s*\\()`, "i"))?.[1] : undefined);
   for (let round = 0; round < 8; round++) {
     let more = false;
@@ -444,7 +445,8 @@ function deckDefs(text: string) {
     if (!names) return body;
     for (let round = 0; round < 8; round++) {
       const before = body;
-      body = body.split(probe).reduce((o, seg, k) => o + seg.replace(names, (n) => `(${params.get(n.toLowerCase())})`) + (body.match(probe)?.[k] ?? ""), "");
+      const ps = body.match(probe) ?? [];
+      body = body.split(probe).reduce((o, seg, k) => o + seg.replace(names, (n) => `(${params.get(n.toLowerCase())})`) + (ps[k] ?? ""), "");
       if (body === before) break;
     }
     return body;
@@ -471,7 +473,7 @@ export const TWO_PORT_CALL = /\b(s11|s21|zin)\s*\(/i;
 
 /** `.net [<out>] <V source> …` as it stands in the run's netlist: the output (`I(R1)`, `V(out, ref)`
  *  with blanks; none: a one-port), the source (a voltage source), the rest (Rin=, Rout=). */
-export const NET_DIRECTIVE = /^\*\s*\.net\s+(?:([IV]\s*\([^)]*\)|\S+)\s+)?(V\S*)(.*)$/im;
+export const NET_DIRECTIVE = /^\*\s*\.net\s+(?:([IV]\s*\([^)]*\)|\S+)\s+)?(V\S*)(.*?)\s*; nomospice: two-port\s*$/im; // (the netlist's mark: a `* .net` of the user's is none)
 
 /** LTspice's `.net` (a comment in the run's netlist: ngspice has no such analysis) in a trace
  *  expression of an .ac result: Zin(V1), S11(V1) and S21(V1) of the two-port from source V1 to the
