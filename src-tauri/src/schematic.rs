@@ -993,7 +993,7 @@ struct DeckLine<'a> {
     low: String,
     /// outside `.subckt … .ends`
     top: bool,
-    /// a comment (`*`, `;`) or blank line (SPICE skips these, also between a line and its `+` continuations)
+    /// a comment (`*`, `;`, `#`, `$`) or blank line (SPICE skips these, also between a line and its `+` continuations)
     skip: bool,
     /// lowercase first token of the statement this line belongs to (`.param` for its `+` lines too)
     head: String,
@@ -1013,7 +1013,7 @@ fn deck_lines(text: &str) -> Vec<DeckLine<'_>> {
         let low = line.to_ascii_lowercase();
         let first = low.split_whitespace().next().unwrap_or("").to_string();
         match first.as_str() { ".subckt" => sub += 1, ".ends" => sub = (sub - 1).max(0), _ => {} } // a stray .ends must not hide the rest
-        let skip = first.is_empty() || first.starts_with(['*', ';']);
+        let skip = first.is_empty() || first.starts_with(['*', ';', '#', '$']);
         if !skip && !first.starts_with('+') {
             head = first.clone();
         }
@@ -1455,9 +1455,7 @@ impl Step {
                         let new = format!("{} DC {v:e}{}", &line.line[..at], &line.line[at..]);
                         // (under .tran startup: ramped up like the others)
                         let ramp = startup.then(|| ramped(&new)).flatten();
-                        let out = format!("{}{}{}", &text[..line.start], ramp.as_deref().unwrap_or(&new), &text[line.start + line.line.len()..]);
-                        // (ramped here: named on the mark too, so the root locus's deck takes it back)
-                        Ok(if ramp.is_some() { out.replacen(&format!("{STARTUP} ; ramped:"), &format!("{STARTUP} ; ramped: {low}"), 1) } else { out })
+                        Ok(format!("{}{}{}", &text[..line.start], ramp.as_deref().unwrap_or(&new), &text[line.start + line.line.len()..]))
                     }
                 }
             }
@@ -1954,7 +1952,7 @@ pub fn prepare(text: &str, dir: Option<&std::path::Path>, warnings: &mut Vec<Str
     // (with other analyses in the deck, as `nomospice --mcp` runs a schematic: their operating point
     // would see the ramps at 0; not ramped then, said)
     const OTHERS: [&str; 10] = [".op", ".ac", ".dc", ".noise", ".tf", ".pz", ".sens", ".disto", ".pss", ".sp"];
-    let others = out.contains(STARTUP) && deck_lines(&out).iter().any(|l| l.top && !l.skip && OTHERS.contains(&l.head.as_str()));
+    let others = out.contains(STARTUP) && deck_lines(&out).iter().any(|l| !l.skip && OTHERS.contains(&l.head.as_str()));
     if others {
         x.warnings.push("`.tran … startup` beside other analyses: the sources are not ramped (their operating point would see them at 0); run the .tran on its own".into());
     }
@@ -1999,7 +1997,7 @@ pub fn prepare(text: &str, dir: Option<&std::path::Path>, warnings: &mut Vec<Str
                 None => { s.push_str(piece(k)); k += 1; }
             }
         }
-        // (the sources ramped, named on the mark: only these are taken for ramps later, a PWL of
+        // (the sources ramped, named on the mark: only these are taken for ramps by a .step, a PWL of
         // the user's own that looks alike is none)
         s.replacen(STARTUP, &format!("{STARTUP} ; ramped: {}", names.join(" ")), 1)
     } else { out };
@@ -2008,7 +2006,7 @@ pub fn prepare(text: &str, dir: Option<&std::path::Path>, warnings: &mut Vec<Str
 
 /// LTspice's noise function `white(x)` (between -0.5 and 0.5, a new value at each integer x, in
 /// between interpolated) in a B source: ngspice has none, so `white(c*time)` becomes the voltage of
-/// a noise source of its own, ngspice's TRNOISE with the same rms (1/√12) and a new value every
+/// a noise source of its own, ngspice's TRNOISE with the same rms (1/√12, its σ 0.3235 as the clip leaves it) and a new value every
 /// 1/c seconds, kept within ±0.5 as LTspice's is. Other arguments, and white() in a subcircuit (its
 /// node would be local there), are said and left; a subcircuit with a `.func white` of its own is
 /// left alone. None: no white() in the deck.
@@ -2074,7 +2072,7 @@ fn lt_white(text: &str, warnings: &mut Vec<String>) -> Option<String> {
                         Some(s) => s.2,
                         None => {
                             let n = fresh();
-                            sources.push((c, format!("Vnmsp_white{n} nmsp_white{n} 0 dc 0 trnoise(0.288675 {:e} 0 0)", 1.0 / c), n));
+                            sources.push((c, format!("Vnmsp_white{n} nmsp_white{n} 0 dc 0 trnoise(0.323524 {:e} 0 0)", 1.0 / c), n));
                             n
                         }
                     };
@@ -2340,6 +2338,12 @@ impl Expander<'_> {
                     self.behavioural.push(m.clone());
                     self.diode = None; // once per model
                 }
+            }
+            // a comment line of LTspice's (`;`) or ngspice's (`#`, `$`) as SPICE's `* `: a + line after
+            // it then continues the statement before, as LTspice reads it (ngspice would join it to
+            // the comment), and every pass here agrees (`* `: `*#` would be a command line)
+            if t.starts_with([';', '#', '$']) {
+                self.out.push_str("* ");
             }
             // libngspice rejects the whole deck on non-ASCII bytes (`10µ`, `4.7μF`, `10kΩ`)
             self.out.extend(line.chars().filter(|c| *c != 'Ω').map(|c| match c {
@@ -3260,16 +3264,15 @@ mod tests {
         assert!(out.starts_with("V1 in 0 DC 2e0 AC 1\n"), "{out}");
         // (a `;` comment between a source and its + line)
         let p = prepare(&format!("* t\nV1 vcc 0\n; supply\n+ 12\n.tran 1u 1m uic\n{STARTUP}\n.end\n"), None, &mut vec![]);
-        assert!(p.0.starts_with("* t\nV1 vcc 0 PWL(0 0 20e-6 12)\n; supply\n"), "{}", p.0);
+        assert!(p.0.starts_with("* t\nV1 vcc 0 PWL(0 0 20e-6 12)\n* ; supply\n"), "{}", p.0);
         let st = parse_step(".step V1 1 5 1").unwrap();
         let out = st.apply(&format!("V1 in 0 AC 1\n.tran 1u 1m uic\n{STARTUP} ; ramped:\n"), 2.0).unwrap();
-        assert!(out.contains(&format!("{STARTUP} ; ramped: v1")), "{out}"); // (named on the mark)
         assert!(out.starts_with("V1 in 0 PWL(0 0 20e-6 2e0) AC 1\n"), "{out}");
         // white(c*time): a TRNOISE source of its own, before .end; other arguments are said
         let mut w = vec![];
         let out = lt_white("B1 n 0 V=white(1e6*time)/10 + white( time*2k )\n.tran 1m\n.end ; done\n", &mut w).unwrap();
         let (w1, w2) = ("max(min(v(nmsp_white1),0.5),-0.5)", "max(min(v(nmsp_white2),0.5),-0.5)");
-        assert!(out.starts_with(&format!("B1 n 0 V={w1}/10 + {w2}\n.tran 1m\nVnmsp_white1 nmsp_white1 0 dc 0 trnoise(0.288675 1e-6 0 0)\nVnmsp_white2 nmsp_white2 0 dc 0 trnoise(0.288675 5e-4 0 0)\n.end ; done")), "{out}");
+        assert!(out.starts_with(&format!("B1 n 0 V={w1}/10 + {w2}\n.tran 1m\nVnmsp_white1 nmsp_white1 0 dc 0 trnoise(0.323524 1e-6 0 0)\nVnmsp_white2 nmsp_white2 0 dc 0 trnoise(0.323524 5e-4 0 0)\n.end ; done")), "{out}");
         assert!(w.is_empty(), "{w:?}");
         let out = lt_white("B1 n 0 V=white(V(x))\n", &mut w).unwrap();
         assert!(out.contains("white(V(x))") && w.len() == 1, "{out} {w:?}");
@@ -3442,6 +3445,10 @@ mod tests {
         let n = tr("v(n)");
         let rms = (n.re.iter().map(|v| v * v).sum::<f64>() / n.re.len() as f64).sqrt();
         assert!((0.2..0.37).contains(&rms), "rms {rms}");
+        // a `;` comment line between a source and its + line: the source's value, as LTspice reads it
+        let run = crate::ngspice::run(&prepare("t\nV1 vcc 0\n; supply\n+ 12\nR1 vcc 0 1k\n.tran 1u 10u\n.end\n", None, &mut vec![])).unwrap();
+        let v = crate::ngspice::trace("v(vcc)", &run.scale, run.id).unwrap();
+        assert!((v.re.last().unwrap() - 12.0).abs() < 1e-9, "{:?}", v.re.last());
     }
 
     #[test]

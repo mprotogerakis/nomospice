@@ -304,7 +304,7 @@ async function fetchTrace(t: Trace): Promise<Trace> {
   if (!run) return { ...t, data: undefined, error: "no simulation results: run the simulation" };
   const nl = get().sim!.netlist; // (the one the results were computed with)
   const fs = funcsIn(t.expr, nl.text), pre = twoPortIn(fs, nl), expr = powersIn(pre, nl); // (withDefs, its .func step kept)
-  const left = funcsLeft(pre, nl.text); // (a .func not written out, called by the user or by another .func)
+  const left = funcsLeft(pre, nl.text); // (a parameter .step varies: in a .func, called by the user or another .func, or in the trace)
   if (left) return { ...t, data: undefined, error: left };
   const unknown = POWER_ANY.test(expr); // (P() of whatever: exprUnit's watts, so ours to explain)
   if ((t.power || expr !== pre || unknown) && !powerMode(get().sim)) return { ...t, data: undefined, error: "power: only in .tran and .dc results" };

@@ -384,7 +384,7 @@ function replaceCalls(expr: string, name: string, f: (args: string[]) => string 
  *  expressions know none. A call becomes its body, each parameter its argument in parentheses;
  *  calls of other functions in it too (10 rounds at most: a recursive one stops there). */
 export function funcsIn(expr: string, text: string): string {
-  const { funcs: defs, mentions } = deckDefs(text);
+  const defs = deckDefs(text).funcs;
   if (!defs.length) return expr;
   for (let round = 0; round < 10; round++) {
     const before = expr;
@@ -395,8 +395,7 @@ export function funcsIn(expr: string, text: string): string {
       const re = new RegExp(`\\b(${d.params.join("|")})\\b(?!\\s*\\()`, "gi"), low = d.params.map((p) => p.toLowerCase());
       expr = replaceCalls(expr, d.name, (given) => {
         const args = given.length === 1 && !given[0] ? [] : given; // (`vt()`: none)
-        // (a stepped .param as an argument: left, see funcsLeft)
-        if (args.length !== d.params.length || args.some((a) => mentions(a))) return null;
+        if (args.length !== d.params.length) return null;
         // (in parentheses, an expression; inside a probe call, V(a): the name as given, no parentheses)
         const arg = (p: string, bare: boolean) => (bare ? args[low.indexOf(p.toLowerCase())] : `(${args[low.indexOf(p.toLowerCase())]})`);
         const probes = d.body.match(PROBE) ?? [];
@@ -413,9 +412,9 @@ export function funcsIn(expr: string, text: string): string {
 type FuncDef = { name: string; params: string[]; body: string; withParams: (body: string) => string; stepped?: string };
 /** The top level's .func and .param definitions of a netlist (a subcircuit's are its own), parsed
  *  once per text (the traces of a run all ask). */
-let DEFS: { text: string; funcs: FuncDef[]; params: Map<string, string>; stepped: Map<string, string>; parts: Set<string>; lines: string[]; mentions: (s: string) => string | undefined } | null = null;
-/** A probe call in an expression, `V(out)`, `I(R1)`, `Ib(Q1)`: its argument is a name, no expression. */
-const PROBE = /\b(?:v|i|i[bcdegsx])\s*\([^)]*\)/gi;
+let DEFS: { text: string; funcs: FuncDef[]; params: Map<string, string>; stepped: Map<string, string>; parts: Set<string>; lines: string[]; steppedIn: (s: string) => string | undefined } | null = null;
+/** A probe call in an expression, `V(out)`, `I(R1)`, `Ib(Q1)`, `P(R1)`: its argument is a name, no expression. */
+const PROBE = /\b(?:v|i|p|i[bcdegsx])\s*\([^)]*\)/gi;
 function deckDefs(text: string) {
   if (DEFS?.text === text) return DEFS;
   let depth = 0;
@@ -444,16 +443,21 @@ function deckDefs(text: string) {
   for (const m of top.matchAll(/^\*\s*\.step\s+(?:(?:dec|oct|lin)\s+)?param\s+(\w+).*\(nomospice: one run per step\)\s*$/gim)) roots.set(m[1].toLowerCase(), m[1]);
   // (a part a .step varies itself, .step R1 …: its value differs per step too)
   const parts = new Set([...top.matchAll(/^\*\s*\.step\s+(?:(?:dec|oct|lin)\s+)?(?!param\b)(\w+).*\(nomospice: one run per step\)\s*$/gim)].map((m) => m[1].toLowerCase()));
-  const mentions = (body: string) => (roots.size ? body.replace(PROBE, "").match(new RegExp(`\\b(${[...roots.keys()].join("|")})\\b(?!\\s*\\()`, "i"))?.[1] : undefined);
+  let rootsRe: RegExp | null = null; // (built anew when roots grows)
+  const mentions = (body: string) => (roots.size ? body.replace(PROBE, "").match((rootsRe ??= new RegExp(`\\b(${[...roots.keys()].join("|")})\\b(?!\\s*\\()`, "i")))?.[1] : undefined);
   for (let round = 0; round < 8; round++) {
     let more = false;
     for (const [k, v] of params) {
       const hit = roots.has(k) ? undefined : mentions(v);
-      if (hit) roots.set(k, roots.get(hit.toLowerCase())!), (more = true);
+      if (hit) roots.set(k, roots.get(hit.toLowerCase())!), (rootsRe = null), (more = true);
     }
     if (!more) break;
   }
-  const names = params.size ? new RegExp(`\\b(${[...params.keys()].join("|")})\\b(?!\\s*\\()`, "gi") : null;
+  // (a stepped one, by the name .step varies: `K2 (of K)`)
+  const steppedIn = (body: string) => ((hit) => hit && (roots.get(hit.toLowerCase())!.toLowerCase() === hit.toLowerCase() ? hit : `${hit} (of ${roots.get(hit.toLowerCase())})`))(mentions(body));
+  // (not a stepped one: left as its name, funcsLeft says it)
+  const fixed = [...params.keys()].filter((k) => !roots.has(k));
+  const names = fixed.length ? new RegExp(`\\b(${fixed.join("|")})\\b(?!\\s*\\()`, "gi") : null;
   const withParams = (body: string) => {
     if (!names) return body;
     for (let round = 0; round < 8; round++) {
@@ -468,24 +472,20 @@ function deckDefs(text: string) {
     const body = m[3].replace(/^\{(.*)\}$/, "$1").replace(/^'(.*)'$/, "$1");
     const params = m[2].split(/[\s,]+/).filter(Boolean);
     // (its own parameters, R in .func par(R, x), are its own: no stepped .param of that name)
-    const hit = mentions(params.length ? body.replace(new RegExp(`\\b(${params.join("|")})\\b(?!\\s*\\()`, "gi"), " ") : body), root = hit && roots.get(hit.toLowerCase());
-    return { name: m[1], params, body, withParams, stepped: hit && (root?.toLowerCase() === hit.toLowerCase() ? hit : `${hit} (of ${root})`) };
+    return { name: m[1], params, body, withParams, stepped: steppedIn(params.length ? body.replace(new RegExp(`\\b(${params.join("|")})\\b(?!\\s*\\()`, "gi"), " ") : body) };
   });
-  DEFS = { text, funcs, params, stepped: roots, parts, lines: text.split("\n"), mentions };
+  DEFS = { text, funcs, params, stepped: roots, parts, lines: text.split("\n"), steppedIn };
   return DEFS;
 }
 
-/** Why a `.func` call in `expr` is not written out (see funcsIn): its body or an argument uses a
- *  parameter that `.step` varies, which one expression cannot hold per step. */
+/** Why a trace (written out by funcsIn) cannot be plotted: a `.func` whose body uses a parameter
+ *  that `.step` varies, or such a parameter in it otherwise, which one expression cannot hold per step. */
 export function funcsLeft(expr: string, text: string): string | null {
-  const { funcs, mentions } = deckDefs(text);
-  for (const d of funcs) {
-    let arg: string | undefined;
-    replaceCalls(expr, d.name, (args) => ((arg ??= args.map(mentions).find(Boolean)), null));
-    const uses = d.stepped && new RegExp(`\\b${d.name}\\s*\\(`, "i").test(expr) ? `its .func uses ${d.stepped}` : arg && `its argument uses ${arg}`;
-    if (uses) return `${d.name}(): ${uses}, which .step varies; a trace cannot take a value per step`;
-  }
-  return null;
+  const { funcs, stepped, steppedIn } = deckDefs(text);
+  if (!stepped.size) return null;
+  const d = funcs.find((d) => d.stepped && new RegExp(`\\b${d.name}\\s*\\(`, "i").test(expr));
+  const hit = d ? undefined : steppedIn(expr);
+  return d ? `${d.name}(): its .func uses ${d.stepped}, which .step varies; a trace cannot take a value per step` : hit ? `the trace uses ${hit}, which .step varies; a trace cannot take a value per step` : null;
 }
 
 /** A two-port quantity of `.net` in a trace expression: S21(V1), S11(V1), Zin(V1). */
