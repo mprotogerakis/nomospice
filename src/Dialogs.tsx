@@ -3,8 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { message, open } from "@tauri-apps/plugin-dialog";
 import type { Item, LibEntry, LibSource } from "./types";
-import { addTrace, analysisItem, commit, currentTab, fileName, forDoc, isSymbolDoc, loadSymbols, ngspiceExpr, placePart, placeSymbol, setPlot, setYAxis, useS } from "./store";
-import { defOf, NET_DIRECTIVE, pinLine, portOf, POWER_ANY, prefixOf, twoPortIn, vexpr } from "./geom";
+import { addTrace, analysisItem, commit, currentTab, fileName, forDoc, isSymbolDoc, loadSymbols, placePart, placeSymbol, setPlot, setYAxis, useS } from "./store";
+import { defOf, funcsIn, NET_DIRECTIVE, pinLine, portOf, POWER_ANY, powersIn, prefixOf, twoPortIn, vexpr } from "./geom";
 import { Button } from "./ui/button";
 import { closeDialog as close, Field, FIELD, Modal, numHelp, NumField, Rows, Select, TextField } from "./ui/dialog";
 import { SourceEditor } from "./SourceEditor";
@@ -420,7 +420,7 @@ function TraceDialog() {
     const f = e.match(/^(\w+)\((.*)\)$/);
     const unit = f && /^v?db$/i.test(f[1]) ? "dB" : f && /^(c?ph|vp)$/i.test(f[1]) ? "rad"
       : noise ? ((a) => (a === run?.scale ? xUnitOf(a) : /^\w+$/.test(a) ? noiseUnit(a) : ""))(f && /^(mag|vm|real|re|abs)$/i.test(f[1]) ? f[2] : e) // (a spectrum, or a magnitude of one)
-      : raw ? "" : ((u) => (u === "W" && run?.plot.startsWith("ac") && !POWER_ANY.test(e) ? "VA" : u))(exprUnit(ngspiceExpr(e.replace(/\b(s11|s21)\s*\([^)]*\)/gi, "1")), vectorUnit, xUnitOf(run?.scale ?? ""))); // (V·I in .ac: complex, VA; P() is watts, from a later .tran; .func, S21(V1) … as written out)
+      : raw ? "" : ((u) => (u === "W" && run?.plot.startsWith("ac") && !POWER_ANY.test(e) ? "VA" : u))(exprUnit(nl ? powersIn(funcsIn(e, nl.text), nl) : e, vectorUnit, xUnitOf(run?.scale ?? ""))); // (V·I in .ac: complex, VA; P() is watts, from a later .tran; .func, S21(V1) … as written out)
     if (e) addTrace(e, e, unit);
   };
   return (

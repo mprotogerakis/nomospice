@@ -1,6 +1,6 @@
 // Self-check of src/spice.ts (the form editors' SPICE parsing/formatting): node scripts/spice-check.ts
 import assert from "node:assert/strict";
-import { box, connectivity, dragPlan, expandPowers, funcsIn, hit, outline, POWER_CALL, powersIn, shifted, twoPortIn } from "../src/geom.ts";
+import { box, connectivity, dragPlan, expandPowers, funcsIn, funcsLeft, hit, outline, POWER_CALL, powersIn, shifted, twoPortIn } from "../src/geom.ts";
 import {
   tokens, formatAnalysis, formatIc, formatInclude, formatMeas, formatModel, formatParams, formatSource, numInfo, parseAnalysis,
   parseIc, parseInclude, parseMeas, parseModel, parseParams, parseSource, sample, si, spiceNum, directiveKind, analysisRoundTrips, analysisEditable, analysisOptions, analysisLineIndex, at, integrate, stripAnalyses, portablePaths, sourceRoundTrips,
@@ -236,6 +236,14 @@ assert.equal(numInfo("1Meg", "Hz")!.text, "= 1MegHz"); // not "1M", the milli tr
   assert.equal(funcsIn("NF(V(n))", ".param Rs=50\n.func NF(x) {imag(Rs*x)}"), "(imag((50)*(V(n))))"); // (imag() is no probe)
   assert.equal(funcsIn("f(V(a))", ".func f(x) {x*2} $ note"), "((V(a))*2)"); // (a $ comment)
   assert.equal(twoPortIn("S21(V1)", { ...two, nets: [["0", "in"], ["out", "0"]] }), '(2*v("out")/(-1)*sqrt((50)/(50)))'); // (the source upside down: its EMF the other way)
+  const one = { ...two, text: two.text.replace("* .net I(R1) V1", "* .net V1") }; // (a one-port: Zin and S11)
+  assert.equal(twoPortIn("Zin(V1)", one), '((v("in")-0)/(-I(V1)))');
+  assert.equal(twoPortIn("S21(V1)", one), "S21(V1)");
+  assert.equal(exprUnit("S21(V1)"), ""); assert.equal(exprUnit("Zin(V1)"), "Ω"); assert.equal(exprUnit("Zin(V1)/2"), "Ω"); // (db() of it: the dialog's rule)
+  const st = ".param Rs=50\n* .step param Rs list 50 100\n.func NF(x) {x/Rs}\n.func g(x) {x*2}";
+  assert.equal(funcsIn("NF(V(n))+g(1)", st), "NF(V(n))+((1)*2)"); // (a .func over a stepped parameter: left …)
+  assert.match(funcsLeft("NF(V(n))", st)!, /NF\(\): its \.func uses Rs/); // (… and said)
+  assert.equal(funcsLeft("g(1)", st), null);
   assert.equal(twoPortIn("S21(V1)", { ...two, text: two.text.replace("* .net I(R1) V1", "* .net I(C1) V1") }), "S21(V1)"); // (a load that is no resistor)
   const pv = { ...two, text: two.text.replace("V1 V1_rser 0 AC 1", "V1 V1_rser 0 AC {Vac}") };
   assert.equal(twoPortIn("S21(V1)", pv), "S21(V1)"); // (a parameter as the drive: S21 not, …)

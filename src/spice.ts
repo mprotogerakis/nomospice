@@ -646,6 +646,8 @@ export function exprUnit(expr: string, vector: (name: string) => string = () => 
     if (call && vector(`${id[0]}(${call}`)) return (i += call.length), dims(vector(`${id[0]}(${call}`));
     if (/^v[mri]?$/.test(name)) return raw(), dims("V");
     if (name === "p") return raw(), dims("W"); // a part's power, see expandPowers (geom.ts)
+    if (name === "s11" || name === "s21") return raw(), { d: [0, 0, 0] }; // a .net's, see twoPortIn (geom.ts): ratios
+    if (name === "zin") return raw(), dims("Ω");
     // (not ig(): also ngspice's group delay of a source current, in seconds)
     if (/^i[cbedsx]?$/.test(name)) return raw(), dims("A");
     const a = args()[0];

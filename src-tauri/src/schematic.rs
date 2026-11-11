@@ -1219,6 +1219,11 @@ fn ramped(line: &str) -> Option<String> {
 }
 /// How [`ramped`] writes a source's value, `PWL(0 0 20u 5)` (a `.step` of the source steps the 5).
 const RAMP: &str = "PWL(0 0 20u ";
+/// The value a ramp token ends at, `5` of `PWL(0 0 20u 5)`: one value, a braced expression or a
+/// number (a PWL of the user's own that starts alike, `PWL(0 0 20u 5 1m 3)`, is none).
+fn ramp_end(token: &str) -> Option<&str> {
+    token.strip_prefix(RAMP).and_then(|r| r.strip_suffix(')')).filter(|v| (v.starts_with('{') && v.ends_with('}')) || !v.contains([' ', '(']))
+}
 
 /// The deck's sources as before `.tran startup` ramped them: for a run of another analysis on it
 /// (a root locus's `.pz`), whose operating point would see them at 0.
@@ -1228,8 +1233,8 @@ fn unramped(text: &str) -> String {
     }
     text.split_inclusive('\n').map(|l| {
         let sp = token_spans(l);
-        match sp.get(3).filter(|&&(a, e)| l[a..e].starts_with(RAMP) && l[a..e].ends_with(')')) {
-            Some(&(a, e)) if l.starts_with(['V', 'v', 'I', 'i']) => format!("{}{}{}", &l[..a], &l[a + RAMP.len()..e - 1], &l[e..]),
+        match sp.get(3).and_then(|&(a, e)| ramp_end(&l[a..e]).map(|v| (a, e, v))) {
+            Some((a, e, v)) if l.starts_with(['V', 'v', 'I', 'i']) => format!("{}{v}{}", &l[..a], &l[e..]),
             _ => l.to_string(),
         }
     }).collect()
@@ -1437,7 +1442,7 @@ impl Step {
                 let sp = token_spans(line.line);
                 // (ramped up by .tran startup: the value the ramp ends at)
                 // (exactly the ramp, under .tran startup: a PWL of the user's own that starts alike is no ramp)
-                if let Some(&(a, e)) = sp.get(3).filter(|_| text.contains(STARTUP)).filter(|&&(a, e)| line.line[a..e].strip_prefix(RAMP).and_then(|r| r.strip_suffix(')')).is_some_and(|v| (v.starts_with('{') && v.ends_with('}')) || !v.contains([' ', '(']))) {
+                if let Some(&(a, e)) = sp.get(3).filter(|_| text.contains(STARTUP)).filter(|&&(a, e)| ramp_end(&line.line[a..e]).is_some()) {
                     return Ok(splice(text, &[(line.start + a + RAMP.len(), line.start + e - 1)], v));
                 }
                 // (the DC value where it is written: right after the nodes, or after a `DC` anywhere)
@@ -3178,6 +3183,7 @@ mod tests {
         let p = prepare(&format!("* t\nV1 a 0 5\nR1 a 0 1k\n.tran 1u 1m uic\n{STARTUP}\n.pz a 0 a 0 vol pol\n.end\n"), None, &mut vec![]);
         let pz = p.only_pz().0;
         assert!(pz.contains("\nV1 a 0 5\n") && pz.contains("\n* .tran 1u 1m uic\n") && !pz.contains("* .pz"), "{pz}");
+        assert_eq!(unramped(&format!("V1 a 0 PWL(0 0 20u 5 1m 3)\n{STARTUP}\n")).lines().next(), Some("V1 a 0 PWL(0 0 20u 5 1m 3)")); // (a PWL of the user's own stays)
         let st = parse_step(".step V1 1 5 1").unwrap();
         let out = st.apply(&format!("V1 in 0 AC 1\n.tran 1u 1m uic\n{STARTUP}\n"), 2.0).unwrap();
         assert!(out.starts_with("V1 in 0 PWL(0 0 20u 2e0) AC 1\n"), "{out}");

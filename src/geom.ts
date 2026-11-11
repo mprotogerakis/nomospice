@@ -392,6 +392,7 @@ export function funcsIn(expr: string, text: string): string {
       // (all parameters at once: an argument's own letters are not a parameter's; any case, as SPICE)
       // (not a function's name: a parameter v is no V(out))
       const re = new RegExp(`\\b(${d.params.join("|")})\\b(?!\\s*\\()`, "gi"), low = d.params.map((p) => p.toLowerCase());
+      if (d.stepped) continue; // (see funcsLeft)
       expr = replaceCalls(expr, d.name, (given) => {
         const args = given.length === 1 && !given[0] ? [] : given; // (`vt()`: none)
         return args.length !== d.params.length ? null : `(${d.withParams(d.params.length ? d.body.replace(re, (p) => `(${args[low.indexOf(p.toLowerCase())]})`) : d.body)})`;
@@ -404,7 +405,7 @@ export function funcsIn(expr: string, text: string): string {
 
 /** The top level's `.func`s of a netlist (a subcircuit's are its own), parsed once per text (the
  *  traces of a run all ask). */
-let FUNCS: { text: string; defs: { name: string; params: string[]; body: string; withParams: (body: string) => string }[] } | null = null;
+let FUNCS: { text: string; defs: { name: string; params: string[]; body: string; withParams: (body: string) => string; stepped?: string }[] } | null = null;
 function deckFuncs(text: string) {
   if (FUNCS?.text === text) return FUNCS.defs;
   let depth = 0;
@@ -414,6 +415,8 @@ function deckFuncs(text: string) {
   const values = new Map<string, string>();
   for (const m of top.matchAll(/^\s*\.param\s+(.+)$/gim))
     for (const p of m[1].matchAll(/(\w+)\s*=\s*(\{[^}]*\}|'[^']*'|\S+)/g)) values.set(p[1].toLowerCase(), p[2].replace(/^[{']|[}']$/g, ""));
+  // (a parameter .step varies: its value differs per step, one expression cannot hold them)
+  const stepped = [...top.matchAll(/^\*\s*\.step\s+param\s+(\w+)/gim)].map((m) => m[1]); // (as written: said by that name)
   const names = values.size ? new RegExp(`\\b(${[...values.keys()].join("|")})\\b(?!\\s*\\()`, "gi") : null;
   const probe = /\b(?:v|i|i[bcdegsx])\s*\([^)]*\)/gi; // (a node's name is no parameter's; imag() is no probe)
   const withParams = (body: string) => {
@@ -425,19 +428,28 @@ function deckFuncs(text: string) {
     }
     return body;
   };
-  const defs = [...top.matchAll(/^\s*\.func(?:tion)?\s+(\w+)\s*\(([^)]*)\)\s*=?\s*(.+?)\s*$/gim)].map((m) => ({
-    name: m[1], params: m[2].split(/[\s,]+/).filter(Boolean), body: m[3].replace(/^\{(.*)\}$/, "$1").replace(/^'(.*)'$/, "$1"), withParams,
-  }));
+  const defs = [...top.matchAll(/^\s*\.func(?:tion)?\s+(\w+)\s*\(([^)]*)\)\s*=?\s*(.+?)\s*$/gim)].map((m) => {
+    const body = m[3].replace(/^\{(.*)\}$/, "$1").replace(/^'(.*)'$/, "$1");
+    const uses = stepped.find((n) => new RegExp(`\\b${n}\\b(?!\\s*\\()`, "i").test(body.replace(probe, "")));
+    return { name: m[1], params: m[2].split(/[\s,]+/).filter(Boolean), body, withParams, stepped: uses };
+  });
   FUNCS = { text, defs };
   return defs;
+}
+
+/** Why a `.func` call in `expr` is not written out (see funcsIn): its body uses a parameter that
+ *  `.step` varies, which one expression cannot hold per step. */
+export function funcsLeft(expr: string, text: string): string | null {
+  const d = deckFuncs(text).find((d) => d.stepped && new RegExp(`\\b${d.name}\\s*\\(`, "i").test(expr));
+  return d ? `${d.name}(): its .func uses ${d.stepped}, which .step varies; a trace cannot take a value per step` : null;
 }
 
 /** A two-port quantity of `.net` in a trace expression: S21(V1), S11(V1), Zin(V1). */
 export const TWO_PORT_CALL = /\b(s11|s21|zin)\s*\(/i;
 
-/** `.net <out> <V source> …` as it stands in the run's netlist: the output (`I(R1)`, `V(out, ref)`
- *  with blanks), the source (a voltage source), the rest (Rin=, Rout=). */
-export const NET_DIRECTIVE = /^\*\s*\.net\s+([IV]\s*\([^)]*\)|\S+)\s+(V\S*)(.*)$/im;
+/** `.net [<out>] <V source> …` as it stands in the run's netlist: the output (`I(R1)`, `V(out, ref)`
+ *  with blanks; none: a one-port), the source (a voltage source), the rest (Rin=, Rout=). */
+export const NET_DIRECTIVE = /^\*\s*\.net\s+(?:([IV]\s*\([^)]*\)|\S+)\s+)?(V\S*)(.*)$/im;
 
 /** LTspice's `.net` (a comment in the run's netlist: ngspice has no such analysis) in a trace
  *  expression of an .ac result: Zin(V1), S11(V1) and S21(V1) of the two-port from source V1 to the
@@ -449,7 +461,7 @@ export function twoPortIn(expr: string, nl: Netlist): string {
   if (!TWO_PORT_CALL.test(expr)) return expr;
   const m = NET_DIRECTIVE.exec(nl.text);
   if (!m || /\b(rin|rout)\s*=/i.test(m[3])) return expr;
-  const [, spec, src] = m, out = spec.replace(/\s+/g, "");
+  const [, spec, src] = m, out = (spec ?? "").replace(/\s+/g, ""); // (`.net V1`, a one-port: Zin and S11 only)
   const lines = nl.text.split("\n");
   const line = (name: string) => lines.find((l) => l.split(/\s+/)[0]?.toLowerCase() === name.toLowerCase())?.split(/\s+/);
   const nets = (inst: string) => nl.nets[nl.insts.findIndex((x) => x.toLowerCase() === inst.toLowerCase())];

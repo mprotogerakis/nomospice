@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import type { GitStatus, Item, Netlist, Shape, Sim, SymbolDef, Trace, TraceData } from "./types";
-import { defOf, funcsIn, isNet, partCurrent, pinLine, POWER_ANY, POWER_CALL, powerExpr, powersIn, prefixOf, symKey, TWO_PORT_CALL, twoPortIn, vexpr, type Lib } from "./geom";
+import { defOf, funcsIn, funcsLeft, isNet, partCurrent, pinLine, POWER_ANY, POWER_CALL, powerExpr, powersIn, prefixOf, symKey, TWO_PORT_CALL, twoPortIn, vexpr, type Lib } from "./geom";
 import { ANALYSIS, ANY_ANALYSIS, analysisLineIndex, analysisOptions, continuation, parseAnalysis, stripAnalyses, type Analysis, type FftWindow } from "./spice";
 
 export type Tool =
@@ -303,11 +303,13 @@ async function fetchTrace(t: Trace): Promise<Trace> {
   const run = get().sim?.run;
   if (!run) return { ...t, data: undefined, error: "no simulation results: run the simulation" };
   const nl = get().sim!.netlist; // (the one the results were computed with)
+  const left = funcsLeft(t.expr, nl.text);
+  if (left) return { ...t, data: undefined, error: left };
   const pre = withDefs(t.expr, nl), expr = powersIn(pre, nl);
   const unknown = POWER_ANY.test(expr); // (P() of whatever: exprUnit's watts, so ours to explain)
   if ((t.power || expr !== pre || unknown) && !powerMode(get().sim)) return { ...t, data: undefined, error: "power: only in .tran and .dc results" };
   if (TWO_PORT_CALL.test(expr) || (TWO_PORT_CALL.test(t.expr) && !run.plot.startsWith("ac")))
-    return { ...t, data: undefined, error: "S11(V1), S21(V1), Zin(V1): an .ac result with .net I(R1) V1, the circuit terminated as measured: V1 with an Rser, R1 the load (S12, S22, Rin=, Rout= are not computed)" };
+    return { ...t, data: undefined, error: "S11(V1), S21(V1), Zin(V1): an .ac result with .net I(R1) V1 (or .net V1: Zin and S11), the circuit terminated as measured: V1 with an Rser, R1 the load (S12, S22, Rin=, Rout= are not computed)" };
   if (unknown) {
     const left = POWER_CALL.exec(expr)?.[1];
     return { ...t, data: undefined, error: `${left ? `P(${left}): no such two-pin part. ` : ""}P() is the power of a part with two pins, by its name: P(R1) (its menu's Plot power)` };
