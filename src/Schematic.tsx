@@ -22,7 +22,7 @@ type Drag =
   | { k: "move"; start: Pt; plan: (dx: number, dy: number) => Item[]; moved: boolean; index: number; at: Pt; base: Item[]; pin?: number }
   | { k: "box"; start: Pt; end: Pt }
   /** LTspice's differential probe: red on wire/label `from`, black on what the pointer is over */
-  | { k: "diff"; from: number; to: number; at: Pt; base: Item[]; sx: number; sy: number; moved: boolean };
+  | { k: "diff"; from: number; to: number; at: Pt; base: Item[]; targets: Item[]; sx: number; sy: number; moved: boolean };
 
 // SwiftFlow viewport constants (Models/Viewport.swift, FitViewOptions.swift)
 const MIN_ZOOM = 0.1, MAX_ZOOM = 6, FIT_PADDING = 80, FIT_MAX = 2.5, ZOOM_STEP = 1.2;
@@ -326,7 +326,7 @@ export const Schematic = memo(function Schematic() {
     return best;
   };
   // probing a part: the status bar names the current a click plots
-  const hoverCurrent = probing && !diffProbe && hover >= 0 && items[hover]?.t === "sym" && nets ? partCurrent(nets, hover, hoverPin) : "";
+  const hoverCurrent = probing && hover >= 0 && items[hover]?.t === "sym" && nets ? partCurrent(nets, hover, hoverPin) : "";
   useEffect(() => {
     useStatus.setState({ probe: hoverCurrent || null });
     return () => useStatus.setState({ probe: null });
@@ -508,6 +508,15 @@ export const Schematic = memo(function Schematic() {
         if (e.shiftKey || e.metaKey || e.ctrlKey) next = selSet.has(i) ? sel.filter((j) => j !== i) : [...sel, i];
         else if (!selSet.has(i)) next = [i];
         useS.setState({ sel: next });
+        // probing, a wire or label: a drag is LTspice's differential probe, a click its plain one
+        // (wires move with the move tool or a modifier; from ground: V(0,b)); it ends on a wire or
+        // label only, even under a text or a part
+        const it = items[i];
+        if (probing && tool.k === "select" && !mods.current && (it.t === "wire" || it.t === "flag")) {
+          const targets = items.map((x) => (x.t === "wire" || x.t === "flag" ? x : RAW));
+          drag.current = { k: "diff", from: i, to: i, at: p, base: items, targets, sx: e.clientX, sy: e.clientY, moved: false };
+          return;
+        }
         // the plan is built on the first move (a click or a probe never needs it); the move tool:
         // the selection alone, its wires left where they are
         let built: ReturnType<typeof dragPlan> | null = null;
@@ -517,10 +526,6 @@ export const Schematic = memo(function Schematic() {
           ? (dx: number, dy: number) => items.map((it, j) => (chosen.has(j) && isShape(it) ? shifted(it, dx, dy) : it))
           : (dx: number, dy: number) => (built ??= dragPlan(items, lib, chosen))(dx, dy);
         drag.current = { k: "move", start: g, plan, moved: false, index: i, at: [0, 0], base: items, pin: probing ? pinAt(items[i], p) : undefined };
-        // probing, a wire or label: a drag is LTspice's differential probe, a click its plain one
-        // (wires move with the move tool or a modifier; from ground: V(0,b))
-        const it = items[i];
-        if (probing && tool.k === "select" && !mods.current && (it.t === "wire" || it.t === "flag")) drag.current = { k: "diff", from: i, to: i, at: p, base: items, sx: e.clientX, sy: e.clientY, moved: false };
       } else if (e.shiftKey) {
         drag.current = { k: "box", start: p, end: p };
       } else {
@@ -553,8 +558,7 @@ export const Schematic = memo(function Schematic() {
     } else if (d.k === "diff") {
       if (Math.hypot(e.clientX - d.sx, e.clientY - d.sy) > 3) d.moved = true; // (less: a click, if a shaky one)
       if (!d.moved) return;
-      // only what it can end on, a wire or label, even under a text or a part
-      d.to = hit(items.map((it) => (it.t === "wire" || it.t === "flag" ? it : RAW)), lib, p, 6 / view.k, false);
+      d.to = hit(d.targets, lib, p, 6 / view.k, false);
       setHover(d.to);
       setDiffProbe({ from: d.from, a: d.at, b: p });
     } else (d.end = p), setBoxSel([d.start, p]);
@@ -586,7 +590,7 @@ export const Schematic = memo(function Schematic() {
       else if (!d.moved && probing && !mods.current && useS.getState().items === d.base) probe(d.base[d.index], false, d.pin);
     } else if (d?.k === "diff") {
       // released on a wire or label: V(from,to) (on ground or its own net, a click: V(from))
-      const to = d.base[d.moved ? d.to : d.from];
+      const to = d.base[d.to]; // (not moved: still `from`, a click)
       if ((to?.t === "wire" || to?.t === "flag") && useS.getState().items === d.base) probe(d.base[d.from], false, undefined, to);
     } else if (d?.k === "pan" && !d.moved) useS.setState({ sel: [] });
     else if (d?.k === "box") {

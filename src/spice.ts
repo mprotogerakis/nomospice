@@ -681,6 +681,8 @@ export const expandPowers = (expr: string, power: (name: string) => string) =>
   expr.replace(new RegExp(POWER_CALL.source, "gi"), (m, name: string) => ((p) => (p ? `(${p})` : m))(power(name)));
 /** A part's power in a trace expression, `P(R1)` (its name: group 1). */
 export const POWER_CALL = /\bP\s*\(\s*([^()\s,]+)\s*\)/i;
+/** P() of anything (exprUnit's watts): an expression that asks for a power. */
+export const POWER_ANY = /\bP\s*\(/i;
 
 // The spectrum of a transient trace (the plot's FFT view).
 

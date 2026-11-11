@@ -6,7 +6,7 @@
 #   scripts/docs-shots.sh                  every scene
 #   scripts/docs-shots.sh first-circuit    one scene
 #   scripts/docs-shots.sh ../site/docs/scenes/x.js   a scene of another site: its pictures in
-#                                          that site's docs/img/x/ (its docs folder served to the app)
+#                                          that site's docs/img/x/ (its scenes folder served to the app)
 #
 # Needs what `pnpm tauri dev` needs, and the ngspice library (NGSPICE_LIB, else the one
 # scripts/macos-release.sh builds); pngquant, if there, makes the pictures smaller:
@@ -33,6 +33,8 @@ for n in "$@"; do
       case $n in /*) ;; *) n=$start/$n ;; esac
       file=$(cd "$(dirname "$n")" && pwd)/$(basename "$n" .js)
       n=$(basename "$file")
+      # (in a scenes folder, else its pictures folder would be anywhere)
+      [ "$(basename "$(dirname "$file")")" = scenes ] && [ -f "$file.js" ] || { echo "not a scene in a scenes folder: $file.js" >&2; exit 1; }
       img=$(dirname "$(dirname "$file")")/img ;;
     *) file=$n; img=$PWD/docs/img ;;
   esac
