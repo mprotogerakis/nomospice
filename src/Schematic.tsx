@@ -35,7 +35,7 @@ const cursorSvg = (body: string) =>
 /** The voltage probe, its tip at (1, 23): red, or black for a differential probe's reference */
 const probeGlyph = (color: string) => `<path d='M2 22 L9 15' stroke='white' stroke-width='4'/><path d='M2 22 L9 15' stroke='${color}' stroke-width='2'/><path d='M8 16 L18 6 L21 9 L11 19 Z' fill='${color}' stroke='white' stroke-width='1'/>`;
 const PROBE_V = cursorSvg(probeGlyph("#e0573a"));
-const PROBE_I = cursorSvg("<circle cx='13' cy='11' r='7' fill='none' stroke='%23d9a441' stroke-width='3'/><path d='M2 22 L8 16' stroke='%23d9a441' stroke-width='2'/><path d='M13 6 v10 M10 13 l3 3 l3 -3' stroke='white' fill='none' stroke-width='1.5'/>".replaceAll("%23", "#"));
+const PROBE_I = cursorSvg("<circle cx='13' cy='11' r='7' fill='none' stroke='#d9a441' stroke-width='3'/><path d='M2 22 L8 16' stroke='#d9a441' stroke-width='2'/><path d='M13 6 v10 M10 13 l3 3 l3 -3' stroke='white' fill='none' stroke-width='1.5'/>");
 
 function arcPath(p: number[]) {
   const [x1, y1, x2, y2] = p;
@@ -595,7 +595,7 @@ export const Schematic = memo(function Schematic() {
     } else if (d?.k === "diff") {
       // released on a wire or label: V(from,to) (on ground or its own net, a click: V(from))
       const to = d.base[d.to]; // (not moved: still `from`, a click)
-      if ((to?.t === "wire" || to?.t === "flag") && useS.getState().items === d.base) probe(d.base[d.from], false, undefined, to);
+      if (to && useS.getState().items === d.base) probe(d.base[d.from], false, undefined, to);
     } else if (d?.k === "pan" && !d.moved) useS.setState({ sel: [] });
     else if (d?.k === "box") {
       const [a, b] = [d.start, d.end]; // from the ref: the last pointermove may not have rendered

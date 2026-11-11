@@ -539,7 +539,8 @@ export async function addTrace(label: string, expr: string, unit: string) {
 
 async function addTraceNow(label: string, expr: string, unit: string, power = false) {
   const { traces, sim } = get();
-  if (!sim?.run || isOp(sim) || traces.some((t) => t.expr === expr)) return;
+  // (ngspice reads names in any case: P(R1) and p(r1) are one trace)
+  if (!sim?.run || isOp(sim) || traces.some((t) => t.expr.toLowerCase() === expr.toLowerCase())) return;
   const gen = docGen;
   // a result tab brought back may hold a run ngspice no longer has (another tab or a root locus ran
   // since): run it again first (not from inside a run, e.g. simulate's auto-plot)
@@ -551,7 +552,7 @@ async function addTraceNow(label: string, expr: string, unit: string, power = fa
     if (seq !== runSeq) await idle(); // a run started meanwhile: evaluate again on its result
   } while (seq !== runSeq);
   if (gen !== docGen || !get().sim?.run || isOp(get().sim)) return;
-  const rest = get().traces.filter((x) => x.expr !== expr);
+  const rest = get().traces.filter((x) => x.expr.toLowerCase() !== expr.toLowerCase());
   set({ traces: [...rest, { ...t, slot: freeSlot(rest) }] }); // slot picked at insert time: concurrent adds differ
 }
 
@@ -590,7 +591,7 @@ export function ngspiceExpr(expr: string, nl = get().sim?.netlist) {
   if (!nl) return expr;
   const part = (n: string) => {
     const drawn = nl.insts.findIndex((_, j) => partCurrent(nl, j).toLowerCase() === `i(${n})`);
-    return drawn >= 0 ? drawn : nl.insts.findIndex((x) => x.toLowerCase() === n);
+    return drawn >= 0 ? drawn : nl.insts.findIndex((x) => x.toLowerCase() === n || x.toLowerCase() === `x${n}`); // (a subcircuit U1: XU1)
   };
   return expandPowers(expr, (n) => powerExpr(nl, part(n.toLowerCase())));
 }

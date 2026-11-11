@@ -168,7 +168,8 @@ function onDrawing(it: Extract<Item, { t: "draw" }>, p: Pt, tol: number) {
   return o.some((a, j) => j > 0 && distSeg(p, o[j - 1][0], o[j - 1][1], a[0], a[1]) <= tol);
 }
 /** Topmost item under p; flags > texts > wires > symbols > drawings (`drawings` false: none of
- *  them, while probing: no target there). */
+ *  them, while probing: no target there; `only`: just the items it accepts, a differential
+ *  probe's end a wire or label even under a text). */
 export function hit(items: Item[], lib: Lib, p: Pt, tol: number, drawings = true, only?: (it: Item) => boolean): number {
   let best = -1, rank = 9;
   const left = leftLabels(items);
