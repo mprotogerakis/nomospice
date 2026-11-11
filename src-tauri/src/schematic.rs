@@ -1229,7 +1229,9 @@ const RAMP: &str = "PWL(0 0 20e-6 ";
 /// The value a ramp token ends at, `5` of `PWL(0 0 20e-6 5)`: one value, a braced expression or a
 /// number (a PWL of the user's own that starts alike, `PWL(0 0 20e-6 5 1m 3)`, is none).
 fn ramp_end(token: &str) -> Option<&str> {
-    token.strip_prefix(RAMP).and_then(|r| r.strip_suffix(')')).filter(|v| (v.starts_with('{') && v.ends_with('}')) || !v.contains([' ', '(']))
+    // (one brace group, `{max(a, b)}`; `{a} 1m {b}` is a PWL of the user's own)
+    let braced = |v: &str| v.len() > 1 && v.starts_with('{') && v.ends_with('}') && !v[1..v.len() - 1].contains(['{', '}']);
+    token.strip_prefix(RAMP).and_then(|r| r.strip_suffix(')')).filter(|v| braced(v) || !v.contains([' ', '(']))
 }
 
 /// The deck's sources as before `.tran startup` ramped them: for a run of another analysis on it
@@ -1450,7 +1452,8 @@ impl Step {
                 let sp = token_spans(line.line);
                 // (ramped up by .tran startup: the value the ramp ends at)
                 // (exactly the ramp, under .tran startup: a PWL of the user's own that starts alike is no ramp)
-                if let Some(&(a, e)) = sp.get(3).filter(|_| text.contains(STARTUP)).filter(|&&(a, e)| ramp_end(&line.line[a..e]).is_some()) {
+                let startup = text.contains(STARTUP);
+                if let Some(&(a, e)) = sp.get(3).filter(|_| startup).filter(|&&(a, e)| ramp_end(&line.line[a..e]).is_some()) {
                     return Ok(splice(text, &[(line.start + a + RAMP.len(), line.start + e - 1)], v));
                 }
                 // (the DC value where it is written: right after the nodes, or after a `DC` anywhere)
@@ -1462,7 +1465,7 @@ impl Step {
                         let at = sp.get(2).ok_or_else(|| format!("`.step {n}`: {n} has no nodes"))?.1;
                         let new = format!("{} DC {v:e}{}", &line.line[..at], &line.line[at..]);
                         // (under .tran startup: ramped up like the others)
-                        let new = if text.contains(STARTUP) { ramped(&new).unwrap_or(new) } else { new };
+                        let new = if startup { ramped(&new).unwrap_or(new) } else { new };
                         Ok(format!("{}{new}{}", &text[..line.start], &text[line.start + line.line.len()..]))
                     }
                 }
@@ -2651,15 +2654,25 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
                     if let Some((k, raw)) = tran.as_mut().filter(|t| Some(t.0) == last) {
                         raw.push(' ');
                         raw.push_str(uncommented(line)[1..].trim());
-                        if let Some(d) = directive(raw, &mut nl.warnings) {
+                        // (read again whole: its warnings once)
+                        let mut w = vec![];
+                        if let Some(d) = directive(raw, &mut w) {
                             directives[*k] = d;
+                        }
+                        for m in w {
+                            if !nl.warnings.contains(&m) {
+                                nl.warnings.push(m);
+                            }
                         }
                         continue;
                     }
                 }
                 let d = directive(line, &mut nl.warnings);
                 skipped = d.is_none();
-                tran = (l.starts_with(".tran") && d.is_some()).then(|| (directives.len(), uncommented(line).trim_end().to_string()));
+                if !l.starts_with('*') {
+                    // (a comment between a .tran and its + lines leaves it the last)
+                    tran = (l.starts_with(".tran") && d.is_some()).then(|| (directives.len(), uncommented(line).trim_end().to_string()));
+                }
                 directives.extend(d);
             }
         }
@@ -2836,7 +2849,10 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
         let extra: Vec<String> = ["Value2", "SpiceLine", "SpiceLine2"].iter()
             .filter_map(|k| attrs.get(*k).cloned().or_else(|| (*k == "SpiceLine" && defaults).then(|| {
                 // (a parameter given in Value is not followed by its default: ngspice takes the last)
-                let written = format!("{value} {}", attrs.get("Value2").map_or("", String::as_str)); // (Value2's too)
+                let mut written = format!("{value} {}", attrs.get("Value2").map_or("", String::as_str)); // (Value2's too)
+                while written.contains(" =") || written.contains("= ") {
+                    written = written.replace(" =", "=").replace("= ", "="); // (`Slew = 1Meg` is one)
+                }
                 let given: Vec<String> = spice_tokens(&written).iter().filter_map(|t| t.split_once('=').map(|(k, _)| k.to_ascii_lowercase())).collect();
                 spice_tokens(&def.spice_line).into_iter().filter(|t| !t.split_once('=').is_some_and(|(k, _)| given.contains(&k.to_ascii_lowercase()))).collect::<Vec<_>>().join(" ")
             })))
@@ -3230,6 +3246,7 @@ mod tests {
         assert!(pz.contains("\nV1 a 0 5\n") && pz.contains("\n* .tran 1u 1m uic\n") && !pz.contains("* .pz") && !pz.contains(STARTUP), "{pz}");
         assert_eq!(unramped(&format!("V1 a 0 PWL(0 0 20e-6 5 1m 3)\n{STARTUP}\n")).lines().next(), Some("V1 a 0 PWL(0 0 20e-6 5 1m 3)")); // (a PWL of the user's own stays)
         assert_eq!(unramped(&format!("  Vref n 0 PWL(0 0 20e-6 2.5)\n{STARTUP}\n")).lines().next(), Some("  Vref n 0 2.5")); // (indented, a library's)
+        assert_eq!(ramp_end("PWL(0 0 20e-6 {a} 1m {b})"), None); // (braced points of the user's own)
         let st = parse_step(".step V1 1 5 1").unwrap();
         let out = st.apply(&format!("V1 in 0 AC 1\n.tran 1u 1m uic\n{STARTUP}\n"), 2.0).unwrap();
         assert!(out.starts_with("V1 in 0 PWL(0 0 20e-6 2e0) AC 1\n"), "{out}");
@@ -3427,6 +3444,9 @@ mod tests {
         assert!(between.text.contains(&format!("* .net I(R1) V1 Rout=75 {NET_MARK}")) && !between.text.contains("\n+ Rout"), "{}", between.text); // (a comment between)
         let tr = netlist_for_sim(&parse_asc(&src.replace("!.net I(R1) V1", "!.tran 0 10m\\n+ startup")), &mut Library::builtin());
         assert!(tr.text.contains(&format!(" uic\n{STARTUP}")) && !tr.text.contains("+ startup"), "{}", tr.text); // (startup on a + line)
+        let tc = netlist_for_sim(&parse_asc(&src.replace("!.net I(R1) V1", "!.tran 0 10m steady\\n* soft start\\n+ startup")), &mut Library::builtin());
+        assert!(tc.text.contains(&format!(" uic\n{STARTUP}")) && !tc.text.contains("+ startup"), "{}", tc.text); // (a comment between)
+        assert_eq!(tc.warnings.iter().filter(|w| w.contains("steady")).count(), 1, "{:?}", tc.warnings); // (said once)
         let run = crate::ngspice::run(&prepare(&nl.text, None, &mut vec![])).unwrap();
         let mag = |e: &str| { let t = crate::ngspice::trace(e, &run.scale, run.id).unwrap(); t.re[0].hypot(t.im.as_ref().map_or(0.0, |i| i[0])) };
         let zin = "((v(\"in\")-0)/(-i(v1)))";
@@ -3456,6 +3476,7 @@ mod tests {
         assert_eq!(x(&own), "XU1 N001 N002 N003 N004 N005 opamp2 Slew=1Meg Aol=100K GBW=10Meg Vsat=0.1");
         assert_eq!(x(&tl), "XU1 N001 N002 N003 N004 N005 TL072");
         assert_eq!(x(&op("SYMATTR Value opamp2\nSYMATTR Value2 Slew=1Meg\n")), "XU1 N001 N002 N003 N004 N005 opamp2 Slew=1Meg Aol=100K GBW=10Meg Vsat=0.1"); // (Value2's parameter too)
+        assert!(!x(&op("SYMATTR Value opamp2 Slew = 1Meg\n")).contains("Slew=10Meg")); // (blanks around =)
     }
 
     #[test]
