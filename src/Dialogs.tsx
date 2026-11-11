@@ -4,7 +4,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { message, open } from "@tauri-apps/plugin-dialog";
 import type { Item, LibEntry, LibSource } from "./types";
 import { addTrace, analysisItem, commit, currentTab, fileName, forDoc, isSymbolDoc, loadSymbols, ngspiceExpr, placePart, placeSymbol, setPlot, setYAxis, useS } from "./store";
-import { defOf, NET_DIRECTIVE, pinLine, portOf, POWER_ANY, prefixOf, vexpr } from "./geom";
+import { defOf, NET_DIRECTIVE, pinLine, portOf, POWER_ANY, prefixOf, twoPortIn, vexpr } from "./geom";
 import { Button } from "./ui/button";
 import { closeDialog as close, Field, FIELD, Modal, numHelp, NumField, Rows, Select, TextField } from "./ui/dialog";
 import { SourceEditor } from "./SourceEditor";
@@ -426,7 +426,7 @@ function TraceDialog() {
       </Field>
       <datalist id="vectors">
         {/* (.net I(R1) V1: its two-port quantities) */}
-        {(NET_DIRECTIVE.exec(useS.getState().sim?.netlist.text ?? "")?.slice(2, 3) ?? []).flatMap((s) => ["S21", "S11", "Zin"].map((f) => <option key={f} value={`${f}(${s})`} />))}
+        {((nl) => (NET_DIRECTIVE.exec(nl?.text ?? "")?.slice(2, 3) ?? []).flatMap((s) => ["S21", "S11", "Zin"].map((f) => `${f}(${s})`)).filter((e) => nl && twoPortIn(e, nl) !== e).map((e) => <option key={e} value={e} />))(useS.getState().sim?.netlist)}
         {vectors.filter((v) => v !== run?.scale).map((v) => (
           <option key={v} value={raw ? v : /^[\w+\-.]+#branch$/.test(v) ? `i(${v.replace("#branch", "")})` : /^[\w+\-.]+$/.test(v) ? vexpr(v) : v} />
         ))}

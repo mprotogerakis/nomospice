@@ -216,7 +216,7 @@ assert.equal(numInfo("1Meg", "Hz")!.text, "= 1MegHz"); // not "1M", the milli tr
   const two = { text: "V1 V1_rser 0 AC 1\nRV1_rser in V1_rser 50\nR1 out 0 50\n* .net I(R1) V1", nets: [["in", "0"], ["out", "0"]], insts: ["V1", "R1"], probes: [], pin_currents: [], sheets: [], warnings: [] };
   assert.equal(twoPortIn("Zin(V1)", two), '((v("in")-0)/(-I(V1)))');
   assert.equal(twoPortIn("S11(v1)", two), '((((v("in")-0)/(-I(V1)))-(50))/(((v("in")-0)/(-I(V1)))+(50)))');
-  assert.equal(twoPortIn("S21(V1)", two), '(2*(v("out")-0)/(1)*sqrt((50)/(50)))');
+  assert.equal(twoPortIn("S21(V1)", two), '(2*v("out")/(1)*sqrt((50)/(50)))');
   assert.equal(twoPortIn("S21(V2)", two), "S21(V2)");
   assert.equal(twoPortIn("S21(V1)", { ...two, text: two.text.replace("* .net I(R1) V1", "* .net V(out) V1") }), "S21(V1)"); // (no Rout=: no load to refer to)
   assert.equal(twoPortIn("S21(V1)", { ...two, text: two.text.replace("* .net I(R1) V1", "* .net I(R1) V1 Rin=75") }), "S21(V1)"); // (other reference impedances: not from one drive)
@@ -228,11 +228,15 @@ assert.equal(numInfo("1Meg", "Hz")!.text, "= 1MegHz"); // not "1M", the milli tr
   assert.equal(funcsIn("pw(2)", ".func pw(v) {v*V(out)}"), "((2)*V(out))"); // (a parameter v is no V())
   assert.equal(funcsIn("NF(V(n))", ".func NF(x)\n+ {10*log10(x)}"), "(10*log10((V(n))))"); // (a body on a + line)
   assert.equal(funcsIn("sq(NF(V(a)))", ".func sq(a,b) a*b\n.func NF(x) {10*log10(x)}"), "sq((10*log10((V(a)))))"); // (inside a call left as written)
+  assert.equal(funcsIn("NF(V(n))", ".param Rs=50 k={2*Rs}\n.func NF(x) {x/Rs+V(Rs)*k}"), "((V(n))/(50)+V(Rs)*(2*(50)))"); // (.param values in; a node Rs is none)
+  const flipped = { ...two, nets: [["in", "0"], ["0", "out"]] };
+  assert.equal(twoPortIn("S21(V1)", flipped), '(2*v("out")/(1)*sqrt((50)/(50)))'); // (the load drawn the other way: its node's voltage)
+  assert.equal(twoPortIn("S21(V1)", { ...two, text: two.text.replace("V1 V1_rser 0 AC 1", "V1 V1_rser 0 AC 1 90") }), "S21(V1)"); // (a phased drive: not)
   assert.equal(twoPortIn("S21(V1)", { ...two, text: two.text.replace("* .net I(R1) V1", "* .net I(C1) V1") }), "S21(V1)"); // (a load that is no resistor)
   const pv = { ...two, text: two.text.replace("V1 V1_rser 0 AC 1", "V1 V1_rser 0 AC {Vac}") };
   assert.equal(twoPortIn("S21(V1)", pv), "S21(V1)"); // (a parameter as the drive: S21 not, …)
   assert.equal(twoPortIn("Zin(V1)", pv), '((v("in")-0)/(-I(V1)))'); // (… Zin and S11 still)
-  assert.equal(twoPortIn("S21(V1)", { ...two, text: two.text.replace("V1 V1_rser 0 AC 1", "V1 V1_rser ac AC 2") }), '(2*(v("out")-0)/(2)*sqrt((50)/(50)))'); // (a node named ac)
+  assert.equal(twoPortIn("S21(V1)", { ...two, text: two.text.replace("V1 V1_rser 0 AC 1", "V1 V1_rser ac AC 2") }), '(2*v("out")/(2)*sqrt((50)/(50)))'); // (a node named ac)
   assert.equal(exprUnit("I(R1)-I(R2)"), "A");
   assert.equal(exprUnit("Ib(Q1)+Ic(Q1)"), "A");
   assert.equal(exprUnit("ig(v1)"), "", "group delay or a gate current: not guessed");

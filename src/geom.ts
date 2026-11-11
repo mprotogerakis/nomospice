@@ -394,7 +394,7 @@ export function funcsIn(expr: string, text: string): string {
       const re = new RegExp(`\\b(${d.params.join("|")})\\b(?!\\s*\\()`, "gi"), low = d.params.map((p) => p.toLowerCase());
       expr = replaceCalls(expr, d.name, (given) => {
         const args = given.length === 1 && !given[0] ? [] : given; // (`vt()`: none)
-        return args.length !== d.params.length ? null : `(${d.params.length ? d.body.replace(re, (p) => `(${args[low.indexOf(p.toLowerCase())]})`) : d.body})`;
+        return args.length !== d.params.length ? null : `(${d.withParams(d.params.length ? d.body.replace(re, (p) => `(${args[low.indexOf(p.toLowerCase())]})`) : d.body)})`;
       });
     }
     if (expr === before) break;
@@ -404,14 +404,29 @@ export function funcsIn(expr: string, text: string): string {
 
 /** The top level's `.func`s of a netlist (a subcircuit's are its own), parsed once per text (the
  *  traces of a run all ask). */
-let FUNCS: { text: string; defs: { name: string; params: string[]; body: string }[] } | null = null;
+let FUNCS: { text: string; defs: { name: string; params: string[]; body: string; withParams: (body: string) => string }[] } | null = null;
 function deckFuncs(text: string) {
   if (FUNCS?.text === text) return FUNCS.defs;
   let depth = 0;
   // (a line's `;` comment is not of its body; a body continued on + lines is one line)
   const top = text.split("\n").filter((l) => { const t = l.trim().toLowerCase(); depth += t.startsWith(".subckt") ? 1 : t.startsWith(".ends") ? -1 : 0; return depth === 0; }).map((l) => l.split(";")[0]).join("\n").replace(/\n\s*\+\s?/g, " ");
+  // (the top level's .param values too: a body's `Rs` means nothing to ngspice's plot expressions)
+  const values = new Map<string, string>();
+  for (const m of top.matchAll(/^\s*\.param\s+(.+)$/gim))
+    for (const p of m[1].matchAll(/(\w+)\s*=\s*(\{[^}]*\}|'[^']*'|\S+)/g)) values.set(p[1].toLowerCase(), p[2].replace(/^[{']|[}']$/g, ""));
+  const names = values.size ? new RegExp(`\\b(${[...values.keys()].join("|")})\\b(?!\\s*\\()`, "gi") : null;
+  const probe = /\b[vi]\w*\s*\([^)]*\)/gi; // (a node's name is no parameter's)
+  const withParams = (body: string) => {
+    if (!names) return body;
+    for (let round = 0; round < 8; round++) {
+      const before = body;
+      body = body.split(probe).reduce((o, seg, k, segs) => o + seg.replace(names, (n) => `(${values.get(n.toLowerCase())})`) + (body.match(probe)?.[k] ?? ""), "");
+      if (body === before) break;
+    }
+    return body;
+  };
   const defs = [...top.matchAll(/^\s*\.func(?:tion)?\s+(\w+)\s*\(([^)]*)\)\s*=?\s*(.+?)\s*$/gim)].map((m) => ({
-    name: m[1], params: m[2].split(/[\s,]+/).filter(Boolean), body: m[3].replace(/^\{(.*)\}$/, "$1").replace(/^'(.*)'$/, "$1"),
+    name: m[1], params: m[2].split(/[\s,]+/).filter(Boolean), body: m[3].replace(/^\{(.*)\}$/, "$1").replace(/^'(.*)'$/, "$1"), withParams,
   }));
   FUNCS = { text, defs };
   return defs;
@@ -444,18 +459,21 @@ export function twoPortIn(expr: string, nl: Netlist): string {
   const z0 = line(`R${src}_rser`)?.[3];
   // (the AC amplitude after the nodes, `AC 1`: a node named ac is none; a parameter: not here)
   const t = line(src)?.slice(3) ?? [], ac = t.findIndex((x) => /^ac$/i.test(x)), vs = ac >= 0 ? t[ac + 1] ?? "1" : "1";
+  const phased = ac >= 0 && !!t[ac + 2] && parseFloat(t[ac + 2]) !== 0; // (a drive of a phase: not folded in)
   const zin = `(${vin}/(-I(${src})))`; // (I(V1): into its + pin)
   const r = /^I\((\w+)\)$/i.exec(out);
   // (a resistor of a plain value as the load, an Rser of one as the source's: else no reference)
   const plain = (x?: string) => !!x && /^[\d.]+(e[-+]?\d+)?[a-zµ]*$/i.test(x);
-  const [vl, rl] = r && /^r/i.test(r[1]) && plain(line(r[1])?.[3]) ? [across(nets(r[1])), line(r[1])?.[3]] : ["", undefined];
+  // (the load to ground: its node's voltage, whichever way the resistor is drawn)
+  const loadV = (p?: string[]) => (p?.length !== 2 ? "" : p[0] === "0" ? vexpr(p[1]) : p[1] === "0" ? vexpr(p[0]) : across(p));
+  const [vl, rl] = r && /^r/i.test(r[1]) && plain(line(r[1])?.[3]) ? [loadV(nets(r[1])), line(r[1])?.[3]] : ["", undefined];
   let e = expr;
   for (const f of ["zin", "s11", "s21"]) {
     e = replaceCalls(e, f, ([s]) => s?.toLowerCase() !== src.toLowerCase() ? null
       : f === "zin" ? zin
       : !plain(z0) ? null
       : f === "s11" ? `((${zin}-(${z0}))/(${zin}+(${z0})))`
-      : vl && rl && plain(vs) ? `(2*${vl}/(${vs})*sqrt((${z0})/(${rl})))` : null); // (S21 alone needs the drive)
+      : vl && rl && plain(vs) && !phased ? `(2*${vl}/(${vs})*sqrt((${z0})/(${rl})))` : null); // (S21 alone needs the drive)
   }
   return e;
 }

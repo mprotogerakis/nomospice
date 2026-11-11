@@ -1917,11 +1917,19 @@ pub fn prepare(text: &str, dir: Option<&std::path::Path>, warnings: &mut Vec<Str
         // (not the title line, nor comments)
         let ls = deck_lines(&out);
         let mut s = String::with_capacity(out.len() + 64);
-        for (k, l) in ls.iter().enumerate() {
-            let piece = &out[l.start..ls.get(k + 1).map_or(out.len(), |n| n.start)];
-            match (k > 0 && !l.skip).then(|| ramped(l.line)).flatten() {
-                Some(r) => { s.push_str(&r); s.push_str(&piece[l.line.len()..]); }
-                None => s.push_str(piece),
+        let piece = |i: usize| &out[ls[i].start..ls.get(i + 1).map_or(out.len(), |n| n.start)];
+        let mut k = 0;
+        while k < ls.len() {
+            let l = &ls[k];
+            // (a source over + lines: ramped as one line, its continuations then gone)
+            let mut n = k + 1;
+            while n < ls.len() && ls[n].line.trim_start().starts_with('+') {
+                n += 1;
+            }
+            let joined = (k + 1..n).fold(l.line.to_string(), |acc, i| acc + " " + ls[i].line.trim_start()[1..].trim());
+            match (k > 0 && !l.skip && !l.line.trim_start().starts_with('+')).then(|| ramped(&joined)).flatten() {
+                Some(r) => { s.push_str(&r); s.push('\n'); k = n; }
+                None => { s.push_str(piece(k)); k += 1; }
             }
         }
         s
@@ -1950,7 +1958,7 @@ fn lt_white(text: &str, warnings: &mut Vec<String>) -> Option<String> {
             cur = Some(n);
         } else if ends(l) {
             cur = None;
-        } else if let (Some(s), true) = (&cur, !l.skip && deck_funcs(l.line, false).iter().any(|f| f == "white")) {
+        } else if let (Some(s), true) = (&cur, !l.skip && func_named(&l.low, "white")) {
             own_in.insert(s.clone());
         }
     }
@@ -2009,6 +2017,12 @@ fn lt_white(text: &str, warnings: &mut Vec<String>) -> Option<String> {
         warnings.push("`white()` only becomes noise in a behavioral source's own line (not on a + line or in a .func): ngspice has no white()".into());
     }
     Some(out)
+}
+
+/// Whether `low` (a lowercase line) is `.func name(…` (`.function` too).
+fn func_named(low: &str, name: &str) -> bool {
+    let t = low.trim_start();
+    [".function", ".func"].iter().any(|h| t.len() > h.len() && t.starts_with(h) && t[h.len()..].starts_with(char::is_whitespace) && t[h.len()..].trim_start().split(|c: char| c == '(' || c.is_whitespace()).next() == Some(name))
 }
 
 /// The names of the deck's `.func`s (`.function` too), lowercase; `top`: its top level's only (a
@@ -2723,7 +2737,11 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
             used_models.push(model);
         }
         let extra: Vec<String> = ["Value2", "SpiceLine", "SpiceLine2"].iter()
-            .filter_map(|k| attrs.get(*k).cloned().or_else(|| (*k == "SpiceLine" && defaults).then(|| def.spice_line.clone())))
+            .filter_map(|k| attrs.get(*k).cloned().or_else(|| (*k == "SpiceLine" && defaults).then(|| {
+                // (a parameter given in Value is not followed by its default: ngspice takes the last)
+                let given: Vec<String> = spice_tokens(&value).iter().filter_map(|t| t.split_once('=').map(|(k, _)| k.to_ascii_lowercase())).collect();
+                spice_tokens(&def.spice_line).into_iter().filter(|t| !t.split_once('=').is_some_and(|(k, _)| given.contains(&k.to_ascii_lowercase()))).collect::<Vec<_>>().join(" ")
+            })))
             .filter(|s| !s.is_empty()).map(|s| one_line(&s)).collect();
         // LTspice accepts Rser=... in Value too: value and extras go through one pass
         let (rest, parasitics) = lt_instance_params(prefix, &inst, &format!("{value} {}", extra.join(" ")), &mut nl.warnings);
@@ -3100,6 +3118,8 @@ mod tests {
         // the ramp pass: not the title line; a stepped source without a DC value ramps too
         let p = prepare(&format!("Vref test 1 2\nV1 a 0 5\n.tran 1u 1m uic\n{STARTUP}\n.end\n"), None, &mut vec![]);
         assert!(p.0.starts_with("Vref test 1 2\nV1 a 0 PWL(0 0 20u 5)\n"), "{}", p.0);
+        let p = prepare(&format!("* t\nV1 vcc 0\n+ 12\nR1 vcc 0 1k\n.tran 1u 1m uic\n{STARTUP}\n.end\n"), None, &mut vec![]);
+        assert!(p.0.starts_with("* t\nV1 vcc 0 PWL(0 0 20u 12)\nR1 vcc 0 1k\n"), "{}", p.0); // (over + lines)
         let st = parse_step(".step V1 1 5 1").unwrap();
         let out = st.apply(&format!("V1 in 0 AC 1\n.tran 1u 1m uic\n{STARTUP}\n"), 2.0).unwrap();
         assert!(out.starts_with("V1 in 0 PWL(0 0 20u 2e0) AC 1\n"), "{out}");
@@ -3294,7 +3314,7 @@ mod tests {
         let zin = "((v(\"in\")-0)/(-i(v1)))";
         assert!((mag(zin) - 100.0).abs() < 1e-6, "Zin {}", mag(zin));
         assert!((mag(&format!("(({zin}-(50))/({zin}+(50)))")) - 1.0 / 3.0).abs() < 1e-9);
-        assert!((mag("(2*(v(\"out\")-0)/(1)*sqrt((50)/(50)))") - 2.0 / 3.0).abs() < 1e-9);
+        assert!((mag("(2*v(\"out\")/(1)*sqrt((50)/(50)))") - 2.0 / 3.0).abs() < 1e-9);
     }
 
     #[test]
@@ -3312,6 +3332,11 @@ mod tests {
         assert!(op("").contains("opamp2 Aol=100K GBW=10Meg Slew=10Meg Vsat=0.1"), "{}", op(""));
         let tl = op("SYMATTR Value TL072\n");
         assert!(tl.lines().any(|l| l.starts_with("XU1") && l.trim_end().ends_with("TL072")), "{tl}");
+        // (a parameter given in Value: its default not after it)
+        let own = op("SYMATTR Value opamp2 Slew=1Meg\n");
+        let x = |nl: &str| nl.lines().find(|l| l.starts_with("XU1")).unwrap_or("").to_string();
+        assert_eq!(x(&own), "XU1 N001 N002 N003 N004 N005 opamp2 Slew=1Meg Aol=100K GBW=10Meg Vsat=0.1");
+        assert_eq!(x(&tl), "XU1 N001 N002 N003 N004 N005 TL072");
     }
 
     #[test]

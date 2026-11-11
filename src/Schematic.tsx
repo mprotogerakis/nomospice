@@ -83,7 +83,8 @@ function SymTexts({ def, it }: { def: SymbolDef; it: Extract<Item, { t: "sym" }>
         // (Left: the text runs from x to the right; turned or mirrored, where that right now points;
         // LTspice's VLeft …: upwards, the text turned; Top/Bottom: below/above the point)
         const v = /^v/i.test(just), j = just.replace(/^v/i, "");
-        const run = /^left/i.test(j) ? 1 : /^right/i.test(j) ? -1 : 0, ux = v ? run : xform(it.rot, run, 0)[0];
+        const run = /^left/i.test(j) ? 1 : /^right/i.test(j) ? -1 : 0, turned = v ? run : xform(it.rot, run, 0)[0];
+        const ux = turned === 0 ? run : turned; // (the run now vertical: as written)
         return (
           <text key={i} x={px} y={py} fontSize={8 + 3 * size} transform={v ? `rotate(-90 ${px} ${py})` : undefined}
             dominantBaseline={/^top/i.test(j) ? "hanging" : /^bottom/i.test(j) ? "auto" : "middle"}
