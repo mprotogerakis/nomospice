@@ -384,7 +384,7 @@ function replaceCalls(expr: string, name: string, f: (args: string[]) => string 
  *  expressions know none. A call becomes its body, each parameter its argument in parentheses;
  *  calls of other functions in it too (10 rounds at most: a recursive one stops there). */
 export function funcsIn(expr: string, text: string): string {
-  const defs = deckDefs(text).funcs;
+  const { funcs: defs, withParams } = deckDefs(text);
   if (!defs.length) return expr;
   for (let round = 0; round < 10; round++) {
     const before = expr;
@@ -400,7 +400,7 @@ export function funcsIn(expr: string, text: string): string {
         const arg = (p: string, bare: boolean) => (bare ? args[low.indexOf(p.toLowerCase())] : `(${args[low.indexOf(p.toLowerCase())]})`);
         const probes = d.body.match(PROBE) ?? [];
         const filled = d.params.length ? d.body.split(PROBE).reduce((o, seg, k) => o + seg.replace(re, (p) => arg(p, false)) + (probes[k]?.replace(re, (p) => arg(p, true)) ?? ""), "") : d.body;
-        return `(${d.withParams(filled)})`;
+        return `(${withParams(filled)})`;
       });
     }
     if (expr === before) break;
@@ -408,11 +408,11 @@ export function funcsIn(expr: string, text: string): string {
   return expr;
 }
 
-/** A .func: its body with its parameters, writing out the .params it uses; `stepped`: one .step varies. */
-type FuncDef = { name: string; params: string[]; body: string; withParams: (body: string) => string; stepped?: string };
+/** A .func: its name, parameters and body; `stepped`: a parameter .step varies that the body uses. */
+type FuncDef = { name: string; params: string[]; body: string; stepped?: string };
 /** The top level's .func and .param definitions of a netlist (a subcircuit's are its own), parsed
  *  once per text (the traces of a run all ask). */
-let DEFS: { text: string; funcs: FuncDef[]; params: Map<string, string>; stepped: Map<string, string>; parts: Set<string>; lines: string[]; steppedIn: (s: string) => string | undefined } | null = null;
+let DEFS: { text: string; funcs: FuncDef[]; params: Map<string, string>; stepped: Map<string, string>; parts: Set<string>; lines: string[]; steppedIn: (s: string) => string | undefined; withParams: (body: string) => string } | null = null;
 /** A probe call in an expression, `V(out)`, `I(R1)`, `Ib(Q1)`, `P(R1)`: its argument is a name, no expression. */
 const PROBE = /\b(?:v|i|p|i[bcdegsx])\s*\([^)]*\)/gi;
 function deckDefs(text: string) {
@@ -472,9 +472,9 @@ function deckDefs(text: string) {
     const body = m[3].replace(/^\{(.*)\}$/, "$1").replace(/^'(.*)'$/, "$1");
     const params = m[2].split(/[\s,]+/).filter(Boolean);
     // (its own parameters, R in .func par(R, x), are its own: no stepped .param of that name)
-    return { name: m[1], params, body, withParams, stepped: steppedIn(params.length ? body.replace(new RegExp(`\\b(${params.join("|")})\\b(?!\\s*\\()`, "gi"), " ") : body) };
+    return { name: m[1], params, body, stepped: steppedIn(params.length ? body.replace(new RegExp(`\\b(${params.join("|")})\\b(?!\\s*\\()`, "gi"), " ") : body) };
   });
-  DEFS = { text, funcs, params, stepped: roots, parts, lines: text.split("\n"), steppedIn };
+  DEFS = { text, funcs, params, stepped: roots, parts, lines: text.split("\n"), steppedIn, withParams };
   return DEFS;
 }
 

@@ -254,7 +254,7 @@ assert.equal(numInfo("1Meg", "Hz")!.text, "= 1MegHz"); // not "1M", the milli tr
   { const k = ".param K=1\n* .step param K list 1 2 (nomospice: one run per step)\n.func twice(x) {2*x}";
     assert.equal(funcsIn("twice(K)+twice(V(a))", k), "(2*(K))+(2*(V(a)))"); assert.match(funcsLeft(funcsIn("twice(K)", k), k)!, /uses K, which/); // (a stepped .param as an argument: left as its name, said)
     assert.match(funcsLeft("V(a)*K2", k + "\n.param K2={2*K}")!, /uses K2 \(of K\)/); assert.equal(funcsLeft("twice(P(K))+V(K)", k), null); } // (bare; a part or node of its name)
-  assert.equal(funcsLeft("par(V(a), V(b))", ".param R=1k\n* .step param R 1k 2k 1k (nomospice: one run per step)\n.func par(R, x) {R*x/(R+x)}"), null); // (its own parameter R)
+  { const r = ".param R=1k\n* .step param R 1k 2k 1k (nomospice: one run per step)\n.func par(R, x) {R*x/(R+x)}"; assert.equal(funcsLeft(funcsIn("par(V(a), V(b))", r), r), null); } // (its own parameter R, as the trace is fetched)
   assert.equal(funcsLeft("NF(V(n))", st.replace(" (nomospice: one run per step)", "")), null); // (a .step the user commented out: none)
   assert.equal(twoPortIn("Zin(V1)", { ...two, text: "V1 V1_rser 0 AC 1\nRV1_rser in V1_rser 50\nR1 out 0 50\n* .net I(R1) V1" }), "Zin(V1)"); // (likewise a .net)
   const st2 = ".param Rs=50 k={2*Rs}\n* .step dec param Rs 1 10k 10 (nomospice: one run per step)\n.func NF(x) {x*k}\n.func h(y) {NF(y)*2}";
