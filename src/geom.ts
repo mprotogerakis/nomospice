@@ -380,17 +380,18 @@ function replaceCalls(expr: string, name: string, f: (args: string[]) => string 
   return out + expr.slice(from);
 }
 
-/** The netlist's `.func f(x) {…}` and `.param` values in a trace expression, as LTspice's plot
- *  defs: ngspice's plot expressions know none. A call becomes its body, each parameter its argument
- *  in parentheses; calls of other functions in it too (10 rounds at most: a recursive one stops
- *  there); a parameter `.step` varies stays as its name (see funcsLeft). */
+/** The netlist's `.func f(x) {…}` in a trace expression, as LTspice's plot defs: ngspice's plot
+ *  expressions know none. A call becomes its body, each parameter its argument in parentheses;
+ *  calls of other functions in it too (10 rounds at most: a recursive one stops there). */
 export function funcsIn(expr: string, text: string): string {
-  const { funcs: defs, withParams } = deckDefs(text);
-  for (let round = 0; defs.length && round < 10; round++) {
+  const defs = deckDefs(text).funcs;
+  if (!defs.length) return expr;
+  for (let round = 0; round < 10; round++) {
     const before = expr;
     for (const d of defs) {
       // (all parameters at once: an argument's own letters are not a parameter's; any case, as SPICE)
       // (not a function's name: a parameter v is no V(out))
+      if (d.stepped) continue; // (see funcsLeft)
       const re = new RegExp(`\\b(${d.params.join("|")})\\b(?!\\s*\\()`, "gi"), low = d.params.map((p) => p.toLowerCase());
       expr = replaceCalls(expr, d.name, (given) => {
         const args = given.length === 1 && !given[0] ? [] : given; // (`vt()`: none)
@@ -399,19 +400,19 @@ export function funcsIn(expr: string, text: string): string {
         const arg = (p: string, bare: boolean) => (bare ? args[low.indexOf(p.toLowerCase())] : `(${args[low.indexOf(p.toLowerCase())]})`);
         const probes = d.body.match(PROBE) ?? [];
         const filled = d.params.length ? d.body.split(PROBE).reduce((o, seg, k) => o + seg.replace(re, (p) => arg(p, false)) + (probes[k]?.replace(re, (p) => arg(p, true)) ?? ""), "") : d.body;
-        return `(${filled})`;
+        return `(${d.withParams(filled)})`;
       });
     }
     if (expr === before) break;
   }
-  return withParams(expr);
+  return expr;
 }
 
-/** A .func: its name, parameters and body. */
-type FuncDef = { name: string; params: string[]; body: string };
+/** A .func: its body with its parameters, writing out the .params it uses; `stepped`: one .step varies. */
+type FuncDef = { name: string; params: string[]; body: string; withParams: (body: string) => string; stepped?: string };
 /** The top level's .func and .param definitions of a netlist (a subcircuit's are its own), parsed
  *  once per text (the traces of a run all ask). */
-let DEFS: { text: string; funcs: FuncDef[]; params: Map<string, string>; stepped: Map<string, string>; parts: Set<string>; lines: string[]; steppedIn: (s: string) => string | undefined; withParams: (s: string) => string } | null = null;
+let DEFS: { text: string; funcs: FuncDef[]; params: Map<string, string>; stepped: Map<string, string>; parts: Set<string>; lines: string[]; steppedIn: (s: string) => string | undefined } | null = null;
 /** A probe call in an expression, `V(out)`, `I(R1)`, `Ib(Q1)`, `P(R1)`: its argument is a name, no expression. */
 const PROBE = /\b(?:v|i|p|i[bcdegsx])\s*\([^)]*\)/gi;
 function deckDefs(text: string) {
@@ -470,17 +471,21 @@ function deckDefs(text: string) {
   const funcs = [...top.matchAll(/^\s*\.func(?:tion)?\s+(\w+)\s*\(([^)]*)\)\s*=?\s*(.+?)\s*$/gim)].map((m): FuncDef => {
     const body = m[3].replace(/^\{(.*)\}$/, "$1").replace(/^'(.*)'$/, "$1");
     const params = m[2].split(/[\s,]+/).filter(Boolean);
-    return { name: m[1], params, body };
+    // (its own parameters, R in .func par(R, x), are its own: no stepped .param of that name)
+    return { name: m[1], params, body, withParams, stepped: steppedIn(params.length ? body.replace(new RegExp(`\\b(${params.join("|")})\\b(?!\\s*\\()`, "gi"), " ") : body) };
   });
-  DEFS = { text, funcs, params, stepped: roots, parts, lines: text.split("\n"), steppedIn, withParams };
+  DEFS = { text, funcs, params, stepped: roots, parts, lines: text.split("\n"), steppedIn };
   return DEFS;
 }
 
-/** Why a trace (written out by funcsIn) cannot be plotted: it uses a parameter that `.step` varies
- *  (in a .func's body too), which one expression cannot hold per step. */
+/** Why a trace (written out by funcsIn) cannot be plotted: a `.func` whose body uses a parameter
+ *  that `.step` varies, or such a parameter in it otherwise, which one expression cannot hold per step. */
 export function funcsLeft(expr: string, text: string): string | null {
-  const hit = deckDefs(text).steppedIn(expr);
-  return hit ? `the trace uses ${hit}, which .step varies; a trace cannot take a value per step` : null;
+  const { funcs, stepped, steppedIn } = deckDefs(text);
+  if (!stepped.size) return null;
+  const d = funcs.find((d) => d.stepped && new RegExp(`\\b${d.name}\\s*\\(`, "i").test(expr));
+  const hit = d ? undefined : steppedIn(expr);
+  return d ? `${d.name}(): its .func uses ${d.stepped}, which .step varies; a trace cannot take a value per step` : hit ? `the trace uses ${hit}, which .step varies; a trace cannot take a value per step` : null;
 }
 
 /** A two-port quantity of `.net` in a trace expression: S21(V1), S11(V1), Zin(V1). */

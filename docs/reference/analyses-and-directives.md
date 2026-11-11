@@ -56,4 +56,4 @@ SPICE reads a number with a suffix, case-insensitively:
 
 ## Trace expressions
 
-*Add trace* takes ngspice expressions: `V(out)`, `V(a,b)`, `I(R1)`, `Ib(Q1)` (a pin's current), `P(R1)` (a two-pin part's power), arithmetic on them, functions such as `db()`, `ph()`, `group_delay()`, your own `.func` and `.param` values (not one a `.step` varies), and with `.net` the two-port's `S21(V1)`, `S11(V1)`, `Zin(V1)`. Units follow from the expression: a voltage times a current is in watts, an integral of power in joules.
+*Add trace* takes ngspice expressions: `V(out)`, `V(a,b)`, `I(R1)`, `Ib(Q1)` (a pin's current), `P(R1)` (a two-pin part's power), arithmetic on them, functions such as `db()`, `ph()`, `group_delay()`, your own `.func`, and with `.net` the two-port's `S21(V1)`, `S11(V1)`, `Zin(V1)`. Units follow from the expression: a voltage times a current is in watts, an integral of power in joules.

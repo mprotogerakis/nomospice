@@ -1239,6 +1239,13 @@ fn ramp_end(token: &str) -> Option<&str> {
     token.strip_prefix(RAMP).and_then(|r| r.strip_suffix(')')).filter(|v| braced(v) || !v.contains([' ', '(']))
 }
 
+/// A comment line of LTspice's (`;`) or ngspice's (`#`, `$`) as SPICE's `* …`: a + line after it
+/// then continues the statement before, as LTspice reads it (ngspice would join it to the comment),
+/// and every pass here reads it alike (`* `: `*#` would be a command line). None: no such line.
+fn starred(line: &str) -> Option<String> {
+    line.trim_start().strip_prefix([';', '#', '$']).map(|r| format!("* {}", r.trim()))
+}
+
 /// Translate LTspice-only directive syntax to something ngspice accepts.
 fn directive(line: &str, warnings: &mut Vec<String>) -> Option<String> {
     let mut tok = spice_tokens(line).into_iter();
@@ -2339,12 +2346,8 @@ impl Expander<'_> {
                     self.diode = None; // once per model
                 }
             }
-            // a comment line of LTspice's (`;`) or ngspice's (`#`, `$`) as SPICE's `* `: a + line after
-            // it then continues the statement before, as LTspice reads it (ngspice would join it to
-            // the comment), and every pass here agrees (`* `: `*#` would be a command line)
-            if t.starts_with([';', '#', '$']) {
-                self.out.push_str("* ");
-            }
+            let star = starred(t);
+            let line = star.as_deref().unwrap_or(line);
             // libngspice rejects the whole deck on non-ASCII bytes (`10µ`, `4.7μF`, `10kΩ`)
             self.out.extend(line.chars().filter(|c| *c != 'Ω').map(|c| match c {
                 'µ' | 'μ' => 'u',
@@ -2615,9 +2618,7 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
             let mut control = false; // a sheet's `.control` block: all of it goes
             let mut stepping = false; // ... of a .step: they belong to it
             for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
-                // (a comment line of LTspice's `;` or ngspice's `#`, `$`: SPICE's `* ` from here on, also
-                // between a statement and its + lines; `* `: `*#` would be a command line)
-                let star = line.strip_prefix([';', '#', '$']).map(|r| format!("* {}", r.trim()));
+                let star = starred(line);
                 let line = star.as_deref().unwrap_or(line);
                 let l = line.to_lowercase();
                 if sub {
@@ -3264,7 +3265,7 @@ mod tests {
         assert!(out.starts_with("V1 in 0 DC 2e0 AC 1\n"), "{out}");
         // (a `;` comment between a source and its + line)
         let p = prepare(&format!("* t\nV1 vcc 0\n; supply\n+ 12\n.tran 1u 1m uic\n{STARTUP}\n.end\n"), None, &mut vec![]);
-        assert!(p.0.starts_with("* t\nV1 vcc 0 PWL(0 0 20e-6 12)\n* ; supply\n"), "{}", p.0);
+        assert!(p.0.starts_with("* t\nV1 vcc 0 PWL(0 0 20e-6 12)\n* supply\n"), "{}", p.0);
         let st = parse_step(".step V1 1 5 1").unwrap();
         let out = st.apply(&format!("V1 in 0 AC 1\n.tran 1u 1m uic\n{STARTUP} ; ramped:\n"), 2.0).unwrap();
         assert!(out.starts_with("V1 in 0 PWL(0 0 20e-6 2e0) AC 1\n"), "{out}");
