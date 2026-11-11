@@ -5,7 +5,7 @@ import { useShallow } from "zustand/react/shallow";
 import { Maximize, Minus, Plus } from "lucide-react";
 import type { Item, Shape, SymbolDef } from "./types";
 import {
-  box, connectivity, defOf, pinLine, portOf, arcSpan, dragPlan, mirror, outline, pins, prefixOf, rotate, dropZeroWires, dropZeroWiresKeepSel, GRID, hit, isShape, labelRect, leftLabels, matrix, shifted, snap, symBox,
+  box, connectivity, defOf, pinLine, portOf, arcSpan, dragPlan, mirror, outline, pins, prefixOf, rotate, dropZeroWires, dropZeroWiresKeepSel, GRID, hit, isNet, isShape, labelRect, leftLabels, matrix, shifted, snap, symBox,
   textLines, union, xform, type Box, type Lib, type Pt,
 } from "./geom";
 import { canProbe, commit, currentNets, isSymbolDoc, nextInst, partCurrent, powerMode, powerName, probe, probeMode, simulate, useS, useStatus } from "./store";
@@ -26,8 +26,6 @@ type Drag =
 
 // SwiftFlow viewport constants (Models/Viewport.swift, FitViewOptions.swift)
 const MIN_ZOOM = 0.1, MAX_ZOOM = 6, FIT_PADDING = 80, FIT_MAX = 2.5, ZOOM_STEP = 1.2;
-/** What a differential probe ends on: a wire or label. */
-const isNet = (it: Item) => it.t === "wire" || it.t === "flag";
 const clampZoom = (k: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, k));
 
 const cursorSvg = (body: string) =>

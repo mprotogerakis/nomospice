@@ -1,4 +1,4 @@
-import type { Item, Shape, SymbolDef } from "./types";
+import type { Item, Netlist, Shape, SymbolDef } from "./types";
 
 export const GRID = 16;
 export type Pt = [number, number];
@@ -338,5 +338,44 @@ export const portOf = (extra?: string[]) => extra?.find((l) => l.startsWith("IOP
 
 /** ngspice voltage expression. Always quoted: ngspice misparses 3V3/5V and reads gt/and/not as operators. */
 export const vexpr = (net: string) => (net === "0" ? "0" : `v("${net}")`); // (ground: no vector)
+
+/** `P(R1)` in a trace expression: what `power(name)` gives for that part (the voltage across it
+ *  times its current); a name it gives nothing for stays as written. */
+export const expandPowers = (expr: string, power: (name: string) => string) =>
+  expr.replace(POWER_CALLS, (m, name: string) => ((p) => (p ? `(${p})` : m))(power(name)));
+/** A part's power in a trace expression, `P(R1)` (its name: group 1). */
+export const POWER_CALL = /\bP\s*\(\s*([^()\s,]+)\s*\)/i;
+const POWER_CALLS = new RegExp(POWER_CALL.source, "gi");
+/** P() of anything (exprUnit's watts): an expression that asks for a power. */
+export const POWER_ANY = /\bP\s*\(/i;
+
+/** A wire or a label: what has a net (a voltage to probe, a differential probe's end). */
+export const isNet = (it: Item | undefined) => it?.t === "wire" || it?.t === "flag";
+
+/** The name of part `i`'s current, which is also its trace expression (the backend reads I(R1),
+ *  Ib(Q1) …): into `pin` where that has a sensor, else the part's own (pin 1; a source's I(V1)).
+ *  "": none (a subcircuit's current is per pin). */
+export function partCurrent(nl: Netlist, i: number, pin?: number) {
+  const named = nl.pin_currents?.[i] ?? [];
+  return (pin != null && named[pin]) || (nl.probes[i] ? named[0] ?? "" : "");
+}
+
+/** Part `i`'s power if it has two pins: the voltage across it times the current into pin 1 —
+ *  positive where it takes power (a resistor), negative where it gives it (a source); else "". */
+export function powerExpr(nl: Netlist, i: number) {
+  const pins = nl.nets[i], cur = partCurrent(nl, i);
+  return cur && pins?.length === 2 ? `(${vexpr(pins[0])}-${vexpr(pins[1])})*${cur}` : "";
+}
+
+/** Each P(R1) in `expr` the product of voltage and current by netlist `nl` (a trace's P(R1)
+ *  follows the part when it is rewired): the part by the name it is drawn with (its current's,
+ *  I(D1)), else by its netlist's (XD1, a subcircuit U1's XU1). */
+export function powersIn(expr: string, nl: Netlist) {
+  const part = (n: string) => {
+    const drawn = nl.insts.findIndex((_, j) => partCurrent(nl, j).toLowerCase() === `i(${n})`);
+    return drawn >= 0 ? drawn : nl.insts.findIndex((x) => x.toLowerCase() === n || x.toLowerCase() === `x${n}`);
+  };
+  return expandPowers(expr, (n) => powerExpr(nl, part(n.toLowerCase())));
+}
 
 

@@ -602,7 +602,7 @@ const Readout = memo(function Readout({ traces, panes, xs, xUnit, plot, fixed, s
                 ...(t.pane != null && !fixed && !t.data?.im ? [{ label: moved(t) ? `Back to its own pane (${t.unit || "unitless"})` : `Not into the ${t.pane || "unitless"} pane any more`, hint: moved(t) ? undefined : "it would go there with traces of its own", run: () => setTracePane(t.expr, undefined) }] : []),
                 // (an .ac result: -dφ/dω, how long a band of frequencies takes through it)
                 ...(t.data?.im && plot.startsWith("ac") ? [{ label: "Plot group delay", hint: `τg(${t.label})`, run: () => void addTrace(`τg(${t.label})`, `group_delay(${t.expr})`, exprUnit(`group_delay(${t.expr})`, undefined, xUnit)) }] : []),
-                { label: "Copy expression", hint: t.expr, run: () => navigator.clipboard.writeText(ngspiceExpr(t.expr)) }, // (P(R1) written out)
+                ((x) => ({ label: "Copy expression", hint: x, run: () => navigator.clipboard.writeText(x) }))(ngspiceExpr(t.expr)), // (P(R1) written out)
                 { label: `Remove ${t.label}`, danger: true, run: () => removeTrace(t.expr) },
               ]))}>
               <td className="truncate pl-2 text-text">

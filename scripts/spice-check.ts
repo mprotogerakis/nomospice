@@ -1,10 +1,10 @@
 // Self-check of src/spice.ts (the form editors' SPICE parsing/formatting): node scripts/spice-check.ts
 import assert from "node:assert/strict";
-import { box, connectivity, dragPlan, hit, outline, shifted } from "../src/geom.ts";
+import { box, connectivity, dragPlan, expandPowers, hit, outline, POWER_CALL, powersIn, shifted } from "../src/geom.ts";
 import {
   tokens, formatAnalysis, formatIc, formatInclude, formatMeas, formatModel, formatParams, formatSource, numInfo, parseAnalysis,
   parseIc, parseInclude, parseMeas, parseModel, parseParams, parseSource, sample, si, spiceNum, directiveKind, analysisRoundTrips, analysisEditable, analysisOptions, analysisLineIndex, at, integrate, stripAnalyses, portablePaths, sourceRoundTrips,
-  exprUnit, expandPowers, POWER_CALL, unitTimes, fftSize, fftFreqs, spectrum, getParam, setParam, balanced, paramValue,
+  exprUnit, unitTimes, fftSize, fftFreqs, spectrum, getParam, setParam, balanced, paramValue,
 } from "../src/spice.ts";
 
 // numbers and the classic pitfalls
@@ -194,6 +194,13 @@ assert.equal(numInfo("1Meg", "Hz")!.text, "= 1MegHz"); // not "1M", the milli tr
   assert.equal(expandPowers("P (R1)", (n) => `x${n}`), "(xR1)"); // (a space before the parenthesis: as exprUnit reads it)
   assert.equal(POWER_CALL.exec("2*P (U1)")?.[1], "U1");
   assert.equal(POWER_CALL.test("vp(out)+exp(1)"), false);
+  // P() by netlist: R1 by its name, a diode D1 netlisted XD1 by its current I(D1), a two-pin
+  // subcircuit U1 (XU1) by its netlist name, a three-pin one not at all
+  const nl = { text: "", nets: [["a", "b"], ["c", "0"], ["x", "y", "z"], ["p", "q"]], insts: ["R1", "XD1", "XU2", "XU1"],
+    probes: ["I(R1)", "I(D1)", "", "Ix(U1:A)"], pin_currents: [["I(R1)", ""], ["I(D1)", ""], ["Ix(U2:1)", "", ""], ["Ix(U1:A)", ""]], sheets: [], warnings: [] };
+  assert.equal(powersIn("P(R1)+p(d1)", nl), '((v("a")-v("b"))*I(R1))+((v("c")-0)*I(D1))');
+  assert.equal(powersIn("P(U1)", nl), '((v("p")-v("q"))*Ix(U1:A))');
+  assert.equal(powersIn("P(U2)+P(R9)", nl), "P(U2)+P(R9)");
   assert.equal(exprUnit("I(R1)-I(R2)"), "A");
   assert.equal(exprUnit("Ib(Q1)+Ic(Q1)"), "A");
   assert.equal(exprUnit("ig(v1)"), "", "group delay or a gate current: not guessed");

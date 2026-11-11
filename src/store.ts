@@ -1,8 +1,8 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import type { GitStatus, Item, Netlist, Shape, Sim, SymbolDef, Trace, TraceData } from "./types";
-import { defOf, pinLine, prefixOf, symKey, vexpr, type Lib } from "./geom";
-import { ANALYSIS, ANY_ANALYSIS, analysisLineIndex, analysisOptions, continuation, expandPowers, parseAnalysis, POWER_ANY, POWER_CALL, stripAnalyses, type Analysis } from "./spice";
+import { defOf, isNet, partCurrent, pinLine, POWER_ANY, POWER_CALL, powerExpr, powersIn, prefixOf, symKey, vexpr, type Lib } from "./geom";
+import { ANALYSIS, ANY_ANALYSIS, analysisLineIndex, analysisOptions, continuation, parseAnalysis, stripAnalyses, type Analysis } from "./spice";
 
 export type Tool =
   | { k: "select" }
@@ -292,10 +292,10 @@ function freeSlot(traces: Trace[]) {
 async function fetchTrace(t: Trace): Promise<Trace> {
   const run = get().sim?.run;
   if (!run) return { ...t, data: undefined, error: "no simulation results: run the simulation" };
-  const nl = get().sim!.netlist; // (the one the results were computed with)
-  if ((t.power || POWER_ANY.test(t.expr)) && !powerMode(get().sim)) return { ...t, data: undefined, error: "power: only in .tran and .dc results" };
-  const expr = ngspiceExpr(t.expr, nl);
-  if (POWER_ANY.test(expr)) { // (P() of whatever: exprUnit's watts, so ours to explain)
+  const expr = ngspiceExpr(t.expr, get().sim!.netlist); // (the one the results were computed with)
+  const unknown = POWER_ANY.test(expr); // (P() of whatever: exprUnit's watts, so ours to explain)
+  if ((t.power || expr !== t.expr || unknown) && !powerMode(get().sim)) return { ...t, data: undefined, error: "power: only in .tran and .dc results" };
+  if (unknown) {
     const left = POWER_CALL.exec(expr)?.[1];
     return { ...t, data: undefined, error: `${left ? `P(${left}): no such two-pin part. ` : ""}P() is the power of a part with two pins, by its name: P(R1) (its menu's Plot power)` };
   }
@@ -574,38 +574,16 @@ export function canProbe(target: Item | undefined, pin?: number) {
   // (without one: a subcircuit of more than two pins has currents per pin only)
   const def = target.t === "sym" ? defOf(s.lib, target) : undefined;
   const part = target.t === "sym" && (nets ? !!partCurrent(nets, i, pin) : !!def && (pin != null || !(prefixOf(target, def) === "X" && def.pins.length > 2)));
-  return ((target.t === "wire" || target.t === "flag") && !ground) || part;
+  return (isNet(target) && !ground) || part;
 }
 
-/** Part `i`'s power if it has two pins: the voltage across it times the current into pin 1 —
- *  positive where it takes power (a resistor), negative where it gives it (a source); else "". */
-function powerExpr(nl: Netlist, i: number) {
-  const pins = nl.nets[i], cur = partCurrent(nl, i);
-  return cur && pins?.length === 2 ? `(${vexpr(pins[0])}-${vexpr(pins[1])})*${cur}` : "";
-}
-
-/** `expr` as ngspice reads it: each P(R1) the product of voltage and current, by the netlist the
- *  results were computed with (a trace's P(R1) follows the part when it is rewired). P(D1) by the
- *  name the part is drawn with (its current's, I(D1)), else by its netlist's (XD1). */
-export function ngspiceExpr(expr: string, nl = get().sim?.netlist) {
-  if (!nl) return expr;
-  const part = (n: string) => {
-    const drawn = nl.insts.findIndex((_, j) => partCurrent(nl, j).toLowerCase() === `i(${n})`);
-    return drawn >= 0 ? drawn : nl.insts.findIndex((x) => x.toLowerCase() === n || x.toLowerCase() === `x${n}`); // (a subcircuit U1: XU1)
-  };
-  return expandPowers(expr, (n) => powerExpr(nl, part(n.toLowerCase())));
-}
+/** `expr` as ngspice reads it, by the netlist the results were computed with (see powersIn). */
+export const ngspiceExpr = (expr: string, nl = get().sim?.netlist) => (nl ? powersIn(expr, nl) : expr);
 
 /** A two-pin part's power by the name of its current: I(D1) -> P(D1). */
 export const powerName = (current: string) => current.replace(/^I/, "P");
 
-/** The name of part `i`'s current, which is also its trace expression (the backend reads I(R1),
- *  Ib(Q1) …): into `pin` where that has a sensor, else the part's own (pin 1; a source's I(V1)).
- *  "": none (a subcircuit's current is per pin). */
-export function partCurrent(nl: Netlist, i: number, pin?: number) {
-  const named = nl.pin_currents?.[i] ?? [];
-  return (pin != null && named[pin]) || (nl.probes[i] ? named[0] ?? "" : "");
-}
+export { partCurrent };
 
 /** LTspice probe: wire/label -> V(net), part -> current. Re-runs first if the results are stale,
  *  so net names always come from the netlist the results were computed with. `ref`: the black

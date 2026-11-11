@@ -31,7 +31,7 @@ for n in "$@"; do
   case $n in
     */*) # (a scene file: absolute, without .js, for the app; the pictures beside its scenes folder)
       case $n in /*) ;; *) n=$start/$n ;; esac
-      file=$(cd "$(dirname "$n")" && pwd)/$(basename "$n" .js)
+      file=$(cd "$(dirname "$n")" && pwd -P)/$(basename "$n" .js) # (-P: vite serves the real path)
       n=$(basename "$file")
       # (in a scenes folder, else its pictures folder would be anywhere)
       [ "$(basename "$(dirname "$file")")" = scenes ] && [ -f "$file.js" ] || { echo "not a scene in a scenes folder: $file.js" >&2; exit 1; }
