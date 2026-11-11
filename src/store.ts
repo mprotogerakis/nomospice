@@ -589,8 +589,8 @@ export const powerName = (current: string) => current.replace(/^I/, "P");
  *  probe of a differential one (another wire/label), V(net,ref); on ground or the same net: V(net). */
 export async function probe(target: Item, power = false, pin?: number, ref?: Item) {
   // only things that can be plotted are worth a re-simulation (ground: as a differential probe's
-  // red end, its black one elsewhere, as far as the nets are known)
-  if (!canProbe(target, pin) && !(ref && ref !== target && currentNets(get()) && canProbe(ref))) return;
+  // red end, its black one elsewhere; nets not known yet after an edit: the re-run tells)
+  if (!canProbe(target, pin) && !(ref && ref !== target && canProbe(ref))) return;
   await idle();
   if (get().stale) await simulate();
   const { sim, items, stale } = get();
