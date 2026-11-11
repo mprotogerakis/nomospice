@@ -415,7 +415,7 @@ function deckFuncs(text: string) {
   for (const m of top.matchAll(/^\s*\.param\s+(.+)$/gim))
     for (const p of m[1].matchAll(/(\w+)\s*=\s*(\{[^}]*\}|'[^']*'|\S+)/g)) values.set(p[1].toLowerCase(), p[2].replace(/^[{']|[}']$/g, ""));
   const names = values.size ? new RegExp(`\\b(${[...values.keys()].join("|")})\\b(?!\\s*\\()`, "gi") : null;
-  const probe = /\b[vi]\w*\s*\([^)]*\)/gi; // (a node's name is no parameter's)
+  const probe = /\b(?:v|i|i[bcdegsx])\s*\([^)]*\)/gi; // (a node's name is no parameter's; imag() is no probe)
   const withParams = (body: string) => {
     if (!names) return body;
     for (let round = 0; round < 8; round++) {
@@ -459,7 +459,7 @@ export function twoPortIn(expr: string, nl: Netlist): string {
   const z0 = line(`R${src}_rser`)?.[3];
   // (the AC amplitude after the nodes, `AC 1`: a node named ac is none; a parameter: not here)
   const t = line(src)?.slice(3) ?? [], ac = t.findIndex((x) => /^ac$/i.test(x)), vs = ac >= 0 ? t[ac + 1] ?? "1" : "1";
-  const phased = ac >= 0 && !!t[ac + 2] && parseFloat(t[ac + 2]) !== 0; // (a drive of a phase: not folded in)
+  const phase = ac >= 0 ? parseFloat(t[ac + 2] ?? "0") : 0, phased = Number.isFinite(phase) && phase !== 0; // (a drive of a phase: not folded in)
   const zin = `(${vin}/(-I(${src})))`; // (I(V1): into its + pin)
   const r = /^I\((\w+)\)$/i.exec(out);
   // (a resistor of a plain value as the load, an Rser of one as the source's: else no reference)

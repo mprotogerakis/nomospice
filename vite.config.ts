@@ -12,5 +12,6 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: { alias: { "@": "/src" } },
   clearScreen: false,
-  server: { port: 1420, strictPort: true, fs: { allow: [searchForWorkspaceRoot(process.cwd()), ...extra] } },
+  // (NOMOSPICE_PORT: docs-shots.sh runs on another port, beside a `pnpm tauri dev` of one's own)
+  server: { port: +(process.env.NOMOSPICE_PORT ?? 1420), strictPort: true, fs: { allow: [searchForWorkspaceRoot(process.cwd()), ...extra] } },
 });

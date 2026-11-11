@@ -44,8 +44,9 @@ for n in "$@"; do
   # (a process group of its own: pnpm, cargo and the app end together)
   set -m
   log=$work/$k-$n.log # (numbered: two sites' scenes may share a name)
-  NOMOSPICE_SCENES=$file NOMOSPICE_SHOTS=$img NOMOSPICE_SCENE_WORK=$work/$k-$n \
-    pnpm tauri dev --config '{"identifier":"de.nomospice.docs"}' >"$log" 2>&1 &
+  # (its own port: a `pnpm tauri dev` of one's own may hold 1420)
+  NOMOSPICE_SCENES=$file NOMOSPICE_SHOTS=$img NOMOSPICE_SCENE_WORK=$work/$k-$n NOMOSPICE_PORT=1421 \
+    pnpm tauri dev --config '{"identifier":"de.nomospice.docs","build":{"devUrl":"http://localhost:1421"}}' >"$log" 2>&1 &
   app=$!
   # (a scene stuck, say on a native dialog it cannot answer: ended after 10 minutes; a group of
   # its own too, so its sleep ends with it)

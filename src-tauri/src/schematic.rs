@@ -1198,8 +1198,23 @@ fn ramped(line: &str) -> Option<String> {
     // (0 too: a .step of it steps the ramp's end; a 0 V sensor stays 0)
     let value = spice_num(v).is_some() || (v.starts_with('{') && v.ends_with('}'));
     // (a comment after it kept)
-    // (after the value: nothing, or AC and its numbers; a SINE there would be a second waveform)
-    let ac_only = rest.is_empty() || (rest[0].eq_ignore_ascii_case("ac") && rest.len() <= 3 && rest[1..].iter().all(|r| spice_num(r).is_some() || r.starts_with('{')));
+    // (after the value: nothing, AC and its numbers, k=v parameters (Rser=…); a SINE there would be
+    // a second waveform)
+    let mut ac_only = true;
+    let mut i = 0;
+    while i < rest.len() {
+        if rest[i].eq_ignore_ascii_case("ac") {
+            i += 1;
+            while i < rest.len() && (spice_num(rest[i]).is_some() || rest[i].starts_with('{')) {
+                i += 1;
+            }
+        } else if rest[i].contains('=') {
+            i += 1;
+        } else {
+            ac_only = false;
+            break;
+        }
+    }
     (value && ac_only).then(|| format!("{} {} {} {RAMP}{v}){}{}", t[0], t[1], t[2], rest.iter().map(|r| format!(" {r}")).collect::<String>(), &line[code.trim_end().len()..]))
 }
 /// How [`ramped`] writes a source's value, `PWL(0 0 20u 5)` (a `.step` of the source steps the 5).
@@ -1406,7 +1421,7 @@ impl Step {
                 let sp = token_spans(line.line);
                 // (ramped up by .tran startup: the value the ramp ends at)
                 // (exactly the ramp, under .tran startup: a PWL of the user's own that starts alike is no ramp)
-                if let Some(&(a, e)) = sp.get(3).filter(|_| text.contains(STARTUP)).filter(|&&(a, e)| line.line[a..e].strip_prefix(RAMP).and_then(|r| r.strip_suffix(')')).is_some_and(|v| !v.contains([' ', '(']))) {
+                if let Some(&(a, e)) = sp.get(3).filter(|_| text.contains(STARTUP)).filter(|&&(a, e)| line.line[a..e].strip_prefix(RAMP).and_then(|r| r.strip_suffix(')')).is_some_and(|v| (v.starts_with('{') && v.ends_with('}')) || !v.contains([' ', '(']))) {
                     return Ok(splice(text, &[(line.start + a + RAMP.len(), line.start + e - 1)], v));
                 }
                 // (the DC value where it is written: right after the nodes, or after a `DC` anywhere)
@@ -1921,14 +1936,28 @@ pub fn prepare(text: &str, dir: Option<&std::path::Path>, warnings: &mut Vec<Str
         let mut k = 0;
         while k < ls.len() {
             let l = &ls[k];
-            // (a source over + lines: ramped as one line, its continuations then gone)
+            // (a source over + lines, comments between them allowed: ramped as one line, its
+            // continuations then gone, the comments kept; each line's own comment off before)
             let mut n = k + 1;
-            while n < ls.len() && ls[n].line.trim_start().starts_with('+') {
+            while n < ls.len() && (ls[n].skip || ls[n].line.trim_start().starts_with('+')) {
                 n += 1;
             }
-            let joined = (k + 1..n).fold(l.line.to_string(), |acc, i| acc + " " + ls[i].line.trim_start()[1..].trim());
+            while n > k + 1 && ls[n - 1].skip {
+                n -= 1;
+            }
+            let joined = (k..n).filter(|&i| !ls[i].skip).map(|i| uncommented(ls[i].line).trim().trim_start_matches('+').trim()).collect::<Vec<_>>().join(" ");
             match (k > 0 && !l.skip && !l.line.trim_start().starts_with('+')).then(|| ramped(&joined)).flatten() {
-                Some(r) => { s.push_str(&r); s.push('\n'); k = n; }
+                Some(r) => {
+                    s.push_str(&r);
+                    s.push_str(&l.line[uncommented(l.line).trim_end().len()..]); // (the first line's comment)
+                    s.push('\n');
+                    for i in k + 1..n {
+                        if ls[i].skip {
+                            s.push_str(piece(i));
+                        }
+                    }
+                    k = n;
+                }
                 None => { s.push_str(piece(k)); k += 1; }
             }
         }
@@ -2019,20 +2048,21 @@ fn lt_white(text: &str, warnings: &mut Vec<String>) -> Option<String> {
     Some(out)
 }
 
-/// Whether `low` (a lowercase line) is `.func name(…` (`.function` too).
-fn func_named(low: &str, name: &str) -> bool {
+/// The name a lowercase line `.func name(…` (`.function` too) defines.
+fn func_head(low: &str) -> Option<&str> {
     let t = low.trim_start();
-    [".function", ".func"].iter().any(|h| t.len() > h.len() && t.starts_with(h) && t[h.len()..].starts_with(char::is_whitespace) && t[h.len()..].trim_start().split(|c: char| c == '(' || c.is_whitespace()).next() == Some(name))
+    let head = [".function", ".func"].into_iter().find(|h| t.len() > h.len() && t.starts_with(h) && t.as_bytes()[h.len()].is_ascii_whitespace())?;
+    t[head.len()..].trim_start().split(|c: char| c == '(' || c.is_whitespace()).next()
+}
+/// Whether `low` (a lowercase line) is `.func name(…`.
+fn func_named(low: &str, name: &str) -> bool {
+    func_head(low) == Some(name)
 }
 
 /// The names of the deck's `.func`s (`.function` too), lowercase; `top`: its top level's only (a
 /// subcircuit's are local).
 fn deck_funcs(text: &str, top: bool) -> Vec<String> {
-    deck_lines(text).iter().filter_map(|l| {
-        let t = l.low.trim_start();
-        let head = [".function", ".func"].into_iter().find(|h| t.len() > h.len() && t.starts_with(h) && t.as_bytes()[h.len()].is_ascii_whitespace())?;
-        (!top || l.top).then(|| t[head.len()..].trim_start().split(|c: char| c == '(' || c.is_whitespace()).next().unwrap_or("").to_string())
-    }).collect()
+    deck_lines(text).iter().filter_map(|l| func_head(&l.low).filter(|_| !top || l.top).map(str::to_string)).collect()
 }
 
 /// The `)` matching the `(` at `open`.
@@ -3120,6 +3150,10 @@ mod tests {
         assert!(p.0.starts_with("Vref test 1 2\nV1 a 0 PWL(0 0 20u 5)\n"), "{}", p.0);
         let p = prepare(&format!("* t\nV1 vcc 0\n+ 12\nR1 vcc 0 1k\n.tran 1u 1m uic\n{STARTUP}\n.end\n"), None, &mut vec![]);
         assert!(p.0.starts_with("* t\nV1 vcc 0 PWL(0 0 20u 12)\nR1 vcc 0 1k\n"), "{}", p.0); // (over + lines)
+        let p = prepare(&format!("* t\nV1 vcc 0 ; supply\n* note\n+ 12 Rser=0.1\nR1 vcc 0 1k\n.tran 1u 1m uic\n{STARTUP}\n.end\n"), None, &mut vec![]);
+        assert!(p.0.starts_with("* t\nV1 vcc 0 PWL(0 0 20u 12) Rser=0.1 ; supply\n* note\nR1 vcc 0 1k\n"), "{}", p.0); // (a comment between, parameters after)
+        let out = parse_step(".step V1 1 5 1").unwrap().apply(&format!("V1 a 0 PWL(0 0 20u {{max(Va, Vb)}})\n.tran 1u 1m uic\n{STARTUP}\n"), 3.0).unwrap();
+        assert!(out.starts_with("V1 a 0 PWL(0 0 20u 3"), "{out}"); // (a braced end value stepped)
         let st = parse_step(".step V1 1 5 1").unwrap();
         let out = st.apply(&format!("V1 in 0 AC 1\n.tran 1u 1m uic\n{STARTUP}\n"), 2.0).unwrap();
         assert!(out.starts_with("V1 in 0 PWL(0 0 20u 2e0) AC 1\n"), "{out}");
