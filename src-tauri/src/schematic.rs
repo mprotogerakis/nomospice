@@ -1234,7 +1234,7 @@ fn unramped(text: &str) -> String {
     text.split_inclusive('\n').map(|l| {
         let sp = token_spans(l);
         match sp.get(3).and_then(|&(a, e)| ramp_end(&l[a..e]).map(|v| (a, e, v))) {
-            Some((a, e, v)) if l.starts_with(['V', 'v', 'I', 'i']) => format!("{}{v}{}", &l[..a], &l[e..]),
+            Some((a, e, v)) if l.trim_start().starts_with(['V', 'v', 'I', 'i']) => format!("{}{v}{}", &l[..a], &l[e..]),
             _ => l.to_string(),
         }
     }).collect()
@@ -2971,6 +2971,7 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
             continue;
         }
         let builtin = BUILTIN_MODELS.iter().find(|(n, _)| *n == m).map(|(_, t)| t.to_string());
+        // (`opamp` is always ours, drawn or in a netlist's text: LTspice's opamp.sub needs LTspice)
         let lib = if own_used.contains(&m) || m == "opamp" { None } else { crate::library::definitions(&m, &mut h.emitted) };
         let def = match (lib, builtin) {
             (Some(defs), _) => Some(defs.join("\n")),
@@ -3184,6 +3185,7 @@ mod tests {
         let pz = p.only_pz().0;
         assert!(pz.contains("\nV1 a 0 5\n") && pz.contains("\n* .tran 1u 1m uic\n") && !pz.contains("* .pz"), "{pz}");
         assert_eq!(unramped(&format!("V1 a 0 PWL(0 0 20u 5 1m 3)\n{STARTUP}\n")).lines().next(), Some("V1 a 0 PWL(0 0 20u 5 1m 3)")); // (a PWL of the user's own stays)
+        assert_eq!(unramped(&format!("  Vref n 0 PWL(0 0 20u 2.5)\n{STARTUP}\n")).lines().next(), Some("  Vref n 0 2.5")); // (indented, a library's)
         let st = parse_step(".step V1 1 5 1").unwrap();
         let out = st.apply(&format!("V1 in 0 AC 1\n.tran 1u 1m uic\n{STARTUP}\n"), 2.0).unwrap();
         assert!(out.starts_with("V1 in 0 PWL(0 0 20u 2e0) AC 1\n"), "{out}");

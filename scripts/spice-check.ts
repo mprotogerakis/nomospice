@@ -249,6 +249,8 @@ assert.equal(numInfo("1Meg", "Hz")!.text, "= 1MegHz"); // not "1M", the milli tr
   assert.equal(funcsIn("h(V(n))", st2), "(NF((V(n)))*2)"); assert.match(funcsLeft(funcsIn("h(V(n))", st2), st2)!, /NF\(\)/); // (called by another .func)
   const pl = { ...two, text: two.text.replace("R1 out 0 50", ".param RL=50\nR1 out 0 {RL}") };
   assert.equal(twoPortIn("S21(V1)", pl), '(2*v("out")/(1)*sqrt((50)/(50)))'); // (a load of a .param value)
+  assert.equal(twoPortIn("S21(V1)", { ...pl, text: pl.text + "\n* .step param RL list 50 100" }), "S21(V1)"); // (one .step varies: not)
+  assert.equal(funcsIn("vd(out,in)", ".func vd(a,b) {V(a)-V(b)}"), "(V(out)-V(in))"); // (a parameter inside a probe: the name as given)
   assert.equal(twoPortIn("S21(V1)", { ...two, text: two.text.replace("* .net I(R1) V1", "* .net I(C1) V1") }), "S21(V1)"); // (a load that is no resistor)
   const pv = { ...two, text: two.text.replace("V1 V1_rser 0 AC 1", "V1 V1_rser 0 AC {Vac}") };
   assert.equal(twoPortIn("S21(V1)", pv), "S21(V1)"); // (a parameter as the drive: S21 not, …)

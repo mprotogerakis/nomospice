@@ -395,7 +395,12 @@ export function funcsIn(expr: string, text: string): string {
       if (d.stepped) continue; // (see funcsLeft)
       expr = replaceCalls(expr, d.name, (given) => {
         const args = given.length === 1 && !given[0] ? [] : given; // (`vt()`: none)
-        return args.length !== d.params.length ? null : `(${d.withParams(d.params.length ? d.body.replace(re, (p) => `(${args[low.indexOf(p.toLowerCase())]})`) : d.body)})`;
+        if (args.length !== d.params.length) return null;
+        // (in parentheses, an expression; inside a probe call, V(a): the name as given, no parentheses)
+        const arg = (p: string, bare: boolean) => (bare ? args[low.indexOf(p.toLowerCase())] : `(${args[low.indexOf(p.toLowerCase())]})`);
+        const probes = d.body.match(PROBE) ?? [];
+        const filled = d.params.length ? d.body.split(PROBE).reduce((o, seg, k) => o + seg.replace(re, (p) => arg(p, false)) + (probes[k]?.replace(re, (p) => arg(p, true)) ?? ""), "") : d.body;
+        return `(${d.withParams(filled)})`;
       });
     }
     if (expr === before) break;
@@ -408,13 +413,15 @@ export function funcsIn(expr: string, text: string): string {
 type FuncDef = { name: string; params: string[]; body: string; withParams: (body: string) => string; stepped?: string };
 /** The top level's .func and .param definitions of a netlist (a subcircuit's are its own), parsed
  *  once per text (the traces of a run all ask). */
-let DEFS: { text: string; funcs: FuncDef[]; params: Map<string, string>; lines: string[] } | null = null;
+let DEFS: { text: string; funcs: FuncDef[]; params: Map<string, string>; stepped: Map<string, string>; lines: string[] } | null = null;
+/** A probe call in an expression, `V(out)`, `I(R1)`, `Ib(Q1)`: its argument is a name, no expression. */
+const PROBE = /\b(?:v|i|i[bcdegsx])\s*\([^)]*\)/gi;
 function deckDefs(text: string) {
   if (DEFS?.text === text) return DEFS;
   let depth = 0;
   // (a line's `;` or `$` comment is not of its body; a body continued on + lines is one line)
   const top = text.split("\n").filter((l) => { const t = l.trim().toLowerCase(); depth += t.startsWith(".subckt") ? 1 : t.startsWith(".ends") ? -1 : 0; return depth === 0; }).map((l) => l.split(/;|(?<![^\s])\$/)[0]).join("\n").replace(/\n\s*\+\s?/g, " ");
-  const probe = /\b(?:v|i|i[bcdegsx])\s*\([^)]*\)/gi; // (a node's name is no parameter's; imag() is no probe)
+  const probe = PROBE; // (a node's name is no parameter's; imag() is no probe)
   // (the top level's .param values too: a body's `Rs` means nothing to ngspice's plot expressions)
   const params = new Map<string, string>();
   for (const m of top.matchAll(/^\s*\.param\s+(.+)$/gim))
@@ -447,7 +454,7 @@ function deckDefs(text: string) {
     const hit = mentions(body), root = hit && roots.get(hit.toLowerCase());
     return { name: m[1], params: m[2].split(/[\s,]+/).filter(Boolean), body, withParams, stepped: hit && (root?.toLowerCase() === hit.toLowerCase() ? hit : `${hit} (of ${root})`) };
   });
-  DEFS = { text, funcs, params, lines: text.split("\n") };
+  DEFS = { text, funcs, params, stepped: roots, lines: text.split("\n") };
   return DEFS;
 }
 const deckFuncs = (text: string) => deckDefs(text).funcs;
@@ -477,10 +484,10 @@ export function twoPortIn(expr: string, nl: Netlist): string {
   const m = NET_DIRECTIVE.exec(nl.text);
   if (!m || /\b(rin|rout)\s*=/i.test(m[3])) return expr;
   const [, spec, src] = m, out = (spec ?? "").replace(/\s+/g, ""); // (`.net V1`, a one-port: Zin and S11 only)
-  const { lines, params } = deckDefs(nl.text);
+  const { lines, params, stepped } = deckDefs(nl.text);
   const line = (name: string) => lines.find((l) => l.split(/\s+/)[0]?.toLowerCase() === name.toLowerCase())?.split(/\s+/);
-  // (a value `{RL}` of a .param: the value itself, where that is a number)
-  const resolved = (x?: string) => ((m) => (m ? params.get(m[1].toLowerCase()) ?? x : x))(x ? /^\{\s*(\w+)\s*\}$/.exec(x) : null);
+  // (a value `{RL}` of a .param: the value itself, where that is a number; one .step varies: not)
+  const resolved = (x?: string) => ((m) => (m && !stepped.has(m[1].toLowerCase()) ? params.get(m[1].toLowerCase()) ?? x : x))(x ? /^\{\s*(\w+)\s*\}$/.exec(x) : null);
   const nets = (inst: string) => nl.nets[nl.insts.findIndex((x) => x.toLowerCase() === inst.toLowerCase())];
   const across = (p?: string[]) => (p?.length === 2 ? `(${vexpr(p[0])}-${vexpr(p[1])})` : "");
   const vin = across(nets(src));
