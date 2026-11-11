@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import type { GitStatus, Item, Netlist, Shape, Sim, SymbolDef, Trace, TraceData } from "./types";
 import { defOf, isNet, partCurrent, pinLine, POWER_ANY, POWER_CALL, powerExpr, powersIn, prefixOf, symKey, vexpr, type Lib } from "./geom";
-import { ANALYSIS, ANY_ANALYSIS, analysisLineIndex, analysisOptions, continuation, parseAnalysis, stripAnalyses, type Analysis } from "./spice";
+import { ANALYSIS, ANY_ANALYSIS, analysisLineIndex, analysisOptions, continuation, parseAnalysis, stripAnalyses, type Analysis, type FftWindow } from "./spice";
 
 export type Tool =
   | { k: "select" }
@@ -27,6 +27,8 @@ export type Dialog =
   | { k: "find" }
   /** a pane's fixed y range (`pane`: its key in PlotView.y) */
   | { k: "yrange"; pane: string; unit: string; log: boolean }
+  | { k: "xrange"; unit: string; log: boolean }
+  | { k: "fft" }
   | { k: "about" }
   /** the quick reference: drawing, simulating, plotting, files */
   | { k: "help" }
@@ -90,6 +92,14 @@ export interface PlotView {
   y: Record<string, { log?: boolean; lo?: number; hi?: number }>;
   /** an .ac result as a Nyquist or Nichols plot instead of the Bode panes */
   polar?: "nyquist" | "nichols";
+  /** a frequency axis log (true) or linear (false); unset: log unless a linear sweep */
+  xlog?: boolean;
+  /** an .ac result's magnitude pane only, no phase */
+  nophase?: boolean;
+  /** each data point marked (where the simulator computed one) */
+  points?: boolean;
+  /** how the spectrum is computed: window, linear amplitude instead of dB, points (0: automatic) */
+  fftOpts?: { window: FftWindow; lin: boolean; n: number };
 }
 const NO_PLOT: PlotView = { kind: "", zoom: null, a: null, b: null, fft: null, y: {} };
 export const setPlot = (p: Partial<PlotView>) => useS.setState({ plot: { ...useS.getState().plot, ...p } });

@@ -3,14 +3,14 @@ import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { message, open } from "@tauri-apps/plugin-dialog";
 import type { Item, LibEntry, LibSource } from "./types";
-import { addTrace, analysisItem, commit, currentTab, fileName, forDoc, isSymbolDoc, loadSymbols, placePart, placeSymbol, setYAxis, useS } from "./store";
+import { addTrace, analysisItem, commit, currentTab, fileName, forDoc, isSymbolDoc, loadSymbols, placePart, placeSymbol, setPlot, setYAxis, useS } from "./store";
 import { defOf, pinLine, portOf, POWER_ANY, prefixOf, vexpr } from "./geom";
 import { Button } from "./ui/button";
-import { closeDialog as close, Field, FIELD, Modal, numHelp, NumField, Rows, TextField } from "./ui/dialog";
+import { closeDialog as close, Field, FIELD, Modal, numHelp, NumField, Rows, Select, TextField } from "./ui/dialog";
 import { SourceEditor } from "./SourceEditor";
 import { SimDialog } from "./SimDialog";
 import { DirectiveDialog } from "./DirectiveDialog";
-import { analysisEditable, analysisEditableAt, analysisLine, analysisLineIndex, analysisOptions, balanced, exprUnit, getParam, paramValue, setParam, spiceNum, tokens, xUnitOf } from "./spice";
+import { analysisEditable, analysisEditableAt, analysisLine, analysisLineIndex, analysisOptions, balanced, exprUnit, FFT_DEFAULT, FFT_WINDOWS, getParam, paramValue, setParam, spiceNum, tokens, xUnitOf, type FftWindow } from "./spice";
 import { cn, keys as shortcut } from "@/lib/utils";
 import thirdParty from "./third-party.json";
 import { checkForUpdate } from "./updater";
@@ -507,6 +507,45 @@ function YRangeDialog({ pane, unit, log }: { pane: string; unit: string; log: bo
   );
 }
 
+/** The x axis from … to (the zoom, by number). */
+function XRangeDialog({ unit, log }: { unit: string; log: boolean }) {
+  const z = useS((s) => s.plot.zoom);
+  const [lo, setLo] = useState(z ? String(z[0]) : ""), [hi, setHi] = useState(z ? String(z[1]) : "");
+  const [a, b] = [spiceNum(lo), spiceNum(hi)], empty = !lo.trim() && !hi.trim();
+  const bad = empty ? null : a == null || b == null ? "two numbers" : !(a < b) ? "the first the smaller" : log && a <= 0 ? "above 0 (a log axis)" : null;
+  const submit = () => {
+    if (bad) return;
+    close();
+    setPlot({ zoom: empty ? null : [a!, b!] });
+  };
+  return (
+    <Modal title="X Range" onSubmit={submit}>
+      <NumField label="From" value={lo} set={setLo} unit={unit} autofocus />
+      <NumField label="To" value={hi} set={setHi} unit={unit} hint="both empty: all of it" />
+      {bad && <p className="text-2xs text-status-warning">⚠ {bad}</p>}
+    </Modal>
+  );
+}
+
+/** How the spectrum is computed: the window, dB or the amplitude itself, the number of points. */
+function FftDialog() {
+  const o = useS((s) => s.plot.fftOpts) ?? FFT_DEFAULT;
+  const [win, setWin] = useState<string>(o.window), [lin, setLin] = useState(o.lin ? "lin" : "db"), [n, setN] = useState(String(o.n));
+  const submit = () => {
+    close();
+    setPlot({ fftOpts: { window: win as FftWindow, lin: lin === "lin", n: +n } });
+  };
+  return (
+    <Modal title="FFT Settings" onSubmit={submit}>
+      <Select label="Window" value={win} set={setWin} options={Object.entries(FFT_WINDOWS).map(([k, w]) => [k, w.label])}
+        hint="Hann: the usual; Blackman-Harris: small lines beside big ones; flat top: amplitudes exact; rectangular: only for a whole number of periods" />
+      <Select label="Amplitude" value={lin} set={setLin} options={[["db", "dB (1 V: 0 dB)"], ["lin", "linear (V, A …)"]]} />
+      <Select label="Points" value={n} set={setN} options={[["0", "automatic (from the time steps)"], ...[12, 14, 16, 18, 20].map((k): [string, string] => [String(2 ** k), (2 ** k).toLocaleString("en")])]}
+        hint="more points than the run computed only interpolate between them" />
+    </Modal>
+  );
+}
+
 /** The quick reference (F1): what the keys, clicks and menus do, by task. ⌘ is Ctrl off a Mac. */
 const HELP: [string, [string, string][]][] = [
   ["Drawing", [
@@ -668,6 +707,8 @@ export const Dialogs = memo(function Dialogs() {
     case "trace": return <TraceDialog />;
     case "find": return <FindDialog />;
     case "yrange": return <YRangeDialog pane={dialog.pane} unit={dialog.unit} log={dialog.log} />;
+    case "xrange": return <XRangeDialog unit={dialog.unit} log={dialog.log} />;
+    case "fft": return <FftDialog />;
     case "about": return <AboutDialog />;
     case "help": return <HelpDialog />;
     case "symattrs": return <SymbolAttrs />;

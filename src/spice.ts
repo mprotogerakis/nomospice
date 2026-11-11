@@ -753,10 +753,24 @@ export function fftSize(xs: number[], lo: number, hi: number) {
 /** The frequencies of `spectrum`'s bins: k/(hi-lo), k = 1 … n/2. */
 export const fftFreqs = (lo: number, hi: number, n: number) => Array.from({ length: n / 2 }, (_, k) => (k + 1) / (hi - lo));
 
-/** The amplitude spectrum of ys(xs) over lo..hi in dB (a sine of amplitude 1: 0 dB): resampled
- *  at n even points (the time steps are not even), its mean taken off (DC is not shown, and the
- *  window would leak it into the lowest bins), Hann window. Bins 1 … n/2 (see `fftFreqs`). */
-export function spectrum(xs: number[], ys: (number | null)[], lo: number, hi: number, n: number): (number | null)[] {
+/** The FFT's windows: cosine sums Σ (-1)^k a_k cos(2πki/n) (Blackman-Harris: 4 terms, about
+ *  -92 dB side lobes; flat top: amplitudes right between bins too). */
+export const FFT_WINDOWS = {
+  hann: { label: "Hann", a: [0.5, 0.5] },
+  rect: { label: "Rectangular (none)", a: [1] },
+  hamming: { label: "Hamming", a: [0.54, 0.46] },
+  blackman: { label: "Blackman-Harris", a: [0.35875, 0.48829, 0.14128, 0.01168] },
+  flattop: { label: "Flat top", a: [0.21557895, 0.41663158, 0.277263158, 0.083578947, 0.006947368] },
+} as const;
+export type FftWindow = keyof typeof FFT_WINDOWS;
+/** The spectrum as it is unless set otherwise (FFT settings…): Hann, dB, points by the time steps. */
+export const FFT_DEFAULT: { window: FftWindow; lin: boolean; n: number } = { window: "hann", lin: false, n: 0 };
+
+/** The amplitude spectrum of ys(xs) over lo..hi in dB (a sine of amplitude 1: 0 dB), or `lin`:
+ *  the amplitude itself; resampled at n even points (the time steps are not even), its mean taken
+ *  off (DC is not shown, and the window would leak it into the lowest bins), windowed (the
+ *  amplitudes corrected by the window's sum). Bins 1 … n/2 (see `fftFreqs`). */
+export function spectrum(xs: number[], ys: (number | null)[], lo: number, hi: number, n: number, win: FftWindow = "hann", lin = false): (number | null)[] {
   const re = new Float64Array(n), im = new Float64Array(n);
   // (one pass: the sample times only rise. A curve not over all of lo..hi, a step halted early:
   // no spectrum, rather than one of a fall to 0)
@@ -772,16 +786,18 @@ export function spectrum(xs: number[], ys: (number | null)[], lo: number, hi: nu
     mean += v / n;
   }
   let sum = 0;
+  const a = FFT_WINDOWS[win].a;
   for (let i = 0; i < n; i++) {
-    const w = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / n);
+    let w = 0;
+    for (let k = 0; k < a.length; k++) w += (k % 2 ? -1 : 1) * a[k] * Math.cos((2 * Math.PI * k * i) / n);
     re[i] = (re[i] - mean) * w;
     sum += w;
   }
   fft(re, im);
   const db: (number | null)[] = [];
   for (let k = 1; k <= n / 2; k++) {
-    const a = ((k === n / 2 ? 1 : 2) * Math.hypot(re[k], im[k])) / sum; // (the Nyquist bin has no mirror)
-    db.push(a > 0 ? 20 * Math.log10(a) : null);
+    const amp = ((k === n / 2 ? 1 : 2) * Math.hypot(re[k], im[k])) / sum; // (the Nyquist bin has no mirror)
+    db.push(lin ? amp : amp > 0 ? 20 * Math.log10(amp) : null);
   }
   return db;
 }

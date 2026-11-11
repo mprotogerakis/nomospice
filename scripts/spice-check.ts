@@ -4,7 +4,7 @@ import { box, connectivity, dragPlan, expandPowers, hit, outline, POWER_CALL, po
 import {
   tokens, formatAnalysis, formatIc, formatInclude, formatMeas, formatModel, formatParams, formatSource, numInfo, parseAnalysis,
   parseIc, parseInclude, parseMeas, parseModel, parseParams, parseSource, sample, si, spiceNum, directiveKind, analysisRoundTrips, analysisEditable, analysisOptions, analysisLineIndex, at, integrate, stripAnalyses, portablePaths, sourceRoundTrips,
-  exprUnit, unitTimes, fftSize, fftFreqs, spectrum, getParam, setParam, balanced, paramValue,
+  exprUnit, FFT_WINDOWS, type FftWindow, unitTimes, fftSize, fftFreqs, spectrum, getParam, setParam, balanced, paramValue,
 } from "../src/spice.ts";
 
 // numbers and the classic pitfalls
@@ -261,6 +261,16 @@ assert.equal(numInfo("1Meg", "Hz")!.text, "= 1MegHz"); // not "1M", the milli tr
   assert.ok(db[0]! < -60, `the 5 V offset leaks into no bin (+14 dB with it): ${db[0]}`);
   assert.equal(f[0], 100);
   assert.ok(spectrum(xs, ys.map((y, k) => (k > xs.length / 2 ? NaN : y)), 0, 10e-3, 4096).every((v) => v == null), "a halted step: none");
+  // every window reads the 2 V sine as 2 V (6.02 dB); linear: the amplitude itself
+  for (const w of Object.keys(FFT_WINDOWS) as FftWindow[]) {
+    const s = spectrum(xs, ys, 0, 10e-3, n, w), l = spectrum(xs, ys, 0, 10e-3, n, w, true);
+    const k = f.findIndex((x) => Math.abs(x - 1e3) < 1);
+    assert.ok(Math.abs(s[k]! - 6.02) < 0.1 && Math.abs(l[k]! - 2) < 0.02, `${w}: ${s[k]} dB, ${l[k]}`);
+  }
+  // the flat top keeps the amplitude between bins (1050 Hz: 100 Hz bins); Hann loses up to 1.4 dB
+  const off = xs.map((t) => Math.sin(2 * Math.PI * 1050 * t));
+  const peak = (w: FftWindow) => Math.max(...spectrum(xs, off, 0, 10e-3, n, w, true).map((v) => v ?? 0));
+  assert.ok(Math.abs(peak("flattop") - 1) < 0.01 && peak("hann") < 0.9, `${peak("flattop")} ${peak("hann")}`);
   // a breakpoint's femtosecond step among 15: not 2^20 points
   assert.equal(fftSize([0, 1e-3, 1e-3 + 1e-15, ...Array.from({ length: 13 }, (_, k) => 2e-3 + k * 1e-3)], 0, 14e-3), 4096);
 }
