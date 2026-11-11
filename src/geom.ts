@@ -378,7 +378,10 @@ function replaceCalls(expr: string, name: string, f: (args: string[]) => string 
  *  expressions know none. A call becomes its body, each parameter its argument in parentheses;
  *  calls of other functions in it too (10 rounds at most: a recursive one stops there). */
 export function funcsIn(expr: string, text: string): string {
-  const defs = [...text.matchAll(/^\s*\.func(?:tion)?\s+(\w+)\s*\(([^)]*)\)\s*=?\s*(.+?)\s*$/gim)].map((m) => ({
+  // (the top level's: a subcircuit's .func is its own)
+  let depth = 0;
+  const top = text.split("\n").filter((l) => { const t = l.trim().toLowerCase(); depth += t.startsWith(".subckt") ? 1 : t.startsWith(".ends") ? -1 : 0; return depth === 0; }).join("\n");
+  const defs = [...top.matchAll(/^\s*\.func(?:tion)?\s+(\w+)\s*\(([^)]*)\)\s*=?\s*(.+?)\s*$/gim)].map((m) => ({
     name: m[1], params: m[2].split(/[\s,]+/).filter(Boolean), body: m[3].replace(/^\{(.*)\}$/, "$1").replace(/^'(.*)'$/, "$1"),
   }));
   for (let round = 0; round < 10; round++) {
@@ -394,6 +397,10 @@ export function funcsIn(expr: string, text: string): string {
   return expr;
 }
 
+/** `.net <out> <V source> …` as it stands in the run's netlist: the output (`I(R1)`, `V(out, ref)`
+ *  with blanks), the source (a voltage source), the rest (Rin=, Rout=). */
+export const NET_DIRECTIVE = /^\*\s*\.net\s+([IV]\s*\([^)]*\)|\S+)\s+(V\S*)(.*)$/im;
+
 /** LTspice's `.net` (a comment in the run's netlist: ngspice has no such analysis) in a trace
  *  expression of an .ac result: Zin(V1), S11(V1) and S21(V1) of the two-port from source V1 (its
  *  Rser, or Rin=, the reference impedance; its AC amplitude) to the load, I(R1) (the voltage across
@@ -401,7 +408,7 @@ export function funcsIn(expr: string, text: string): string {
 export function twoPortIn(expr: string, nl: Netlist): string {
   // (`V(out, ref)` with a blank; a voltage source V1 as the input: a current source's port current
   // is no vector)
-  const m = /^\*\s*\.net\s+([IV]\s*\([^)]*\)|\S+)\s+(V\S*)(.*)$/im.exec(nl.text);
+  const m = NET_DIRECTIVE.exec(nl.text);
   if (!m || !/\b(s11|s21|zin)\s*\(/i.test(expr)) return expr;
   const [, spec, src, rest] = m, out = spec.replace(/\s+/g, "");
   const param = (k: string) => new RegExp(`\\b${k}\\s*=\\s*(\\S+)`, "i").exec(rest)?.[1];
@@ -411,7 +418,9 @@ export function twoPortIn(expr: string, nl: Netlist): string {
   const vin = across(nets(src));
   if (!vin) return expr;
   const z0 = param("Rin") ?? line(`R${src}_rser`)?.[3];
-  const vs = /\bac\s+(\S+)/i.exec(line(src)?.join(" ") ?? "")?.[1] ?? "1";
+  // (the AC amplitude after the nodes, `AC 1`: a node named ac is none; a parameter: not here)
+  const t = line(src)?.slice(3) ?? [], ac = t.findIndex((x) => /^ac$/i.test(x)), vs = ac >= 0 ? t[ac + 1] ?? "1" : "1";
+  if (/[{}]/.test(vs)) return expr;
   const zin = `(${vin}/(-I(${src})))`; // (I(V1): into its + pin)
   const r = /^I\((\w+)\)$/i.exec(out), v = /^V\(([^,)]+)(?:,([^)]+))?\)$/i.exec(out);
   const [vl, rl] = r ? [across(nets(r[1])), line(r[1])?.[3]] : v ? [`(${vexpr(v[1].trim())}-${vexpr(v[2]?.trim() ?? "0")})`, param("Rout")] : ["", undefined];

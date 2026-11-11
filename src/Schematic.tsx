@@ -65,27 +65,25 @@ const drawEl = (it: Extract<Item, { t: "draw" }>) => (
   <polyline points={outline(it).map((q) => q.join(",")).join(" ")} vectorEffect="non-scaling-stroke" strokeDasharray={DASH[it.style ?? 0]} strokeLinejoin="round" />
 );
 
-/** `texts`: the symbol's own texts too (a preview; on the canvas each part draws them upright,
- *  see SymTexts) */
-function SymbolGraphics({ def, texts = true }: { def: SymbolDef; texts?: boolean }) {
+/** (a symbol's texts are drawn by each part, upright: see SymTexts) */
+function SymbolGraphics({ def }: { def: SymbolDef }) {
   return (
     <g id={`sym-${def.name}`} fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round">
       {def.shapes.map(([k, p], i) => shapeEl(k, p, i))}
-      {texts && <SymTexts def={def} />}
     </g>
   );
 }
 
 /** A symbol's TEXT lines (≥1, 1D …), placed as the part is turned but upright, never mirrored. */
-function SymTexts({ def, it }: { def: SymbolDef; it?: Extract<Item, { t: "sym" }> }) {
+function SymTexts({ def, it }: { def: SymbolDef; it: Extract<Item, { t: "sym" }> }) {
   return (
     <g fill="currentColor" stroke="none">
       {def.texts?.map(([x, y, just, size, t], i) => {
-        const [dx, dy] = it ? xform(it.rot, x, y) : [x, y];
+        const [dx, dy] = xform(it.rot, x, y);
         // (Left: the text runs from x to the right; turned or mirrored, where that right now points)
-        const run = /^left/i.test(just) ? 1 : /^right/i.test(just) ? -1 : 0, ux = it ? xform(it.rot, run, 0)[0] : run;
+        const run = /^left/i.test(just) ? 1 : /^right/i.test(just) ? -1 : 0, ux = xform(it.rot, run, 0)[0];
         return (
-          <text key={i} x={(it?.x ?? 0) + dx} y={(it?.y ?? 0) + dy} fontSize={8 + 3 * size} dominantBaseline="middle"
+          <text key={i} x={it.x + dx} y={it.y + dy} fontSize={8 + 3 * size} dominantBaseline="middle"
             textAnchor={ux > 0 ? "start" : ux < 0 ? "end" : "middle"}>{t}</text>
         );
       })}
@@ -227,7 +225,7 @@ function ExportSvg({ items, lib }: { items: Item[]; lib: Record<string, SymbolDe
   const defs = [...new Set(items.flatMap((it) => (it.t === "sym" ? [defOf(lib, it)] : [])).filter((d): d is SymbolDef => !!d))];
   return (
     <svg xmlns="http://www.w3.org/2000/svg">
-      <defs>{defs.map((d) => <SymbolGraphics key={d.name} def={d} texts={false} />)}</defs>
+      <defs>{defs.map((d) => <SymbolGraphics key={d.name} def={d} />)}</defs>
       <g data-content="" fill="none" strokeLinecap="round">
         {items.map((it, i) => isShape(it) && (
           <g key={i} color={colorOf(it)} stroke="currentColor" strokeWidth={it.t === "wire" ? 2 : 1.6}>
@@ -588,7 +586,7 @@ export const Schematic = memo(function Schematic() {
     if (!d) {
       const h = tool.k === "place" || tool.k === "paste" || tool.k === "wire" ? -1 : hit(items, lib, p, 6 / view.k, !probing);
       setHover(h);
-      return setHoverPin(probing && h >= 0 ? pinAt(items[h], p) : undefined);
+      return setHoverPin((probing || opNow) && h >= 0 ? pinAt(items[h], p) : undefined); // (.op: a pin's current in the status bar)
     }
     if (d.k === "pan") {
       if (Math.hypot(e.clientX - d.sx, e.clientY - d.sy) > 3) d.moved = true; // SwiftFlow minimumDistance: 3
@@ -838,7 +836,7 @@ export const Schematic = memo(function Schematic() {
           <pattern id="grid" width={gap} height={gap} patternUnits="userSpaceOnUse" x={view.x % gap} y={view.y % gap}>
             <circle cx={0.75} cy={0.75} r={Math.min(1.2, 0.6 * view.k)} fill="var(--sch-grid)" />
           </pattern>
-          {defs.map((d) => <SymbolGraphics key={d.name} def={d} texts={false} />)}
+          {defs.map((d) => <SymbolGraphics key={d.name} def={d} />)}
         </defs>
         {gap > 4 && <rect width="100%" height="100%" fill="url(#grid)" />}
         <g data-world transform={`translate(${view.x} ${view.y}) scale(${view.k})`} fill="none" strokeLinecap="round">

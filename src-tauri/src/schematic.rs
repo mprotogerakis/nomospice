@@ -1905,10 +1905,12 @@ pub fn prepare(text: &str, dir: Option<&std::path::Path>, warnings: &mut Vec<Str
 /// 1/c seconds. Other arguments, and white() in a subcircuit (its node would be local there), are
 /// said and left. None: no white() in the deck.
 fn lt_white(text: &str, warnings: &mut Vec<String>) -> Option<String> {
-    // (`.func white(x) …`: the deck's own)
+    // (`.func white(x) …` of the deck's top level: its own; a subcircuit's is that subcircuit's)
+    let mut level = 0;
     let own = text.lines().any(|l| {
         let t = l.trim_start().to_ascii_lowercase();
-        (t.starts_with(".func ") || t.starts_with(".function ")) && t.split(|c: char| c.is_whitespace() || c == '(').filter(|w| !w.is_empty()).nth(1) == Some("white")
+        level += i32::from(t.starts_with(".subckt")) - i32::from(t.starts_with(".ends"));
+        level == 0 && (t.starts_with(".func ") || t.starts_with(".function ")) && t.split(|c: char| c.is_whitespace() || c == '(').filter(|w| !w.is_empty()).nth(1) == Some("white")
     });
     if own || !crate::laplace::calls(text, &["white"]) {
         return None;
@@ -2674,9 +2676,9 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
         if call.is_some() && def.block && block.is_none() && h.refused.get(&name).is_some_and(|w| !w.is_empty()) {
             h.quiet.insert(model.clone());
         }
-        // (a subcircuit symbol's default parameters belong to its default model: opamp2's Slew=…
-        // are no TL072's)
-        let defaults = prefix != 'X' || def.value.split_whitespace().next().is_some_and(|d| d.eq_ignore_ascii_case(&model));
+        // (nomospice's own subcircuit symbols: their default parameters belong to their own model,
+        // opamp2's Slew=… are no TL072's; any other symbol's apply whatever its Value, as in LTspice)
+        let defaults = !OWN_MODELS.contains(&def.value.to_lowercase().as_str()) || def.value.eq_ignore_ascii_case(&model);
         if "DQMXJS".contains(prefix) && model.is_empty() {
             nl.warnings.push(format!("{inst}: no model or subcircuit named (its Value is empty)"));
         } else if "DQMXJSWO".contains(prefix) && !model.is_empty() && block.is_none() && !defined(&model) && !used_models.contains(&model) {

@@ -164,7 +164,8 @@ export const Waveform = memo(function Waveform() {
   const yAxes = useS((s) => s.plot.y);
   const fftOpts = useS((s) => s.plot.fftOpts) ?? FFT_DEFAULT;
   const xlog = useS((s) => s.plot.xlog);
-  const nophase = useS((s) => s.plot.nophase);
+  // (hidden in the Bode view only: Nichols draws over the phase pane's series)
+  const nophase = useS((s) => s.plot.nophase && !s.plot.polar);
   const points = useS((s) => s.plot.points);
   const tran = run?.scale === "time";
   const spec = !!fft && tran; // the spectrum view
