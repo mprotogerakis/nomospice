@@ -408,8 +408,6 @@ export function funcsIn(expr: string, text: string): string {
   return expr;
 }
 
-/** The top level's `.func`s of a netlist (a subcircuit's are its own), parsed once per text (the
- *  traces of a run all ask). */
 /** A .func: its body with its parameters, writing out the .params it uses; `stepped`: one .step varies. */
 type FuncDef = { name: string; params: string[]; body: string; withParams: (body: string) => string; stepped?: string };
 /** The top level's .func and .param definitions of a netlist (a subcircuit's are its own), parsed
@@ -497,7 +495,8 @@ export function twoPortIn(expr: string, nl: Netlist): string {
   const z0 = resolved(line(`R${src}_rser`)?.[3]);
   // (the AC amplitude after the nodes, `AC 1`: a node named ac is none; a parameter: not here)
   const t = line(src)?.slice(3) ?? [], ac = t.findIndex((x) => /^ac$/i.test(x)), vs = ac >= 0 ? t[ac + 1] ?? "1" : "1";
-  const phase = ac >= 0 ? parseFloat(t[ac + 2] ?? "0") : 0, phased = Number.isFinite(phase) && phase !== 0; // (a drive of a phase: not folded in)
+  // (a drive of a phase, a number not 0 or a parameter's: not folded in; a waveform after it is none)
+  const ph = ac >= 0 ? t[ac + 2] : undefined, phased = !!ph && (ph.startsWith("{") || (Number.isFinite(parseFloat(ph)) && parseFloat(ph) !== 0));
   const drive = nets(src)?.[0] === "0" ? `-${vs}` : vs; // (the source drawn with its + pin at ground: its EMF the other way)
   const zin = `(${vin}/(-I(${src})))`; // (I(V1): into its + pin)
   const r = /^I\((\w+)\)$/i.exec(out);

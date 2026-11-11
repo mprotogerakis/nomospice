@@ -232,6 +232,7 @@ assert.equal(numInfo("1Meg", "Hz")!.text, "= 1MegHz"); // not "1M", the milli tr
   const flipped = { ...two, nets: [["in", "0"], ["0", "out"]] };
   assert.equal(twoPortIn("S21(V1)", flipped), '(2*v("out")/(1)*sqrt((50)/(50)))'); // (the load drawn the other way: its node's voltage)
   assert.equal(twoPortIn("S21(V1)", { ...two, text: two.text.replace("V1 V1_rser 0 AC 1", "V1 V1_rser 0 AC 1 90") }), "S21(V1)"); // (a phased drive: not)
+  assert.equal(twoPortIn("S21(V1)", { ...two, text: two.text.replace("V1 V1_rser 0 AC 1", "V1 V1_rser 0 AC 1 {phi}") }), "S21(V1)"); // (a phase as a parameter: not either)
   assert.equal(twoPortIn("S21(V1)", { ...two, text: two.text.replace("V1 V1_rser 0 AC 1", "V1 V1_rser 0 AC 1 SIN(0 1 1k)") }), '(2*v("out")/(1)*sqrt((50)/(50)))'); // (a waveform after it is no phase)
   assert.equal(funcsIn("NF(V(n))", ".param Rs=50\n.func NF(x) {imag(Rs*x)}"), "(imag((50)*(V(n))))"); // (imag() is no probe)
   assert.equal(funcsIn("f(V(a))", ".func f(x) {x*2} $ note"), "((V(a))*2)"); // (a $ comment)

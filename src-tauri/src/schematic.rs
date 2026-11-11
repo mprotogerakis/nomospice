@@ -2026,7 +2026,13 @@ fn lt_white(text: &str, warnings: &mut Vec<String>) -> Option<String> {
             own_in.insert(s.clone());
         }
     }
-    // (one noise source per rate: white(1e5*time) twice is the same noise, as in LTspice)
+    // (one noise source per rate: white(1e5*time) twice is the same noise, as in LTspice; its names
+    // none the deck has already)
+    let low = text.to_ascii_lowercase();
+    let mut base = 0;
+    while low.contains(&format!("nmsp_white{}", base + 1)) {
+        base += 1;
+    }
     let (mut out, mut sources, mut cur, mut left) = (String::with_capacity(text.len() + 128), Vec::<(f64, String)>::new(), None::<String>, false);
     for (k, l) in ls.iter().enumerate() {
         let piece = &text[l.start..ls.get(k + 1).map_or(text.len(), |n| n.start)];
@@ -2057,11 +2063,11 @@ fn lt_white(text: &str, warnings: &mut Vec<String>) -> Option<String> {
             match c {
                 Some(c) if l.top => {
                     let n = sources.iter().position(|s| s.0 == c).unwrap_or_else(|| {
-                        sources.push((c, format!("Vwhite{n} nw_white{n} 0 dc 0 trnoise(0.288675 {:e} 0 0)", 1.0 / c, n = sources.len() + 1)));
+                        sources.push((c, format!("Vnmsp_white{n} nmsp_white{n} 0 dc 0 trnoise(0.288675 {:e} 0 0)", 1.0 / c, n = base + sources.len() + 1)));
                         sources.len() - 1
-                    }) + 1;
+                    }) + base + 1;
                     out.push_str(&rest[..k]);
-                    out.push_str(&format!("max(min(v(nw_white{n}),0.5),-0.5)"));
+                    out.push_str(&format!("max(min(v(nmsp_white{n}),0.5),-0.5)"));
                 }
                 _ => {
                     warnings.push(format!("`white({arg})`: nomospice turns white(c*time) into noise (ngspice has no white()); {}", match (l.top, c) {
@@ -2591,6 +2597,8 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
     for it in items {
         if let Item::Text { text, directive: true, .. } = it {
             let mut skipped = false; // `+` continuation lines of a skipped directive go too
+            // (the last .tran: its index among the directives and its text as written, for its + lines)
+            let mut tran: Option<(usize, String)> = None;
             let mut control = false; // a sheet's `.control` block: all of it goes
             let mut stepping = false; // ... of a .step: they belong to it
             for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
@@ -2630,15 +2638,28 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
                 if skipped && l.starts_with('+') || l == ".end" || l.starts_with(".end ") {
                     continue;
                 }
-                // (a .net's + lines: onto its comment, before the mark; not onto the line before)
-                if l.starts_with('+') && directives.last().is_some_and(|d| d.ends_with(NET_MARK)) {
-                    let d = directives.last_mut().unwrap();
-                    d.truncate(d.len() - NET_MARK.len());
-                    d.push_str(&format!("{} {NET_MARK}", uncommented(line)[1..].trim()));
-                    continue;
+                // (a statement's + lines, comments between allowed: a .net's onto its comment, before
+                // the mark, not onto the line before; a .tran's read with it, `+ startup` too)
+                let last = directives.iter().rposition(|d| !d.trim_start().starts_with('*') || d.ends_with(NET_MARK));
+                if l.starts_with('+') {
+                    if let Some(k) = last.filter(|&k| directives[k].ends_with(NET_MARK)) {
+                        let d = &mut directives[k];
+                        d.truncate(d.len() - NET_MARK.len());
+                        d.push_str(&format!("{} {NET_MARK}", uncommented(line)[1..].trim()));
+                        continue;
+                    }
+                    if let Some((k, raw)) = tran.as_mut().filter(|t| Some(t.0) == last) {
+                        raw.push(' ');
+                        raw.push_str(uncommented(line)[1..].trim());
+                        if let Some(d) = directive(raw, &mut nl.warnings) {
+                            directives[*k] = d;
+                        }
+                        continue;
+                    }
                 }
                 let d = directive(line, &mut nl.warnings);
                 skipped = d.is_none();
+                tran = (l.starts_with(".tran") && d.is_some()).then(|| (directives.len(), uncommented(line).trim_end().to_string()));
                 directives.extend(d);
             }
         }
@@ -3215,19 +3236,19 @@ mod tests {
         // white(c*time): a TRNOISE source of its own, before .end; other arguments are said
         let mut w = vec![];
         let out = lt_white("B1 n 0 V=white(1e6*time)/10 + white( time*2k )\n.tran 1m\n.end ; done\n", &mut w).unwrap();
-        let (w1, w2) = ("max(min(v(nw_white1),0.5),-0.5)", "max(min(v(nw_white2),0.5),-0.5)");
-        assert!(out.starts_with(&format!("B1 n 0 V={w1}/10 + {w2}\n.tran 1m\nVwhite1 nw_white1 0 dc 0 trnoise(0.288675 1e-6 0 0)\nVwhite2 nw_white2 0 dc 0 trnoise(0.288675 5e-4 0 0)\n.end ; done")), "{out}");
+        let (w1, w2) = ("max(min(v(nmsp_white1),0.5),-0.5)", "max(min(v(nmsp_white2),0.5),-0.5)");
+        assert!(out.starts_with(&format!("B1 n 0 V={w1}/10 + {w2}\n.tran 1m\nVnmsp_white1 nmsp_white1 0 dc 0 trnoise(0.288675 1e-6 0 0)\nVnmsp_white2 nmsp_white2 0 dc 0 trnoise(0.288675 5e-4 0 0)\n.end ; done")), "{out}");
         assert!(w.is_empty(), "{w:?}");
         let out = lt_white("B1 n 0 V=white(V(x))\n", &mut w).unwrap();
         assert!(out.contains("white(V(x))") && w.len() == 1, "{out} {w:?}");
         assert_eq!(lt_white("B1 n 0 V=1\n", &mut w), None);
         // not in a comment; a deck's own white() stays
         let out = lt_white("B1 n 0 V=white(time) ; was white(2*time)\n", &mut w).unwrap();
-        assert!(out.starts_with(&format!("B1 n 0 V={w1} ; was white(2*time)\n")) && !out.contains("nw_white2"), "{out}");
+        assert!(out.starts_with(&format!("B1 n 0 V={w1} ; was white(2*time)\n")) && !out.contains("nmsp_white2"), "{out}");
         assert_eq!(lt_white(".func white(x) {sin(x)}\nB1 n 0 V=white(time)\n", &mut w), None);
         let mut w = vec![];
         let out = lt_white("B1 n 0 V=white(1e5*time)-white(1e5*time)\nB2 m 0 V=1\n+ +white(time)\n", &mut w).unwrap();
-        assert!(out.starts_with(&format!("B1 n 0 V={w1}-{w1}\n")) && !out.contains("nw_white2") && w.len() == 1, "{out} {w:?}");
+        assert!(out.starts_with(&format!("B1 n 0 V={w1}-{w1}\n")) && !out.contains("nmsp_white2") && w.len() == 1, "{out} {w:?}");
         // a subcircuit with a white() of its own: left alone, nothing said
         let mut w = vec![];
         let own = ".subckt n a b\n.func white(x) {sin(x)}\nB1 a b V=white(time)\n.ends\nB2 m 0 V=white(time)\n";
@@ -3402,6 +3423,10 @@ mod tests {
         // (its + lines onto its comment, not onto the .ac before it)
         let plus = netlist_for_sim(&parse_asc(&src.replace("!.net I(R1) V1", "!.ac dec 10 1 1Meg\\n.net I(R1) V1\\n+ Rout=75")), &mut Library::builtin());
         assert!(plus.text.contains(&format!("* .net I(R1) V1 Rout=75 {NET_MARK}")) && plus.text.contains(".ac dec 10 1 1Meg\n"), "{}", plus.text);
+        let between = netlist_for_sim(&parse_asc(&src.replace("!.net I(R1) V1", "!.ac dec 10 1 1Meg\\n.net I(R1) V1\\n* 75 ohm port\\n+ Rout=75")), &mut Library::builtin());
+        assert!(between.text.contains(&format!("* .net I(R1) V1 Rout=75 {NET_MARK}")) && !between.text.contains("\n+ Rout"), "{}", between.text); // (a comment between)
+        let tr = netlist_for_sim(&parse_asc(&src.replace("!.net I(R1) V1", "!.tran 0 10m\\n+ startup")), &mut Library::builtin());
+        assert!(tr.text.contains(&format!(" uic\n{STARTUP}")) && !tr.text.contains("+ startup"), "{}", tr.text); // (startup on a + line)
         let run = crate::ngspice::run(&prepare(&nl.text, None, &mut vec![])).unwrap();
         let mag = |e: &str| { let t = crate::ngspice::trace(e, &run.scale, run.id).unwrap(); t.re[0].hypot(t.im.as_ref().map_or(0.0, |i| i[0])) };
         let zin = "((v(\"in\")-0)/(-i(v1)))";
