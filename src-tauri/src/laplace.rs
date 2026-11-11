@@ -319,9 +319,14 @@ fn probes(t: &str) -> bool {
 
 /// Whether `t` calls one of the functions `f` anywhere (`abs(mc(1,2))`, `mc (1)`; not `amc(`).
 pub fn calls(t: &str, f: &[&str]) -> bool {
+    call_at(t, f).is_some()
+}
+
+/// Where the first call of one of `f` starts in `t` (see [`calls`]).
+pub fn call_at(t: &str, f: &[&str]) -> Option<usize> {
     let b = t.as_bytes();
     let word = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
-    (0..b.len()).any(|k| {
+    (0..b.len()).find(|&k| {
         (k == 0 || !word(b[k - 1])) && {
             let n = b[k..].iter().take_while(|&&c| word(c)).count();
             n > 0 && t[k + n..].trim_start().starts_with('(') && f.iter().any(|f| t[k..k + n].eq_ignore_ascii_case(f))

@@ -401,7 +401,8 @@ let FUNCS: { text: string; defs: { name: string; params: string[]; body: string 
 function deckFuncs(text: string) {
   if (FUNCS?.text === text) return FUNCS.defs;
   let depth = 0;
-  const top = text.split("\n").filter((l) => { const t = l.trim().toLowerCase(); depth += t.startsWith(".subckt") ? 1 : t.startsWith(".ends") ? -1 : 0; return depth === 0; }).join("\n");
+  // (a line's `;` comment is not of its body)
+  const top = text.split("\n").filter((l) => { const t = l.trim().toLowerCase(); depth += t.startsWith(".subckt") ? 1 : t.startsWith(".ends") ? -1 : 0; return depth === 0; }).map((l) => l.split(";")[0]).join("\n");
   const defs = [...top.matchAll(/^\s*\.func(?:tion)?\s+(\w+)\s*\(([^)]*)\)\s*=?\s*(.+?)\s*$/gim)].map((m) => ({
     name: m[1], params: m[2].split(/[\s,]+/).filter(Boolean), body: m[3].replace(/^\{(.*)\}$/, "$1").replace(/^'(.*)'$/, "$1"),
   }));
@@ -417,29 +418,29 @@ export const TWO_PORT_CALL = /\b(s11|s21|zin)\s*\(/i;
 export const NET_DIRECTIVE = /^\*\s*\.net\s+([IV]\s*\([^)]*\)|\S+)\s+(V\S*)(.*)$/im;
 
 /** LTspice's `.net` (a comment in the run's netlist: ngspice has no such analysis) in a trace
- *  expression of an .ac result: Zin(V1), S11(V1) and S21(V1) of the two-port from source V1 (its
- *  Rser, or Rin=, the reference impedance; its AC amplitude) to the load, I(R1) (the voltage across
- *  R1, its value the load) or V(out[,ref]) with Rout=. What it cannot make stays as written. */
+ *  expression of an .ac result: Zin(V1), S11(V1) and S21(V1) of the two-port from source V1 to the
+ *  load R1 (`.net I(R1) V1`), as the circuit terminates it: V1's Rser the input's reference
+ *  impedance, R1 the output's (V1's AC amplitude the drive). One drive gives these only: S12, S22,
+ *  other reference impedances (LTspice's Rin=, Rout=), V(out) without a load or a current source as
+ *  the input would take more (said: left as written). */
 export function twoPortIn(expr: string, nl: Netlist): string {
-  // (`V(out, ref)` with a blank; a voltage source V1 as the input: a current source's port current
-  // is no vector)
+  if (!TWO_PORT_CALL.test(expr)) return expr;
   const m = NET_DIRECTIVE.exec(nl.text);
-  if (!m || !TWO_PORT_CALL.test(expr)) return expr;
-  const [, spec, src, rest] = m, out = spec.replace(/\s+/g, "");
-  const param = (k: string) => new RegExp(`\\b${k}\\s*=\\s*(\\S+)`, "i").exec(rest)?.[1];
+  if (!m || /\b(rin|rout)\s*=/i.test(m[3])) return expr;
+  const [, spec, src] = m, out = spec.replace(/\s+/g, "");
   const lines = nl.text.split("\n");
   const line = (name: string) => lines.find((l) => l.split(/\s+/)[0]?.toLowerCase() === name.toLowerCase())?.split(/\s+/);
   const nets = (inst: string) => nl.nets[nl.insts.findIndex((x) => x.toLowerCase() === inst.toLowerCase())];
   const across = (p?: string[]) => (p?.length === 2 ? `(${vexpr(p[0])}-${vexpr(p[1])})` : "");
   const vin = across(nets(src));
   if (!vin) return expr;
-  const z0 = param("Rin") ?? line(`R${src}_rser`)?.[3];
+  const z0 = line(`R${src}_rser`)?.[3];
   // (the AC amplitude after the nodes, `AC 1`: a node named ac is none; a parameter: not here)
   const t = line(src)?.slice(3) ?? [], ac = t.findIndex((x) => /^ac$/i.test(x)), vs = ac >= 0 ? t[ac + 1] ?? "1" : "1";
   if (/[{}]/.test(vs)) return expr;
   const zin = `(${vin}/(-I(${src})))`; // (I(V1): into its + pin)
-  const r = /^I\((\w+)\)$/i.exec(out), v = /^V\(([^,)]+)(?:,([^)]+))?\)$/i.exec(out);
-  const [vl, rl] = r ? [across(nets(r[1])), line(r[1])?.[3]] : v ? [`(${vexpr(v[1].trim())}-${vexpr(v[2]?.trim() ?? "0")})`, param("Rout")] : ["", undefined];
+  const r = /^I\((\w+)\)$/i.exec(out);
+  const [vl, rl] = r ? [across(nets(r[1])), line(r[1])?.[3]] : ["", undefined];
   let e = expr;
   for (const f of ["zin", "s11", "s21"]) {
     e = replaceCalls(e, f, ([s]) => s?.toLowerCase() !== src.toLowerCase() ? null

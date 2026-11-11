@@ -974,8 +974,11 @@ const BUILTIN_MODELS: &[(&str, &str)] = &[
     ("dff", ".subckt dff d c q qn params: Vhigh=5 Vlow=0 Td=10n\nB1 mi 0 V=V(c)<{(Vhigh+Vlow)/2} ? V(d) : V(m)\nR1 mi m 10\nC1 m 0 {Td/10}\nRm m 0 1G\nB2 si 0 V=V(c)>{(Vhigh+Vlow)/2} ? V(m) : V(s)\nR2 si s 10\nC2 s 0 {Td/10}\nRs s 0 1G\nB3 qo 0 V=V(s)>{(Vhigh+Vlow)/2} ? {Vhigh} : {Vlow}\nR3 qo q 10\nC3 q 0 {Td/10}\nB4 qno 0 V=V(s)>{(Vhigh+Vlow)/2} ? {Vlow} : {Vhigh}\nR4 qno qn 10\nC4 qn 0 {Td/10}\nRd d 0 1G\nRc c 0 1G\n.ends dff"),
 ];
 
-/// Subcircuits of nomospice's own symbols (their models when placed by those symbols).
-const OWN_MODELS: [&str; 9] = ["opamp", "opamp2", "and2", "nand2", "or2", "nor2", "xor2", "not", "dff"];
+/// Whether `m` is the subcircuit of one of nomospice's own symbols (opamp, opamp2, and2 …): its
+/// model when placed by that symbol.
+fn own_model(m: &str) -> bool {
+    BUILTIN_SYMBOLS.iter().any(|(n, _)| *n == m) && BUILTIN_MODELS.iter().any(|(n, t)| *n == m && t.starts_with(".subckt"))
+}
 
 /// Byte spans of `line`'s [`spice_tokens`] (they are slices of it).
 fn token_spans(line: &str) -> Vec<(usize, usize)> {
@@ -1182,7 +1185,7 @@ const STARTUP: &str = "* startup: the DC sources ramped up from 0 over 20 us, no
 
 /// An independent source's line `V1 a b 5` (or `DC 5`, an AC part after it) as one that ramps up
 /// from 0 over the first 20 µs, as LTspice's `.tran startup` does; None: not such a source (a
-/// function such as SINE keeps its own start; a 0 V current sensor needs none).
+/// function such as SINE keeps its own start).
 fn ramped(line: &str) -> Option<String> {
     let t = spice_tokens(line);
     if !t.first().is_some_and(|n| n.starts_with(['V', 'v', 'I', 'i'])) || t.len() < 4 {
@@ -1191,7 +1194,8 @@ fn ramped(line: &str) -> Option<String> {
     let dc = usize::from(t[3].eq_ignore_ascii_case("dc"));
     let v = t.get(3 + dc)?;
     let rest = &t[4 + dc..];
-    let value = spice_num(v).filter(|x| *x != 0.0).is_some() || (v.starts_with('{') && v.ends_with('}'));
+    // (0 too: a .step of it steps the ramp's end; a 0 V sensor stays 0)
+    let value = spice_num(v).is_some() || (v.starts_with('{') && v.ends_with('}'));
     (value && rest.first().is_none_or(|r| r.eq_ignore_ascii_case("ac"))).then(|| format!("{} {} {} {RAMP}{v}){}", t[0], t[1], t[2], rest.iter().map(|r| format!(" {r}")).collect::<String>()))
 }
 /// How [`ramped`] writes a source's value, `PWL(0 0 20u 5)` (a `.step` of the source steps the 5).
@@ -1397,7 +1401,8 @@ impl Step {
                 // `V1 a b 5` or `V1 a b DC 5 …`: the DC value (a SINE or PULSE has none to step)
                 let sp = token_spans(line.line);
                 // (ramped up by .tran startup: the value the ramp ends at)
-                if let Some(&(a, e)) = sp.get(3).filter(|&&(a, e)| line.line[a..e].starts_with(RAMP) && line.line[a..e].ends_with(')')) {
+                // (exactly the ramp: a PWL of the user's own that starts alike is no ramp)
+                if let Some(&(a, e)) = sp.get(3).filter(|&&(a, e)| line.line[a..e].strip_prefix(RAMP).and_then(|r| r.strip_suffix(')')).is_some_and(|v| !v.contains([' ', '(']))) {
                     return Ok(splice(text, &[(line.start + a + RAMP.len(), line.start + e - 1)], v));
                 }
                 // (the DC value where it is written: right after the nodes, or after a `DC` anywhere)
@@ -1926,7 +1931,7 @@ fn lt_white(text: &str, warnings: &mut Vec<String>) -> Option<String> {
             continue;
         }
         let mut rest = code;
-        while let Some(k) = find_call(rest, "white") {
+        while let Some(k) = crate::laplace::call_at(rest, &["white"]) {
             let open = k + rest[k..].find('(').unwrap_or(0);
             let close = matching(rest, open);
             let Some(close) = close else { break };
@@ -1984,20 +1989,6 @@ fn deck_funcs(text: &str, top: bool) -> Vec<String> {
         let head = [&b".function"[..], b".func"].into_iter().find(|h| b.len() > h.len() && b[..h.len()].eq_ignore_ascii_case(h) && b[h.len()].is_ascii_whitespace())?;
         (!top || level == 0).then(|| t[head.len()..].trim_start().split(|c: char| c == '(' || c.is_whitespace()).next().unwrap_or("").to_ascii_lowercase())
     }).collect()
-}
-
-/// Where a call of `name` starts in `s` (a whole word, `(` after it, blanks between allowed).
-fn find_call(s: &str, name: &str) -> Option<usize> {
-    let low = s.to_ascii_lowercase();
-    let mut from = 0;
-    while let Some(i) = low[from..].find(name).map(|i| from + i) {
-        let before = low[..i].chars().next_back().is_none_or(|c| !(c.is_ascii_alphanumeric() || c == '_'));
-        if before && low[i + name.len()..].trim_start().starts_with('(') {
-            return Some(i);
-        }
-        from = i + name.len();
-    }
-    None
 }
 
 /// The `)` matching the `(` at `open`.
@@ -2692,13 +2683,13 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
         }
         // (nomospice's own subcircuit symbols: their default parameters belong to their own model,
         // opamp2's Slew=… are no TL072's; any other symbol's apply whatever its Value, as in LTspice)
-        let defaults = !OWN_MODELS.contains(&def.value.to_lowercase().as_str()) || def.value.eq_ignore_ascii_case(&model);
+        let defaults = !own_model(&def.value.to_lowercase()) || def.value.eq_ignore_ascii_case(&model);
+        if builtin_symbol(&def.name) && own_model(&model) {
+            own_used.insert(model.clone());
+        }
         if "DQMXJS".contains(prefix) && model.is_empty() {
             nl.warnings.push(format!("{inst}: no model or subcircuit named (its Value is empty)"));
         } else if "DQMXJSWO".contains(prefix) && !model.is_empty() && block.is_none() && !defined(&model) && !used_models.contains(&model) {
-            if builtin_symbol(&def.name) && OWN_MODELS.contains(&model.as_str()) {
-                own_used.insert(model.clone());
-            }
             used_models.push(model);
         }
         let extra: Vec<String> = ["Value2", "SpiceLine", "SpiceLine2"].iter()
@@ -3072,7 +3063,7 @@ mod tests {
         assert_eq!(ramped("V2 a 0 DC {Vs} AC 1").as_deref(), Some("V2 a 0 PWL(0 0 20u {Vs}) AC 1"));
         assert_eq!(ramped("I1 0 b 1m").as_deref(), Some("I1 0 b PWL(0 0 20u 1m)"));
         assert_eq!(ramped("V3 a 0 SINE(0 1 1k)"), None);
-        assert_eq!(ramped("Vsense_r1 a b 0"), None);
+        assert_eq!(ramped("Vsense_r1 a b 0").as_deref(), Some("Vsense_r1 a b PWL(0 0 20u 0)")); // (stays 0; steppable)
         assert_eq!(ramped("R1 a b 1k"), None);
         // white(c*time): a TRNOISE source of its own, before .end; other arguments are said
         let mut w = vec![];
@@ -3092,6 +3083,8 @@ mod tests {
         // a .step of a source ramped up: the ramp's end
         let st = parse_step(".step V1 1 2 1").unwrap();
         assert!(st.apply("V1 a 0 PWL(0 0 20u 5)\n.tran 1m\n", 2.0).unwrap().starts_with("V1 a 0 PWL(0 0 20u 2"), "{:?}", st.apply("V1 a 0 PWL(0 0 20u 5)\n", 2.0));
+        // (a PWL of the user's own: no DC value to step, one put after the nodes)
+        assert!(st.apply("V1 a 0 PWL(0 0 20u 5 1m 3)\n", 2.0).unwrap().contains("PWL(0 0 20u 5 1m 3)"));
         assert_eq!(t(".tran {T}"), ".tran {(T)/1000} {T}");
         assert_eq!(t(".tran 3m"), ".tran 3e-6 3m");
         assert_eq!(t(".tran 1m ; 10 cycles uic"), ".tran 1e-6 1m");

@@ -31,7 +31,7 @@ Written with the directive form (++s++), its tabs in brackets.
 | `.include`, `.lib` (Include file) | a model file, whole or one section |
 | `.step` (Text) | runs the analysis once per value: `.step param C list 47n 100n 220n`; also `lin`, `oct`, `dec`, a source's value, `temp`; up to three nested |
 | `.tran … startup` | as in LTspice: no operating point, the DC sources ramped up from 0 over 20 µs (oscillators start) |
-| `.net I(R1) V1` | LTspice's two-port analysis: after an `.ac` run, `S21(V1)`, `S11(V1)` and `Zin(V1)` are traces (V1's Rser, or `Rin=`, the reference impedance; R1 the load, or `V(out)` with `Rout=`) |
+| `.net I(R1) V1` | LTspice's two-port analysis: after an `.ac` run, `S21(V1)`, `S11(V1)` and `Zin(V1)` are traces of the circuit as it is terminated (V1's Rser the input's reference impedance, the load R1 the output's); `S12`, `S22`, `Rin=` and `Rout=` are not computed |
 | `.func f(x) {…}` | a function of your own, in values and in trace expressions (`.func NF(x) {10*log10(x*x/(50*4*boltz*300))}`, then *Add trace* `NF(V(inoise))`) |
 
 Other dot commands that ngspice knows pass through as they are written.

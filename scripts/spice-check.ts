@@ -219,11 +219,12 @@ assert.equal(numInfo("1Meg", "Hz")!.text, "= 1MegHz"); // not "1M", the milli tr
   assert.equal(twoPortIn("S21(V1)", two), '(2*(v("out")-0)/(1)*sqrt((50)/(50)))');
   assert.equal(twoPortIn("S21(V2)", two), "S21(V2)");
   assert.equal(twoPortIn("S21(V1)", { ...two, text: two.text.replace("* .net I(R1) V1", "* .net V(out) V1") }), "S21(V1)"); // (no Rout=: no load to refer to)
-  assert.equal(twoPortIn("S21(V1)", { ...two, text: two.text.replace("* .net I(R1) V1", "* .net V(out, 0) V1 Rout=75") }), '(2*(v("out")-0)/(1)*sqrt((50)/(75)))'); // (a blank in V(out, ref))
+  assert.equal(twoPortIn("S21(V1)", { ...two, text: two.text.replace("* .net I(R1) V1", "* .net I(R1) V1 Rin=75") }), "S21(V1)"); // (other reference impedances: not from one drive)
   assert.equal(twoPortIn("Zin(I1)", { ...two, text: two.text.replace("* .net I(R1) V1", "* .net I(R1) I1") }), "Zin(I1)"); // (a current source: left, said)
   assert.equal(funcsIn("NF(V(n))", ".func NF(X) {x*X}"), "((V(n))*(V(n)))"); // (parameters in any case)
   assert.equal(funcsIn("g(1)", ".subckt amp a b\n.func g(x) {x*10}\n.ends amp"), "g(1)"); // (a subcircuit's .func is its own)
   assert.equal(funcsIn("V(out)/vt()", ".func vt() {boltz*300/echarge}"), "V(out)/(boltz*300/echarge)"); // (no parameters)
+  assert.equal(funcsIn("NF(V(n))", ".func NF(x) {x*2} ; noise figure"), "((V(n))*2)"); // (a comment after it)
   assert.equal(twoPortIn("S21(V1)", { ...two, text: two.text.replace("V1 V1_rser 0 AC 1", "V1 V1_rser ac AC 2") }), '(2*(v("out")-0)/(2)*sqrt((50)/(50)))'); // (a node named ac)
   assert.equal(exprUnit("I(R1)-I(R2)"), "A");
   assert.equal(exprUnit("Ib(Q1)+Ic(Q1)"), "A");
