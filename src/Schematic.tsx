@@ -22,7 +22,7 @@ type Drag =
   | { k: "move"; start: Pt; plan: (dx: number, dy: number) => Item[]; moved: boolean; index: number; at: Pt; base: Item[]; pin?: number }
   | { k: "box"; start: Pt; end: Pt }
   /** LTspice's differential probe: red on wire/label `from`, black on what the pointer is over */
-  | { k: "diff"; from: number; to: number; at: Pt; base: Item[]; sx: number; sy: number; moved: boolean };
+  | { k: "diff"; from: number; to: number; at: Pt; base: Item[]; sx: number; sy: number; far: number; moved: boolean };
 
 // SwiftFlow viewport constants (Models/Viewport.swift, FitViewOptions.swift)
 const MIN_ZOOM = 0.1, MAX_ZOOM = 6, FIT_PADDING = 80, FIT_MAX = 2.5, ZOOM_STEP = 1.2;
@@ -294,7 +294,8 @@ export const Schematic = memo(function Schematic() {
   const pastedAt = useRef({ t: 0, x: 0, y: 0 });
   const [preview, setPreview] = useState<Item[] | null>(null);
   const [boxSel, setBoxSel] = useState<[Pt, Pt] | null>(null);
-  /** A differential probe being dragged: its red probe's wire/label, red at `a`, black at `b` */
+  /** A differential probe being dragged: its red probe's wire/label, red at `a` (on the schematic),
+   *  black at `b` (on screen) */
   const [diffProbe, setDiffProbe] = useState<{ from: number; a: Pt; b: Pt } | null>(null);
   const drag = useRef<Drag | null>(null);
   const mods = useRef(false);
@@ -511,7 +512,7 @@ export const Schematic = memo(function Schematic() {
         // label only, even under a text or a part
         const it = items[i];
         if (probing && tool.k === "select" && !mods.current && isNet(it)) {
-          drag.current = { k: "diff", from: i, to: i, at: p, base: items, sx: e.clientX, sy: e.clientY, moved: false };
+          drag.current = { k: "diff", from: i, to: i, at: p, base: items, sx: e.clientX, sy: e.clientY, far: 0, moved: false };
           return;
         }
         // the plan is built on the first move (a click or a probe never needs it); the move tool:
@@ -553,11 +554,15 @@ export const Schematic = memo(function Schematic() {
       d.at = [dx, dy];
       if (d.moved) setPreview(d.plan(dx, dy));
     } else if (d.k === "diff") {
-      if (Math.hypot(e.clientX - d.sx, e.clientY - d.sy) > 3) d.moved = true; // (less: a click, if a shaky one)
+      // another tool or an edit meanwhile (⌘Z, Delete): the drag is over, its indices stale
+      if (!probing || useS.getState().items !== d.base) return (drag.current = null), setHover(-1), clearDrag();
+      d.far = Math.hypot(e.clientX - d.sx, e.clientY - d.sy);
+      if (d.far > 3) d.moved = true; // (less: a click, if a shaky one)
       if (!d.moved) return;
       d.to = hit(items, lib, p, 6 / view.k, false, isNet);
       setHover(d.to);
-      setDiffProbe({ from: d.from, a: d.at, b: p });
+      // (the black one on screen, where the hidden pointer is, a zoom meanwhile or not)
+      setDiffProbe({ from: d.from, a: d.at, b: [p[0] * view.k + view.x, p[1] * view.k + view.y] });
     } else (d.end = p), setBoxSel([d.start, p]);
   };
 
@@ -591,8 +596,9 @@ export const Schematic = memo(function Schematic() {
       // LTspice: a plain click probes at once; modifier clicks only change the selection
       else if (!d.moved && probing && !mods.current && useS.getState().items === d.base) probe(d.base[d.index], false, d.pin);
     } else if (d?.k === "diff") {
-      // released on a wire or label: V(from,to) (on ground or its own net, a click: V(from))
-      const to = d.base[d.to]; // (not moved: still `from`, a click)
+      // released on a wire or label: V(from,to) (on ground or its own net, a click: V(from)); on
+      // nothing near the start: a shaky click
+      const to = d.base[d.to] ?? (d.far <= 8 ? d.base[d.from] : undefined);
       if (to && probing && useS.getState().items === d.base) probe(d.base[d.from], false, undefined, to);
     } else if (d?.k === "pan" && !d.moved) useS.setState({ sel: [] });
     else if (d?.k === "box") {
@@ -840,8 +846,8 @@ export const Schematic = memo(function Schematic() {
           )}
         </g>
         {/* (the black one in the text's colour: light on a dark canvas) */}
-        {diffProbe && ([[diffProbe.a, "#e0573a"], [diffProbe.b, "var(--text-strong)"]] as const).map(([q, c]) => (
-          <g key={c} pointerEvents="none" color={c} transform={`translate(${view.x + q[0] * view.k - 1} ${view.y + q[1] * view.k - 23})`} dangerouslySetInnerHTML={{ __html: probeGlyph("currentColor") }} />
+        {diffProbe && ([[[view.x + diffProbe.a[0] * view.k, view.y + diffProbe.a[1] * view.k], "#e0573a"], [diffProbe.b, "var(--text-strong)"]] as const).map(([q, c]) => (
+          <g key={c} pointerEvents="none" color={c} transform={`translate(${q[0] - 1} ${q[1] - 23})`} dangerouslySetInnerHTML={{ __html: probeGlyph("currentColor") }} />
         ))}
       </svg>
       {stale && sim && (
