@@ -416,7 +416,7 @@ function TraceDialog() {
     const f = e.match(/^(\w+)\((.*)\)$/);
     const unit = f && /^v?db$/i.test(f[1]) ? "dB" : f && /^(c?ph|vp)$/i.test(f[1]) ? "rad"
       : noise ? ((a) => (a === run?.scale ? xUnitOf(a) : /^\w+$/.test(a) ? noiseUnit(a) : ""))(f && /^(mag|vm|real|re|abs)$/i.test(f[1]) ? f[2] : e) // (a spectrum, or a magnitude of one)
-      : raw ? "" : ((u) => (u === "W" && run?.plot.startsWith("ac") ? "VA" : u))(exprUnit(e, vectorUnit, xUnitOf(run?.scale ?? ""))); // (V·I in .ac: complex, VA)
+      : raw ? "" : ((u) => (u === "W" && run?.plot.startsWith("ac") && !/\bP\s*\(/i.test(e) ? "VA" : u))(exprUnit(e, vectorUnit, xUnitOf(run?.scale ?? ""))); // (V·I in .ac: complex, VA; P() is watts, from a later .tran)
     if (e) addTrace(e, e, unit);
   };
   return (

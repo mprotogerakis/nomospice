@@ -26,6 +26,8 @@ type Drag =
 
 // SwiftFlow viewport constants (Models/Viewport.swift, FitViewOptions.swift)
 const MIN_ZOOM = 0.1, MAX_ZOOM = 6, FIT_PADDING = 80, FIT_MAX = 2.5, ZOOM_STEP = 1.2;
+/** An item no hit test finds (a stand-in keeping the others' indices). */
+const RAW: Item = { t: "raw", line: "" };
 const clampZoom = (k: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, k));
 
 const cursorSvg = (body: string) =>
@@ -551,8 +553,9 @@ export const Schematic = memo(function Schematic() {
     } else if (d.k === "diff") {
       if (Math.hypot(e.clientX - d.sx, e.clientY - d.sy) > 3) d.moved = true; // (less: a click, if a shaky one)
       if (!d.moved) return;
-      d.to = hit(items, lib, p, 6 / view.k, false);
-      setHover(items[d.to]?.t === "wire" || items[d.to]?.t === "flag" ? d.to : -1); // (only what it can end on)
+      // only what it can end on, a wire or label, even under a text or a part
+      d.to = hit(items.map((it) => (it.t === "wire" || it.t === "flag" ? it : RAW)), lib, p, 6 / view.k, false);
+      setHover(d.to);
       setDiffProbe({ from: d.from, a: d.at, b: p });
     } else (d.end = p), setBoxSel([d.start, p]);
   };

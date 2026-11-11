@@ -21,7 +21,10 @@ export GIT_AUTHOR_NAME="nomospice docs" GIT_AUTHOR_EMAIL="docs@nomospice.invalid
 [ $# -gt 0 ] || set -- $(for f in docs/scenes/*.js; do basename "$f" .js; done)
 work=$(mktemp -d)
 k=0
-trap 'rm -rf "$work"' EXIT
+app= dog=
+# (interrupted: the scene's app and its watchdog end too, each a process group of its own)
+trap 'for g in $app $dog; do kill -- -$g 2>/dev/null; done; rm -rf "$work"' EXIT
+trap 'exit 130' INT TERM
 data="$HOME/Library/Application Support/de.nomospice.docs"
 for n in "$@"; do
   k=$((k + 1))
@@ -50,6 +53,7 @@ for n in "$@"; do
   ok=0; wait $app || ok=$?
   kill -- -$dog 2>/dev/null || true # (gone already when it fired)
   wait $dog 2>/dev/null || true # (reaped quietly; killed, it returns 143)
+  app= dog= # (gone: their ids may be another process's by the end)
   if [ $ok -ne 0 ]; then tail -20 "$log"; exit 1; fi
   if [ -f "$img/$n/ERROR.png" ]; then echo "scene $n failed: $img/$n/ERROR.png"; grep -A3 "^scene:" "$log" | head -8; exit 1; fi
   # (a palette per picture: a quarter of the size, no visible difference; pngquant if there is one)

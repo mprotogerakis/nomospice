@@ -293,12 +293,18 @@ async function fetchTrace(t: Trace): Promise<Trace> {
   const run = get().sim?.run;
   if (!run) return { ...t, data: undefined, error: "no simulation results: run the simulation" };
   const nl = get().sim!.netlist; // (the one the results were computed with)
-  if ((t.power || POWER_CALL.test(t.expr)) && !powerMode(get().sim)) return { ...t, data: undefined, error: "power: only in .tran and .dc results" };
+  const anyP = /\bP\s*\(/i; // (P() of whatever: exprUnit's watts, so ours to explain)
+  if ((t.power || anyP.test(t.expr)) && !powerMode(get().sim)) return { ...t, data: undefined, error: "power: only in .tran and .dc results" };
   // P(D1) by the name it is drawn with (its current's, I(D1)), else by its netlist's (XD1)
-  const part = (n: string) => ((i) => (i >= 0 ? i : nl.insts.findIndex((x) => x.toLowerCase() === n)))(nl.insts.findIndex((_, j) => partCurrent(nl, j).toLowerCase() === `i(${n})`));
+  const part = (n: string) => {
+    const drawn = nl.insts.findIndex((_, j) => partCurrent(nl, j).toLowerCase() === `i(${n})`);
+    return drawn >= 0 ? drawn : nl.insts.findIndex((x) => x.toLowerCase() === n);
+  };
   const expr = expandPowers(t.expr, (n) => powerExpr(nl, part(n.toLowerCase())));
-  const left = POWER_CALL.exec(expr)?.[1];
-  if (left) return { ...t, data: undefined, error: `P(${left}): no such two-pin part; P() is the power of a part with two pins, by its name (its menu's Plot power)` };
+  if (anyP.test(expr)) {
+    const left = POWER_CALL.exec(expr)?.[1];
+    return { ...t, data: undefined, error: `${left ? `P(${left}): no such two-pin part. ` : ""}P() is the power of a part with two pins, by its name: P(R1) (its menu's Plot power)` };
+  }
   try {
     return { ...t, data: await invoke<TraceData>("trace", { expr, scale: run.scale, run: run.id }), error: undefined };
   } catch (e) {
@@ -539,7 +545,8 @@ export async function addTrace(label: string, expr: string, unit: string) {
 
 async function addTraceNow(label: string, expr: string, unit: string, power = false) {
   const { traces, sim } = get();
-  if (!sim?.run || isOp(sim) || traces.some((t) => t.expr === expr)) return;
+  // (the same trace by another route, Plot power's P(R1) and a typed one: once)
+  if (!sim?.run || isOp(sim) || traces.some((t) => t.expr === expr || t.label === label)) return;
   const gen = docGen;
   // a result tab brought back may hold a run ngspice no longer has (another tab or a root locus ran
   // since): run it again first (not from inside a run, e.g. simulate's auto-plot)
@@ -551,7 +558,7 @@ async function addTraceNow(label: string, expr: string, unit: string, power = fa
     if (seq !== runSeq) await idle(); // a run started meanwhile: evaluate again on its result
   } while (seq !== runSeq);
   if (gen !== docGen || !get().sim?.run || isOp(get().sim)) return;
-  const rest = get().traces.filter((x) => x.expr !== expr);
+  const rest = get().traces.filter((x) => x.expr !== expr && x.label !== label);
   set({ traces: [...rest, { ...t, slot: freeSlot(rest) }] }); // slot picked at insert time: concurrent adds differ
 }
 
@@ -608,10 +615,9 @@ export async function probe(target: Item, power = false, pin?: number, ref?: Ite
   if (!sim?.run || !probeMode(sim) || stale || i < 0) return; // e.g. the re-run turned out to be .noise
   if (target.t === "sym" && power) {
     if (!powerMode(sim)) return;
-    // LTspice's power probe, as P(R1) where that names it back (a trace typed alike is the same
-    // one), else as the product (Px(U1:A) is no expression)
-    const name = powerName(partCurrent(sim.netlist, i)), p = powerExpr(sim.netlist, i);
-    if (p) await addTraceNow(name, POWER_CALL.exec(name)?.[0] === name ? name : p, "W", true);
+    // LTspice's power probe (the product itself: its expression copied works anywhere)
+    const p = powerExpr(sim.netlist, i);
+    if (p) await addTraceNow(powerName(partCurrent(sim.netlist, i)), p, "W", true);
   } else if (target.t === "sym") {
     const cur = partCurrent(sim.netlist, i, pin); // (also the expression: the backend reads the name)
     if (cur) await addTraceNow(cur, cur, "A");
