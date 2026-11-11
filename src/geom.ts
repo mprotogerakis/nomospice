@@ -384,7 +384,8 @@ export function funcsIn(expr: string, text: string): string {
     const before = expr;
     for (const d of defs) {
       // (all parameters at once: an argument's own letters are not a parameter's; any case, as SPICE)
-      const re = new RegExp(`\\b(${d.params.join("|")})\\b`, "gi"), low = d.params.map((p) => p.toLowerCase());
+      // (not a function's name: a parameter v is no V(out))
+      const re = new RegExp(`\\b(${d.params.join("|")})\\b(?!\\s*\\()`, "gi"), low = d.params.map((p) => p.toLowerCase());
       expr = replaceCalls(expr, d.name, (given) => {
         const args = given.length === 1 && !given[0] ? [] : given; // (`vt()`: none)
         return args.length !== d.params.length ? null : `(${d.params.length ? d.body.replace(re, (p) => `(${args[low.indexOf(p.toLowerCase())]})`) : d.body})`;
@@ -440,12 +441,14 @@ export function twoPortIn(expr: string, nl: Netlist): string {
   if (/[{}]/.test(vs)) return expr;
   const zin = `(${vin}/(-I(${src})))`; // (I(V1): into its + pin)
   const r = /^I\((\w+)\)$/i.exec(out);
-  const [vl, rl] = r ? [across(nets(r[1])), line(r[1])?.[3]] : ["", undefined];
+  // (a resistor of a plain value as the load, an Rser of one as the source's: else no reference)
+  const plain = (x?: string) => !!x && /^[\d.]+(e[-+]?\d+)?[a-zµ]*$/i.test(x);
+  const [vl, rl] = r && /^r/i.test(r[1]) && plain(line(r[1])?.[3]) ? [across(nets(r[1])), line(r[1])?.[3]] : ["", undefined];
   let e = expr;
   for (const f of ["zin", "s11", "s21"]) {
     e = replaceCalls(e, f, ([s]) => s?.toLowerCase() !== src.toLowerCase() ? null
       : f === "zin" ? zin
-      : !z0 || /[{}]/.test(z0) ? null
+      : !plain(z0) ? null
       : f === "s11" ? `((${zin}-(${z0}))/(${zin}+(${z0})))`
       : vl && rl && !/[{}]/.test(rl) ? `(2*${vl}/(${vs})*sqrt((${z0})/(${rl})))` : null);
   }

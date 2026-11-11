@@ -1187,7 +1187,8 @@ const STARTUP: &str = "* startup: the DC sources ramped up from 0 over 20 us, no
 /// from 0 over the first 20 µs, as LTspice's `.tran startup` does; None: not such a source (a
 /// function such as SINE keeps its own start).
 fn ramped(line: &str) -> Option<String> {
-    let t = spice_tokens(line);
+    let code = uncommented(line);
+    let t = spice_tokens(code);
     if !t.first().is_some_and(|n| n.starts_with(['V', 'v', 'I', 'i'])) || t.len() < 4 {
         return None;
     }
@@ -1196,7 +1197,8 @@ fn ramped(line: &str) -> Option<String> {
     let rest = &t[4 + dc..];
     // (0 too: a .step of it steps the ramp's end; a 0 V sensor stays 0)
     let value = spice_num(v).is_some() || (v.starts_with('{') && v.ends_with('}'));
-    (value && rest.first().is_none_or(|r| r.eq_ignore_ascii_case("ac"))).then(|| format!("{} {} {} {RAMP}{v}){}", t[0], t[1], t[2], rest.iter().map(|r| format!(" {r}")).collect::<String>()))
+    // (a comment after it kept)
+    (value && rest.first().is_none_or(|r| r.eq_ignore_ascii_case("ac"))).then(|| format!("{} {} {} {RAMP}{v}){}{}", t[0], t[1], t[2], rest.iter().map(|r| format!(" {r}")).collect::<String>(), &line[code.trim_end().len()..]))
 }
 /// How [`ramped`] writes a source's value, `PWL(0 0 20u 5)` (a `.step` of the source steps the 5).
 const RAMP: &str = "PWL(0 0 20u ";
@@ -1401,8 +1403,8 @@ impl Step {
                 // `V1 a b 5` or `V1 a b DC 5 …`: the DC value (a SINE or PULSE has none to step)
                 let sp = token_spans(line.line);
                 // (ramped up by .tran startup: the value the ramp ends at)
-                // (exactly the ramp: a PWL of the user's own that starts alike is no ramp)
-                if let Some(&(a, e)) = sp.get(3).filter(|&&(a, e)| line.line[a..e].strip_prefix(RAMP).and_then(|r| r.strip_suffix(')')).is_some_and(|v| !v.contains([' ', '(']))) {
+                // (exactly the ramp, under .tran startup: a PWL of the user's own that starts alike is no ramp)
+                if let Some(&(a, e)) = sp.get(3).filter(|_| text.contains(STARTUP)).filter(|&&(a, e)| line.line[a..e].strip_prefix(RAMP).and_then(|r| r.strip_suffix(')')).is_some_and(|v| !v.contains([' ', '(']))) {
                     return Ok(splice(text, &[(line.start + a + RAMP.len(), line.start + e - 1)], v));
                 }
                 // (the DC value where it is written: right after the nodes, or after a `DC` anywhere)
@@ -1960,15 +1962,9 @@ fn lt_white(text: &str, warnings: &mut Vec<String>) -> Option<String> {
         out.push_str(&line[code.len()..]);
     }
     // (the noise sources before .end, at the top level)
-    let mut at = out.len();
-    let mut k = 0;
-    for l in out.split_inclusive('\n') {
-        if l.trim().eq_ignore_ascii_case(".end") {
-            at = k;
-        }
-        k += l.len();
+    for s in &sources {
+        out = before_end(&out, &s.1);
     }
-    out.insert_str(at, &sources.iter().map(|s| format!("{}\n", s.1)).collect::<String>());
     // (a white() on a `+` line or in a .func body is not translated: said)
     if out.lines().any(|l| !l.trim_start().starts_with(['*', 'b', 'B']) && crate::laplace::calls(uncommented(l), &["white"])) {
         warnings.push("`white()` only becomes noise in a behavioral source's own line (not on a + line or in a .func): ngspice has no white()".into());
@@ -2868,7 +2864,7 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
             continue;
         }
         let builtin = BUILTIN_MODELS.iter().find(|(n, _)| *n == m).map(|(_, t)| t.to_string());
-        let lib = if own_used.contains(&m) { None } else { crate::library::definitions(&m, &mut h.emitted) };
+        let lib = if own_used.contains(&m) || m == "opamp" { None } else { crate::library::definitions(&m, &mut h.emitted) };
         let def = match (lib, builtin) {
             (Some(defs), _) => Some(defs.join("\n")),
             (None, Some(text)) => h.emitted.insert(m.clone()).then_some(text),
@@ -3065,10 +3061,11 @@ mod tests {
         assert_eq!(ramped("V3 a 0 SINE(0 1 1k)"), None);
         assert_eq!(ramped("Vsense_r1 a b 0").as_deref(), Some("Vsense_r1 a b PWL(0 0 20u 0)")); // (stays 0; steppable)
         assert_eq!(ramped("R1 a b 1k"), None);
+        assert_eq!(ramped("V1 vcc 0 12 ; supply").as_deref(), Some("V1 vcc 0 PWL(0 0 20u 12) ; supply"));
         // white(c*time): a TRNOISE source of its own, before .end; other arguments are said
         let mut w = vec![];
-        let out = lt_white("B1 n 0 V=white(1e6*time)/10 + white( time*2k )\n.tran 1m\n.end\n", &mut w).unwrap();
-        assert!(out.starts_with("B1 n 0 V=v(nw_white1)/10 + v(nw_white2)\n.tran 1m\nVwhite1 nw_white1 0 dc 0 trnoise(0.288675 1e-6 0 0)\nVwhite2 nw_white2 0 dc 0 trnoise(0.288675 5e-4 0 0)\n.end"), "{out}");
+        let out = lt_white("B1 n 0 V=white(1e6*time)/10 + white( time*2k )\n.tran 1m\n.end ; done\n", &mut w).unwrap();
+        assert!(out.starts_with("B1 n 0 V=v(nw_white1)/10 + v(nw_white2)\n.tran 1m\nVwhite1 nw_white1 0 dc 0 trnoise(0.288675 1e-6 0 0)\nVwhite2 nw_white2 0 dc 0 trnoise(0.288675 5e-4 0 0)\n.end ; done"), "{out}");
         assert!(w.is_empty(), "{w:?}");
         let out = lt_white("B1 n 0 V=white(V(x))\n", &mut w).unwrap();
         assert!(out.contains("white(V(x))") && w.len() == 1, "{out} {w:?}");
@@ -3082,7 +3079,10 @@ mod tests {
         assert!(out.starts_with("B1 n 0 V=v(nw_white1)-v(nw_white1)\n") && !out.contains("nw_white2") && w.len() == 1, "{out} {w:?}");
         // a .step of a source ramped up: the ramp's end
         let st = parse_step(".step V1 1 2 1").unwrap();
-        assert!(st.apply("V1 a 0 PWL(0 0 20u 5)\n.tran 1m\n", 2.0).unwrap().starts_with("V1 a 0 PWL(0 0 20u 2"), "{:?}", st.apply("V1 a 0 PWL(0 0 20u 5)\n", 2.0));
+        let su = format!("V1 a 0 PWL(0 0 20u 5)\n.tran 1m uic\n{STARTUP}\n");
+        assert!(st.apply(&su, 2.0).unwrap().starts_with("V1 a 0 PWL(0 0 20u 2"), "{:?}", st.apply(&su, 2.0));
+        // (the same PWL without startup is the user's own: a DC value is put in)
+        assert!(st.apply("V1 a 0 PWL(0 0 20u 5)\n", 2.0).unwrap().contains("PWL(0 0 20u 5)"));
         // (a PWL of the user's own: no DC value to step, one put after the nodes)
         assert!(st.apply("V1 a 0 PWL(0 0 20u 5 1m 3)\n", 2.0).unwrap().contains("PWL(0 0 20u 5 1m 3)"));
         assert_eq!(t(".tran {T}"), ".tran {(T)/1000} {T}");

@@ -284,6 +284,7 @@ pub fn symbol_for(e: &Entry) -> String {
         "PJF" => "pjf",
         "SW" => "sw",
         "CSW" => "csw",
+        "LTRA" => "ltline",
         _ if e.kind == "SUBCKT" => return format!("subckt:{}", e.name),
         _ => "",
     }.to_string()
