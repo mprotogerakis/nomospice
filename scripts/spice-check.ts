@@ -237,7 +237,7 @@ assert.equal(numInfo("1Meg", "Hz")!.text, "= 1MegHz"); // not "1M", the milli tr
   assert.equal(twoPortIn("S21(V1)", { ...two, text: two.text.replace("V1 V1_rser 0 AC 1", "V1 V1_rser 0 AC 1 {phi}") }), "S21(V1)"); // (a phase as a parameter: not either)
   const dcOnly = { ...two, text: two.text.replace("V1 V1_rser 0 AC 1", "V1 V1_rser 0 5") };
   assert.equal(twoPortIn("S21(V1)", dcOnly), "S21(V1)"); // (no AC part: no drive)
-  assert.equal(twoPortIn("Zin(V1)", dcOnly), '((v("in")-0)/(-I(V1)))');
+  assert.equal(twoPortIn("Zin(V1)", dcOnly), "Zin(V1)"); // (nor Zin: 0/0)
   assert.equal(twoPortIn("S21(V1)", { ...two, text: two.text.replace("V1 V1_rser 0 AC 1", "V1 V1_rser 0 AC 1 SIN(0 1 1k)") }), '(2*v("out")/(1)*sqrt((50)/(50)))'); // (a waveform after it is no phase)
   assert.equal(funcsIn("NF(V(n))", ".param Rs=50\n.func NF(x) {imag(Rs*x)}"), "(imag((50)*(V(n))))"); // (imag() is no probe)
   assert.equal(funcsIn("f(V(a))", ".func f(x) {x*2} $ note"), "((V(a))*2)"); // (a $ comment)
@@ -247,8 +247,11 @@ assert.equal(numInfo("1Meg", "Hz")!.text, "= 1MegHz"); // not "1M", the milli tr
   const one = { ...two, text: two.text.replace("* .net I(R1) V1 ; nomospice: two-port", "* .net V1 ; nomospice: two-port") }; // (a one-port: Zin and S11)
   assert.equal(twoPortIn("Zin(V1)", one), '((v("in")-0)/(-I(V1)))');
   assert.equal(twoPortIn("S21(V1)", one), "S21(V1)");
-  for (const more of ["V2 x 0 AC 1", "V2 x 0 DC 0\n+ AC 1", ".subckt blk a b\nV1 a b AC 1\n.ends"]) assert.equal(twoPortIn("Zin(V1)", { ...two, text: two.text + "\n" + more }), "Zin(V1)", more); // (another AC drive: left)
-  for (const more of ["V2 x 0 DC 5 AC 0V", "V2 x 0 DC 5 ; AC 1 later", ".param a=0\nV2 x 0 AC {a}", "Vsense y 0 0"]) assert.notEqual(twoPortIn("Zin(V1)", { ...two, text: two.text + "\n" + more }), "Zin(V1)", more); // (none)
+  for (const more of ["V2 x 0 AC 1", "V2 x 0 DC 0\n+ AC 1", ".subckt blk a b\nV1 a b AC 1\n.ends", ".subckt blk n1 n2 params: a=1\nV2 n1 n2 AC {a}\n.ends"]) assert.equal(twoPortIn("Zin(V1)", { ...two, text: two.text + "\n" + more }), "Zin(V1)", more); // (another AC drive: left)
+  for (const more of ["V2 x 0 DC 5 AC 0V", "V2 x 0 DC 5 ; AC 1 later", "V2 x 0 DC 5 // AC 1", "Vsense y 0 0"]) assert.equal(twoPortIn("S21(V1)", { ...two, text: two.text + "\n" + more }), twoPortIn("S21(V1)", two), more); // (none)
+  for (const more of [".param a=0\nV2 x 0 AC {a}", "V2 x 0 AC {0+g}"]) assert.equal(twoPortIn("Zin(V1)", { ...two, text: two.text + "\n" + more }), "Zin(V1)", more); // (in doubt: left)
+  assert.equal(twoPortIn("S21(V1)", { ...two, text: two.text.replace("V1 V1_rser 0 AC 1", "V1 V1_rser 0 DC 0\n+ AC 1") }), twoPortIn("S21(V1)", two)); // (its own AC on a + line)
+  for (const own of ["V1 V1_rser 0 AC 0", "V1 V1_rser 0 DC 1"]) assert.equal(twoPortIn("Zin(V1)", { ...two, text: two.text.replace("V1 V1_rser 0 AC 1", own) }), "Zin(V1)", own); // (no drive of its own: left)
   assert.equal(twoPortIn("S21(V1)", { ...two, text: two.text.replace(/^(V1|R1|RV1_rser) /gm, "  $1 ") }), twoPortIn("S21(V1)", two)); assert.notEqual(twoPortIn("S21(V1)", two), "S21(V1)"); // (indented lines)
   assert.equal(exprUnit("S21(V1)"), ""); assert.equal(exprUnit("Zin(V1)"), "Ω"); assert.equal(exprUnit("Zin(V1)/2"), "Ω"); // (db() of it: the dialog's rule)
   const st = ".param Rs=50\n* .step param Rs list 50 100 (nomospice: one run per step)\n.func NF(x) {x/Rs}\n.func g(x) {x*2}";

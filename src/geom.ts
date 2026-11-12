@@ -507,7 +507,17 @@ export function twoPortIn(expr: string, nl: Netlist): string {
   if (!m || /\b(rin|rout)\s*=/i.test(m[3])) return expr;
   const [, spec, src] = m, out = (spec ?? "").replace(/\s+/g, ""); // (`.net V1`, a one-port: Zin and S11 only)
   const { lines, params, stepped, parts } = deckDefs(nl.text);
-  const line = (name: string) => lines.find((l) => l.trimStart().split(/\s+/, 1)[0]?.toLowerCase() === name.toLowerCase())?.trim().split(/\s+/); // (indented too)
+  // (the netlist's statements: + lines joined, comments cut, each with its subcircuit depth)
+  let depth = 0;
+  const logical: [string, number][] = [];
+  for (const raw of lines) {
+    const l = raw.split(/;|\/\/|(?<![^\s])\$/)[0].trim();
+    if (!l || l.startsWith("*")) continue;
+    if (l.startsWith("+") && logical.length) logical[logical.length - 1][0] += " " + l.slice(1);
+    else logical.push([l, depth]), (depth += /^\.subckt\b/i.test(l) ? 1 : /^\.ends\b/i.test(l) ? -1 : 0);
+  }
+  // (a top-level element's words: indented, over + lines)
+  const line = (name: string) => logical.find(([l, d]) => d === 0 && l.split(/\s+/, 1)[0].toLowerCase() === name.toLowerCase())?.[0].split(/\s+/);
   // (a value `{RL}` of a .param: the value itself, where that is a number; one .step varies: not)
   const resolved = (x?: string) => ((m) => (m && !stepped.has(m[1].toLowerCase()) ? params.get(m[1].toLowerCase()) ?? x : x))(x ? /^\{\s*(\w+)\s*\}$/.exec(x) : null);
   const nets = (inst: string) => nl.nets[nl.insts.findIndex((x) => x.toLowerCase() === inst.toLowerCase())];
@@ -515,16 +525,9 @@ export function twoPortIn(expr: string, nl: Netlist): string {
   const vin = across(nets(src));
   if (!vin) return expr;
   // (another AC drive, `V2 x 0 AC 1`, also over + lines or in a subcircuit (a V1 there too): the
-  // voltages are not this source's alone; an amplitude of 0, `0V`, `{a}` with a=0, none)
-  let depth = 0;
-  const logical: [string, number][] = [];
-  for (const raw of lines) {
-    const l = raw.split(/;|(?<![^\s])\$/)[0].trim();
-    if (!l || l.startsWith("*")) continue;
-    if (l.startsWith("+") && logical.length) logical[logical.length - 1][0] += " " + l.slice(1);
-    else logical.push([l, depth]), (depth += /^\.subckt\b/i.test(l) ? 1 : /^\.ends\b/i.test(l) ? -1 : 0);
-  }
-  const zero = (x: string) => parseFloat((resolved(x) ?? x).replace(/[{}]/g, "")) === 0;
+  // voltages are not this source's alone; only an amplitude written as 0, `0V`, none: in doubt, left)
+  // ponytail: the netlist's own sources only, not those of an included file
+  const zero = (x: string) => /^[0.]+(e[-+]?\d+)?[a-z]*$/i.test(x) && parseFloat(x) === 0;
   const other = logical.some(([l, d]) => {
     const w = l.split(/\s+/), k = w.findIndex((x, j) => j >= 3 && /^ac$/i.test(x));
     return /^[vi]/i.test(w[0]) && (d > 0 || w[0].toLowerCase() !== src.toLowerCase()) && k > 0 && !zero(w[k + 1] ?? "1");
@@ -532,11 +535,12 @@ export function twoPortIn(expr: string, nl: Netlist): string {
   if (other) return expr;
   const z0 = resolved(line(`R${src}_rser`)?.[3]);
   // (the AC amplitude after the nodes, `AC 1`: a node named ac is none; a parameter: not here)
-  // (no AC part: no drive for S21, the voltages come from elsewhere)
   const t = line(src)?.slice(3) ?? [], ac = t.findIndex((x) => /^ac$/i.test(x)), vs = ac >= 0 ? t[ac + 1] ?? "1" : "";
   // (a drive of a phase, a number not 0 or a parameter's: not folded in; a waveform after it is none)
   const ph = ac >= 0 ? t[ac + 2] : undefined, phased = !!ph && (ph.startsWith("{") || (Number.isFinite(parseFloat(ph)) && parseFloat(ph) !== 0));
   const drive = nets(src)?.[0] === "0" ? `-${vs}` : vs; // (the source drawn with its + pin at ground: its EMF the other way)
+  // (no AC part, or one of 0: nothing drives the two-port, Zin would be 0/0)
+  if (!vs || zero(vs)) return expr;
   const zin = `(${vin}/(-I(${src})))`; // (I(V1): into its + pin)
   const r = /^I\((\w+)\)$/i.exec(out);
   // (a resistor of a plain value as the load, an Rser of one as the source's: else no reference)
