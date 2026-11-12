@@ -710,7 +710,7 @@ pub fn netlist_items(text: &str) -> Vec<Item> {
                 }
             }
             // (a comment line in it: no command)
-            _ if control => dropped += usize::from(!c.trim().is_empty() && !low.starts_with('*')), // (a comment line no command)
+            _ if control => dropped += usize::from(!c.trim().is_empty() && !low.starts_with(['*', '#'])), // (ngspice makes a # a *)
             _ => body.push(l.to_string()),
         }
     }
@@ -2456,10 +2456,10 @@ impl Expander<'_> {
                     Err(e) => self.warnings.push(format!("{}: {e}", path.display())),
                 }
             }
-            // inside an included file, `.lib name` without a file is a section marker (a name with a path
-            // or an extension a file's)
-            None if depth > 0 && l.starts_with(".lib") && sec.is_none() && !file.contains(['/', '.']) => {}
-            None => self.warnings.push(format!("`{file}`: file not found")),
+            // inside an included file, `.lib name` without a file is a section marker (its words read as
+            // the section matcher reads them; a quoted name a file's)
+            None if depth > 0 && l.starts_with(".lib") && matches!(uncommented(t).split_whitespace().collect::<Vec<_>>()[..], [_, m] if !m.starts_with(['"', '\''])) => {}
+            None => self.warnings.push(format!("`{t}`: file not found")),
         }
     }
 }
@@ -4433,7 +4433,7 @@ SYMBOL half 400 300 R0\nSYMATTR InstName U4\nSYMATTR Value R=3k\nFLAG 352 300 a\
         let mut w = vec![];
         std::fs::write(dir.join("sub/cycle.lib"), ".include cycle.lib\n.model DC D\n").unwrap();
         // (in an included file: a section marker with a comment unsaid, a quoted file that is not there said)
-        std::fs::write(dir.join("sub/nested.lib"), ".lib TT // corner\n.lib \"gone dir/missing.lib\"\n.model DN D\n").unwrap();
+        std::fs::write(dir.join("sub/nested.lib"), ".lib TT // corner\n.lib tt_1.8v\n.lib TT//x\n.lib \"gone dir/missing.lib\"\n.model DN D\n").unwrap();
         let mut wn = vec![];
         let nested = prepare("* t\n.include sub/nested.lib\n.end\n", Some(&dir), &mut wn);
         assert!(nested.text().contains(".model DN D") && wn.len() == 1 && wn[0].contains("gone dir/missing.lib"), "{wn:?}");

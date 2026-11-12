@@ -507,7 +507,7 @@ export function twoPortIn(expr: string, nl: Netlist): string {
   if (!m || /\b(rin|rout)\s*=/i.test(m[3])) return expr;
   const [, spec, src] = m, out = (spec ?? "").replace(/\s+/g, ""); // (`.net V1`, a one-port: Zin and S11 only)
   const { lines, params, stepped, parts } = deckDefs(nl.text);
-  const line = (name: string) => lines.map((l) => l.trim().split(/\s+/)).find((w) => w[0]?.toLowerCase() === name.toLowerCase()); // (indented too)
+  const line = (name: string) => lines.find((l) => l.trimStart().split(/\s+/, 1)[0]?.toLowerCase() === name.toLowerCase())?.trim().split(/\s+/); // (indented too)
   // (a value `{RL}` of a .param: the value itself, where that is a number; one .step varies: not)
   const resolved = (x?: string) => ((m) => (m && !stepped.has(m[1].toLowerCase()) ? params.get(m[1].toLowerCase()) ?? x : x))(x ? /^\{\s*(\w+)\s*\}$/.exec(x) : null);
   const nets = (inst: string) => nl.nets[nl.insts.findIndex((x) => x.toLowerCase() === inst.toLowerCase())];
