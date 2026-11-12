@@ -378,6 +378,12 @@ export const Schematic = memo(function Schematic() {
     const got = rows.length ? rows : inst ? opRows(`${inst}#branch`) : [];
     return got.length ? `${label || `I(${inst})`} = ${got.map((r) => si(r[1], "A", 4)).join(" / ")}` : null;
   };
+  /** A part's current, or one of more pins its pins' (a transistor's Ic, Ib, Ie, a subcircuit's Ix(U1:Out)) */
+  const opCurrents = (i: number) => {
+    const one = opCurrent(i);
+    if (one || !nets) return one ? [one] : [];
+    return (nets.pin_currents?.[i] ?? []).flatMap((label, k) => (label && opCurrent(i, k)) || []);
+  };
   /** Values written beside the net labels and the parts (the canvas menu's Show operating point) */
   const [opShown, setOpShown] = useState(false);
 
@@ -898,9 +904,14 @@ export const Schematic = memo(function Schematic() {
                   return v.length ? <text key={`op${i}`} x={left ? r[0] - 4 : r[2] + 4} y={it.y} dominantBaseline="middle" textAnchor={left ? "end" : "start"}>{v.map((x) => si(x[1], "V", 4)).join(" / ")}</text> : null;
                 }
                 if (it.t !== "sym") return null;
-                const c = opCurrent(i);
+                const cs = opCurrents(i);
                 const bb = symBox(it, defOf(lib, it));
-                return c ? <text key={`op${i}`} x={bb[2] + 4} y={bb[3]}>{c}</text> : null;
+                // (several: one a line, from the part's top)
+                return cs.length ? (
+                  <text key={`op${i}`} x={bb[2] + 4} y={cs.length > 1 ? bb[1] + 10 : bb[3]}>
+                    {cs.map((c, k) => <tspan key={k} x={bb[2] + 4} dy={k ? "1.2em" : 0}>{c}</tspan>)}
+                  </text>
+                ) : null;
               })}
             </g>
           )}
