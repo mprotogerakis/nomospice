@@ -247,11 +247,14 @@ assert.equal(numInfo("1Meg", "Hz")!.text, "= 1MegHz"); // not "1M", the milli tr
   const one = { ...two, text: two.text.replace("* .net I(R1) V1 ; nomospice: two-port", "* .net V1 ; nomospice: two-port") }; // (a one-port: Zin and S11)
   assert.equal(twoPortIn("Zin(V1)", one), '((v("in")-0)/(-I(V1)))');
   assert.equal(twoPortIn("S21(V1)", one), "S21(V1)");
-  for (const more of ["V2 x 0 AC 1", "V2 x 0 DC 0\n+ AC 1", ".subckt blk a b\nV1 a b AC 1\n.ends", ".subckt blk n1 n2 params: a=1\nV2 n1 n2 AC {a}\n.ends"]) assert.equal(twoPortIn("Zin(V1)", { ...two, text: two.text + "\n" + more }), "Zin(V1)", more); // (another AC drive: left)
+  for (const more of ["V2 x 0 AC 1", "V2 x 0 AC=1", "V2 x 0 DC 0\n+ AC 1", ".subckt blk a b\nV1 a b AC 1\n.ends", ".subckt blk n1 n2 params: a=1\nV2 n1 n2 AC {a}\n.ends"]) assert.equal(twoPortIn("Zin(V1)", { ...two, text: two.text + "\n" + more }), "Zin(V1)", more); // (another AC drive: left)
   for (const more of ["V2 x 0 DC 5 AC 0V", "V2 x 0 DC 5 ; AC 1 later", "V2 x 0 DC 5 // AC 1", "Vsense y 0 0"]) assert.equal(twoPortIn("S21(V1)", { ...two, text: two.text + "\n" + more }), twoPortIn("S21(V1)", two), more); // (none)
-  for (const more of [".param a=0\nV2 x 0 AC {a}", "V2 x 0 AC {0+g}"]) assert.equal(twoPortIn("Zin(V1)", { ...two, text: two.text + "\n" + more }), "Zin(V1)", more); // (in doubt: left)
+  for (const more of ["V2 x 0 AC {0+g}", ".param a=1\nV2 x 0 AC {a}"]) assert.equal(twoPortIn("Zin(V1)", { ...two, text: two.text + "\n" + more }), "Zin(V1)", more); // (in doubt: left)
   assert.equal(twoPortIn("S21(V1)", { ...two, text: two.text.replace("V1 V1_rser 0 AC 1", "V1 V1_rser 0 DC 0\n+ AC 1") }), twoPortIn("S21(V1)", two)); // (its own AC on a + line)
-  for (const own of ["V1 V1_rser 0 AC 0", "V1 V1_rser 0 DC 1"]) assert.equal(twoPortIn("Zin(V1)", { ...two, text: two.text.replace("V1 V1_rser 0 AC 1", own) }), "Zin(V1)", own); // (no drive of its own: left)
+  assert.equal(twoPortIn("S21(V1)", { ...two, text: two.text.replace("V1 V1_rser 0 AC 1", "V1 V1_rser 0 AC=1") }), twoPortIn("S21(V1)", two)); // (AC=1)
+  assert.equal(twoPortIn("S21(V1)", { ...two, text: ".param a=0\n" + two.text + "\nV2 x 0 AC {a}\n.control\nif v(x) eq ac 1\n.endc" }), twoPortIn("S21(V1)", two)); // (a .param of 0; a .control line no source)
+  assert.equal(funcsIn("f(V(a))", ".func f(x) {x*2} // note"), "((V(a))*2)"); // (a // comment)
+  for (const own of ["V1 V1_rser 0 AC 0", "V1 V1_rser 0 DC 1", "V1 V1_rser 0 AC -0", "V1 V1_rser 0 AC 0µ", ".param a=0\nV1 V1_rser 0 AC {a}"]) assert.equal(twoPortIn("Zin(V1)", { ...two, text: two.text.replace("V1 V1_rser 0 AC 1", own) }), "Zin(V1)", own); // (no drive of its own: left)
   assert.equal(twoPortIn("S21(V1)", { ...two, text: two.text.replace(/^(V1|R1|RV1_rser) /gm, "  $1 ") }), twoPortIn("S21(V1)", two)); assert.notEqual(twoPortIn("S21(V1)", two), "S21(V1)"); // (indented lines)
   assert.equal(exprUnit("S21(V1)"), ""); assert.equal(exprUnit("Zin(V1)"), "Ω"); assert.equal(exprUnit("Zin(V1)/2"), "Ω"); // (db() of it: the dialog's rule)
   const st = ".param Rs=50\n* .step param Rs list 50 100 (nomospice: one run per step)\n.func NF(x) {x/Rs}\n.func g(x) {x*2}";

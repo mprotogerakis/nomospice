@@ -420,7 +420,7 @@ function deckDefs(text: string) {
   let depth = 0;
   // (a line's `;` or `$` comment is not of its body; a statement continued on + lines is one line,
   // comment lines between them skipped, as SPICE does)
-  const kept = text.split("\n").filter((l) => { const t = l.trim().toLowerCase(); depth += t.startsWith(".subckt") ? 1 : t.startsWith(".ends") ? -1 : 0; return depth === 0; }).map((l) => l.split(/;|(?<![^\s])\$/)[0]);
+  const kept = text.split("\n").filter((l) => { const t = l.trim().toLowerCase(); depth += t.startsWith(".subckt") ? 1 : t.startsWith(".ends") ? -1 : 0; return depth === 0; }).map((l) => l.split(/;|\/\/|(?<![^\s])\$/)[0]);
   const joined: string[] = [];
   let last = -1;
   for (const l of kept) {
@@ -507,40 +507,40 @@ export function twoPortIn(expr: string, nl: Netlist): string {
   if (!m || /\b(rin|rout)\s*=/i.test(m[3])) return expr;
   const [, spec, src] = m, out = (spec ?? "").replace(/\s+/g, ""); // (`.net V1`, a one-port: Zin and S11 only)
   const { lines, params, stepped, parts } = deckDefs(nl.text);
-  // (the netlist's statements: + lines joined, comments cut, each with its subcircuit depth)
-  let depth = 0;
-  const logical: [string, number][] = [];
-  for (const raw of lines) {
-    const l = raw.split(/;|\/\/|(?<![^\s])\$/)[0].trim();
-    if (!l || l.startsWith("*")) continue;
-    if (l.startsWith("+") && logical.length) logical[logical.length - 1][0] += " " + l.slice(1);
-    else logical.push([l, depth]), (depth += /^\.subckt\b/i.test(l) ? 1 : /^\.ends\b/i.test(l) ? -1 : 0);
-  }
-  // (a top-level element's words: indented, over + lines)
-  const line = (name: string) => logical.find(([l, d]) => d === 0 && l.split(/\s+/, 1)[0].toLowerCase() === name.toLowerCase())?.[0].split(/\s+/);
-  // (a value `{RL}` of a .param: the value itself, where that is a number; one .step varies: not)
-  const resolved = (x?: string) => ((m) => (m && !stepped.has(m[1].toLowerCase()) ? params.get(m[1].toLowerCase()) ?? x : x))(x ? /^\{\s*(\w+)\s*\}$/.exec(x) : null);
   const nets = (inst: string) => nl.nets[nl.insts.findIndex((x) => x.toLowerCase() === inst.toLowerCase())];
   const across = (p?: string[]) => (p?.length === 2 ? `(${vexpr(p[0])}-${vexpr(p[1])})` : "");
   const vin = across(nets(src));
   if (!vin) return expr;
+  // (the netlist's statements: + lines joined, comments cut, each with its subcircuit depth; a
+  // .control block's none; words split at blanks and `=`, `AC=1` as ngspice reads it)
+  let depth = 0, control = false;
+  const logical: [string[], number][] = [];
+  for (const raw of lines) {
+    const l = raw.split(/;|\/\/|(?<![^\s])\$/)[0].trim();
+    control = (control || /^\.control\b/i.test(l)) && !/^\.endc\b/i.test(l);
+    if (!l || l.startsWith("*") || control || /^\.endc\b/i.test(l)) continue;
+    if (l.startsWith("+") && logical.length) logical[logical.length - 1][0].push(...l.slice(1).split(/[\s=]+/).filter(Boolean));
+    else logical.push([l.split(/[\s=]+/), depth]), (depth += /^\.subckt\b/i.test(l) ? 1 : /^\.ends\b/i.test(l) ? -1 : 0);
+  }
+  // (a top-level element's words: indented, over + lines)
+  const line = (name: string) => logical.find(([w, d]) => d === 0 && w[0].toLowerCase() === name.toLowerCase())?.[0];
+  // (a value `{RL}` of a .param: the value itself, where that is a number; one .step varies: not)
+  const resolved = (x?: string) => ((m) => (m && !stepped.has(m[1].toLowerCase()) ? params.get(m[1].toLowerCase()) ?? x : x))(x ? /^\{\s*(\w+)\s*\}$/.exec(x) : null);
+  // (an amplitude written as 0, `0V`, `-0`, `0µ`, or a top-level .param of 0; in doubt, a drive)
+  const zero = (x: string, top = true) => ((v) => /^[-+]?[0.]+(e[-+]?\d+)?[a-zµ]*$/i.test(v) && parseFloat(v) === 0)(top ? resolved(x) ?? x : x);
+  const acOf = (w: string[]) => ((k) => (k > 0 ? w[k + 1] ?? "1" : ""))(w.findIndex((x, j) => j >= 3 && /^ac$/i.test(x)));
   // (another AC drive, `V2 x 0 AC 1`, also over + lines or in a subcircuit (a V1 there too): the
-  // voltages are not this source's alone; only an amplitude written as 0, `0V`, none: in doubt, left)
+  // voltages are not this source's alone)
   // ponytail: the netlist's own sources only, not those of an included file
-  const zero = (x: string) => /^[0.]+(e[-+]?\d+)?[a-z]*$/i.test(x) && parseFloat(x) === 0;
-  const other = logical.some(([l, d]) => {
-    const w = l.split(/\s+/), k = w.findIndex((x, j) => j >= 3 && /^ac$/i.test(x));
-    return /^[vi]/i.test(w[0]) && (d > 0 || w[0].toLowerCase() !== src.toLowerCase()) && k > 0 && !zero(w[k + 1] ?? "1");
-  });
-  if (other) return expr;
+  if (logical.some(([w, d]) => /^[vi]/i.test(w[0]) && (d > 0 || w[0].toLowerCase() !== src.toLowerCase()) && acOf(w) && !zero(acOf(w), d === 0))) return expr;
   const z0 = resolved(line(`R${src}_rser`)?.[3]);
-  // (the AC amplitude after the nodes, `AC 1`: a node named ac is none; a parameter: not here)
-  const t = line(src)?.slice(3) ?? [], ac = t.findIndex((x) => /^ac$/i.test(x)), vs = ac >= 0 ? t[ac + 1] ?? "1" : "";
-  // (a drive of a phase, a number not 0 or a parameter's: not folded in; a waveform after it is none)
-  const ph = ac >= 0 ? t[ac + 2] : undefined, phased = !!ph && (ph.startsWith("{") || (Number.isFinite(parseFloat(ph)) && parseFloat(ph) !== 0));
-  const drive = nets(src)?.[0] === "0" ? `-${vs}` : vs; // (the source drawn with its + pin at ground: its EMF the other way)
-  // (no AC part, or one of 0: nothing drives the two-port, Zin would be 0/0)
+  // (the AC amplitude after the nodes, `AC 1`: a node named ac is none; no AC part, or one of 0:
+  // nothing drives the two-port, Zin would be 0/0)
+  const own = line(src) ?? [], vs = acOf(own);
   if (!vs || zero(vs)) return expr;
+  // (a drive of a phase, a number not 0 or a parameter's: not folded in; a waveform after it is none)
+  const ph = own[own.findIndex((x, j) => j >= 3 && /^ac$/i.test(x)) + 2], phased = !!ph && (ph.startsWith("{") || (Number.isFinite(parseFloat(ph)) && parseFloat(ph) !== 0));
+  const drive = nets(src)?.[0] === "0" ? `-${vs}` : vs; // (the source drawn with its + pin at ground: its EMF the other way)
   const zin = `(${vin}/(-I(${src})))`; // (I(V1): into its + pin)
   const r = /^I\((\w+)\)$/i.exec(out);
   // (a resistor of a plain value as the load, an Rser of one as the source's: else no reference)
