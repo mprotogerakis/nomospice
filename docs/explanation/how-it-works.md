@@ -12,7 +12,7 @@ Nets without a label get numbered names, `N001`, `N002` …, which may change wh
 
 Every part becomes one line: its instance name, the nets at its pins in the order its symbol defines, its value, and its model. Directives are copied as written. Model definitions from libraries, and the definitions they depend on, are added; a block becomes a subcircuit (see [Hierarchy](hierarchy.md)). ++cmd+l++ shows the netlist.
 
-What runs is slightly more than that. nomospice adds 0 V sources as current sensors, so that every part's current can be plotted, in AC analyses with its phase too. It copies included files into the netlist, so ngspice never opens a file itself, and it removes `.control` blocks, which ngspice would execute on loading, shell commands included. *as simulated* in the netlist panel shows this version, and the log's line numbers refer to it.
+What runs is slightly more than that. nomospice adds 0 V sources as current sensors, so that every part's current can be plotted, in AC analyses with its phase too. It copies included files into the netlist, so ngspice never opens a file itself. It removes `.control` blocks and other lines ngspice would execute on loading, shell commands included, and writes the first line, the title, as a comment. *as simulated* in the netlist panel shows this version, and the log's line numbers refer to it.
 
 ## The run
 

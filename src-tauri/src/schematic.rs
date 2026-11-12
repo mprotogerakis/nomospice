@@ -993,7 +993,7 @@ struct DeckLine<'a> {
     low: String,
     /// outside `.subckt … .ends`
     top: bool,
-    /// a comment (`*`, `;`, `#`, `$`) or blank line (SPICE skips these, also between a line and its `+` continuations)
+    /// a comment (see [`comment_line`]) or blank line (SPICE skips these, also between a line and its `+` continuations)
     skip: bool,
     /// lowercase first token of the statement this line belongs to (`.param` for its `+` lines too)
     head: String,
@@ -1013,7 +1013,7 @@ fn deck_lines(text: &str) -> Vec<DeckLine<'_>> {
         let low = line.to_ascii_lowercase();
         let first = low.split_whitespace().next().unwrap_or("").to_string();
         match first.as_str() { ".subckt" => sub += 1, ".ends" => sub = (sub - 1).max(0), _ => {} } // a stray .ends must not hide the rest
-        let skip = first.is_empty() || first.starts_with('*') || first.starts_with(COMMENT_LINE) || first.starts_with("//");
+        let skip = first.is_empty() || comment_line(&first);
         if !skip && !first.starts_with('+') {
             head = first.clone();
         }
@@ -1239,7 +1239,7 @@ fn ramp_end(token: &str) -> Option<&str> {
     token.strip_prefix(RAMP).and_then(|r| r.strip_suffix(')')).filter(|v| braced(v) || !v.contains([' ', '(']))
 }
 
-/// A comment line of LTspice's (`;`) or ngspice's (`#`, `$`) as SPICE's `* …`: a + line after it
+/// A comment line of LTspice's (`;`) or ngspice's (`#`, `$`, `//`) as SPICE's `* …`: a + line after it
 /// then continues the statement before, as LTspice and ngspice read it (ngspice would join one to a
 /// `;` line), and every pass here reads it alike; `* `, not `*`: ngspice makes a `#` a `*`, and
 /// `*#` is a command line. None: no such line.
@@ -1271,10 +1271,19 @@ pub(crate) fn command_line(line: &str) -> bool {
 pub(crate) fn opens_file(line: &str) -> bool {
     [".inc", ".lib"].iter().any(|p| starts_ci(line, p))
 }
+/// `.end`, a blank (a tab too) or nothing after it: ngspice ends the circuit there.
+fn is_end(low: &str) -> bool {
+    low.strip_prefix(".end").is_some_and(|r| r.is_empty() || r.starts_with(char::is_whitespace))
+}
 fn starts_ci(line: &str, p: &str) -> bool {
     line.trim_start().get(..p.len()).is_some_and(|h| h.eq_ignore_ascii_case(p))
 }
 
+/// A comment line: `*`, LTspice's `;`, ngspice's `#`, `$`, `//` (see [`starred`]).
+fn comment_line(line: &str) -> bool {
+    let l = line.trim_start();
+    l.starts_with('*') || l.starts_with(COMMENT_LINE) || l.starts_with("//")
+}
 /// What else than `*` (and `//`) starts a comment line (see [`starred`]).
 const COMMENT_LINE: [char; 3] = [';', '#', '$'];
 
@@ -2328,6 +2337,7 @@ impl Expander<'_> {
 
     fn expand(&mut self, text: &str, dir: Option<&std::path::Path>, section: Option<&str>, depth: usize) {
         let (mut in_section, mut control, mut found) = (section.is_none(), false, section.is_none());
+        let sec_ascii = section.map(ascii);
         for (n, raw) in text.lines().enumerate() {
             // the line as it goes out, and as every check below reads it (one of the line before
             // would let `Ω.control` through), a comment line starred
@@ -2336,13 +2346,16 @@ impl Expander<'_> {
             // (the deck's first line, its title: a comment; ngspice reads an .include there too, and
             // a `*ng_script` there makes it run the deck's lines as commands)
             let title = depth == 0 && n == 0 && (command_line(&line) || !line.trim_start().starts_with('*'));
+            if title && command_line(&line) {
+                self.warnings.push(format!("`{}`: the deck's first line, its title: not run (security)", line.trim()));
+            }
             let line = if title { std::borrow::Cow::Owned(format!("* {}", line.trim())) } else { line };
             let t = line.trim();
             let l = t.to_ascii_lowercase();
-            let tok: Vec<&str> = t.split_whitespace().collect();
-            if let Some(sec) = section {
+            let tok: Vec<&str> = uncommented(t).split_whitespace().collect(); // (`.lib TT ; typical`: two)
+            if let Some(sec) = &sec_ascii {
                 if !in_section {
-                    in_section = l.starts_with(".lib") && tok.len() == 2 && tok[1].eq_ignore_ascii_case(&ascii(sec));
+                    in_section = l.starts_with(".lib") && tok.len() == 2 && tok[1].eq_ignore_ascii_case(sec);
                     found |= in_section;
                     continue;
                 }
@@ -2356,13 +2369,13 @@ impl Expander<'_> {
                 self.warnings.push(".control blocks are not executed (security)".into());
                 continue;
             }
-            if control || l.starts_with(".endc") || l.starts_with(".endl") || (depth > 0 && (l == ".end" || l.starts_with(".end "))) {
+            if control || l.starts_with(".endc") || l.starts_with(".endl") || (depth > 0 && is_end(&l)) {
                 control &= !l.starts_with(".endc");
                 continue;
             }
             if command_line(t) {
                 // (a `.title` of no use here, said only when it would make the deck a script)
-                if !l.starts_with(".title") || l.contains("ng_script") {
+                if !l.starts_with(".title") || l[6..].trim_start().starts_with("*ng_script") {
                     self.warnings.push(format!("`{t}`: not passed to ngspice, which would take it for commands (security)"));
                 }
                 continue;
@@ -2377,7 +2390,7 @@ impl Expander<'_> {
                 }
             }
             if opens_file(&l) {
-                self.include(raw.trim(), &l, tok.len(), dir, depth); // (the file's name as written: non-ASCII letters too)
+                self.include(uncommented(raw.trim()).trim_end(), &l, tok.len(), dir, depth); // (the file's name as written: non-ASCII letters too; `; …` none)
                 continue;
             }
             // LTspice's behavioural diode (Ron/Roff/Vfwd/Vrev) becomes an XSPICE device in ngspice:
@@ -2695,7 +2708,7 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
                     nl.steps.push(uncommented(line).trim_end().to_string());
                     continue;
                 }
-                if skipped && l.starts_with('+') || l == ".end" || l.starts_with(".end ") {
+                if skipped && l.starts_with('+') || is_end(&l) {
                     continue;
                 }
                 // (a statement's + lines, comments between allowed: a .net's onto its comment, before
@@ -4365,7 +4378,9 @@ SYMBOL half 400 300 R0\nSYMATTR InstName U4\nSYMATTR Value R=3k\nFLAG 352 300 a\
         assert!(out.starts_with("* .include /tmp/nomospice-x.cir\nV1 a 0 1\n") && !out.lines().any(command_line), "{out}");
         assert!(prepare("*ng_script\nV1 a 0 1\n.end\n", None, &mut vec![]).0.starts_with("* *ng_script\n"));
         let mut w = vec![];
-        assert!(!prepare("* t\n.title Amplifier\nV1 a 0 1\n.end\n", None, &mut w).0.contains(".title") && w.is_empty(), "{w:?}"); // (a plain .title: left out, unsaid)
+        assert!(!prepare("* t\n.title Amplifier ng_script demo\nV1 a 0 1\n.end\n", None, &mut w).0.contains(".title") && w.is_empty(), "{w:?}"); // (a plain .title: left out, unsaid)
+        let mut w = vec![];
+        assert!(prepare(".control\nshell touch /tmp/nomospice-pwned\n.endc\n.end\n", None, &mut w).0.starts_with("* .control\n") && w.iter().any(|w| w.contains("title")), "{w:?}"); // (said)
         let _s = SIM.lock();
         for deck in ["* t\n.title *ng_script\nshell echo x\n.end\n", "* t\n.include /tmp/nomospice-x.cir\n.end\n", "*ng_script\nshell echo x\n.end\n"] {
             assert!(crate::ngspice::run(&Prepared(deck.into(), vec![], vec![])).is_err_and(|e| e[0].contains("security")), "{deck}"); // (the last gate)
@@ -4379,15 +4394,15 @@ SYMBOL half 400 300 R0\nSYMATTR InstName U4\nSYMATTR Value R=3k\nFLAG 352 300 a\
         let dir = std::env::temp_dir().join(format!("nomospice-inc-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("sub")).unwrap();
         std::fs::create_dir_all(dir.join("with space")).unwrap();
-        std::fs::write(dir.join("sub/models.lib"), ".control\nshell touch pwned\n.endc\n.model DX D(Is=1n)\n.lib fast\n.model DF D\n.endl\n").unwrap();
-        std::fs::write(dir.join("with space/q.lib"), ".model DQ D\n").unwrap();
+        std::fs::write(dir.join("sub/models.lib"), ".control\nshell touch pwned\n.endc\n.model DX D(Is=1n)\n.lib fast ; the fast corner\n.model DF D\n.endl\n").unwrap();
+        std::fs::write(dir.join("with space/q.lib"), ".model DQ D\n.END\t* of the lib\n").unwrap();
         let mut w = vec![];
         std::fs::write(dir.join("sub/cycle.lib"), ".include cycle.lib\n.model DC D\n").unwrap();
-        let out = prepare("* t\n.include sub/models.lib\n.lib sub/models.lib fast\n.lib \"with space/q.lib\"\n.inc missing.lib\n.lib sub/models.lib nope\n.inc sub\\cycle.lib\n.include sub/models.lib\n.end\n", Some(&dir), &mut w);
+        let out = prepare("* t\n.include sub/models.lib\n.lib sub/models.lib fast ; vendor\n.lib \"with space/q.lib\"\n.inc missing.lib\n.lib sub/models.lib nope\n.inc sub\\cycle.lib\n.include sub/models.lib\n.end\n", Some(&dir), &mut w);
         let out = out.text();
         assert_eq!(out.matches(".model DX").count(), 1, "{out}");
         assert_eq!(out.matches(".model DC").count(), 1, "{out}");
-        assert!(!out.contains("shell") && out.contains(".model DX D(Is=1n)") && out.contains(".model DF D") && out.contains(".model DQ D"), "{out}");
+        assert!(!out.contains("shell") && out.contains(".model DX D(Is=1n)") && out.contains(".model DF D") && out.contains(".model DQ D") && !out.contains(".END"), "{out}");
         assert!(w.iter().any(|w| w.contains("missing.lib")) && w.iter().any(|w| w.contains("`nope`")), "{w:?}");
         std::fs::remove_dir_all(dir).ok();
     }
