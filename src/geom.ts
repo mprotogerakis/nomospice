@@ -500,7 +500,7 @@ export const NET_DIRECTIVE = /^\*\s*\.net\s+(?:([IV]\s*\([^)]*\)|\S+)\s+)?(V\S*)
  *  load R1 (`.net I(R1) V1`), as the circuit terminates it: V1's Rser the input's reference
  *  impedance, R1 the output's (V1's AC amplitude the drive). One drive gives these only: S12, S22,
  *  other reference impedances (LTspice's Rin=, Rout=), V(out) without a load or a current source as
- *  the input would take more (said: left as written). */
+ *  the input would take more, as would another AC source (said: left as written). */
 export function twoPortIn(expr: string, nl: Netlist): string {
   if (!TWO_PORT_CALL.test(expr)) return expr;
   const m = NET_DIRECTIVE.exec(nl.text);
@@ -514,6 +514,9 @@ export function twoPortIn(expr: string, nl: Netlist): string {
   const across = (p?: string[]) => (p?.length === 2 ? `(${vexpr(p[0])}-${vexpr(p[1])})` : "");
   const vin = across(nets(src));
   if (!vin) return expr;
+  // (another AC drive anywhere, `V2 x 0 AC 1`: the voltages are not this source's alone)
+  const drives = (w: string[]) => ((k) => k >= 3 && !/^[0.]+$/.test(w[k + 1] ?? "1"))(w.findIndex((x, j) => j >= 3 && /^ac$/i.test(x)));
+  if (lines.some((l) => { const w = l.trim().split(/\s+/); return /^[vi]/i.test(w[0] ?? "") && w[0].toLowerCase() !== src.toLowerCase() && drives(w); })) return expr;
   const z0 = resolved(line(`R${src}_rser`)?.[3]);
   // (the AC amplitude after the nodes, `AC 1`: a node named ac is none; a parameter: not here)
   // (no AC part: no drive for S21, the voltages come from elsewhere)

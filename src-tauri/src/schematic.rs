@@ -1269,14 +1269,14 @@ fn ascii(line: &str) -> std::borrow::Cow<'_, str> {
 pub(crate) fn command_line(line: &str) -> bool {
     ["#", "*#", ".control", ".title", "*ng_script"].iter().any(|p| starts_ci(line, p))
 }
-/// A library's section marker `.lib TT` (read without a comment, `.lib TT ; typical`): its name. None:
-/// no marker; a file (`.lib parts.lib`: quoted, a path, a library's extension), or more words.
-fn section_marker(t: &str) -> Option<&str> {
+/// The one word after `.lib`, read without a comment (`.lib TT ; typical`): a library's section
+/// marker, or a file of that name (the inliner looks for one first). None: other words.
+fn lib_word(t: &str) -> Option<&str> {
     let mut w = uncommented(t).split_whitespace();
-    let (Some(d), Some(m), None) = (w.next(), w.next(), w.next()) else { return None };
-    const EXT: [&str; 12] = ["lib", "sub", "inc", "mod", "cir", "sp", "spi", "txt", "net", "ckt", "mdl", "model"];
-    let file = m.starts_with(['"', '\'']) || m.contains(['/', '\\']) || m.rsplit_once('.').is_some_and(|(_, e)| EXT.iter().any(|x| x.eq_ignore_ascii_case(e)));
-    (d.eq_ignore_ascii_case(".lib") && !file).then_some(m)
+    match (w.next(), w.next(), w.next()) {
+        (Some(d), Some(m), None) if d.eq_ignore_ascii_case(".lib") => Some(m),
+        _ => None,
+    }
 }
 
 /// Whether dropping command line `l` is said: not for a plain `.title` (of no use here), only for one
@@ -2384,7 +2384,7 @@ impl Expander<'_> {
             let tok: Vec<&str> = t.split_whitespace().collect();
             if let Some(sec) = &sec_ascii {
                 if !in_section {
-                    in_section = section_marker(t).is_some_and(|m| m.eq_ignore_ascii_case(sec));
+                    in_section = l.starts_with(".lib") && lib_word(t).is_some_and(|m| m.eq_ignore_ascii_case(sec));
                     found |= in_section;
                     continue;
                 }
@@ -2418,11 +2418,7 @@ impl Expander<'_> {
                 }
             }
             if opens_file(&l) {
-                // (inside an included file, `.lib name` without a file is a section marker: before a file
-                // of that name is looked for)
-                if !(depth > 0 && section_marker(t).is_some()) {
-                    self.include(raw.trim(), &l, dir, depth); // (the file's name as written: non-ASCII letters too)
-                }
+                self.include(raw.trim(), &l, dir, depth); // (the file's name as written: non-ASCII letters too)
                 continue;
             }
             // LTspice's behavioural diode (Ron/Roff/Vfwd/Vrev) becomes an XSPICE device in ngspice:
@@ -2469,6 +2465,8 @@ impl Expander<'_> {
                     Err(e) => self.warnings.push(format!("{}: {e}", path.display())),
                 }
             }
+            // inside an included file, `.lib name` without a file is a section marker (a quoted name a file's)
+            None if depth > 0 && lib_word(t).is_some_and(|m| !m.starts_with(['"', '\''])) => {}
             None => self.warnings.push(format!("`{t}`: file not found")),
         }
     }
@@ -4443,10 +4441,12 @@ SYMBOL half 400 300 R0\nSYMATTR InstName U4\nSYMATTR Value R=3k\nFLAG 352 300 a\
         let mut w = vec![];
         std::fs::write(dir.join("sub/cycle.lib"), ".include cycle.lib\n.model DC D\n").unwrap();
         // (in an included file: a section marker with a comment unsaid, a quoted file that is not there said)
-        std::fs::write(dir.join("sub/nested.lib"), ".lib TT // corner\n.lib tt_1.8v\n.lib TT//x\n.lib \"gone dir/missing.lib\"\n.lib other.lib\n.model DN D\n").unwrap();
+        // (a file of the one word's name inlined, whatever its extension)
+        std::fs::write(dir.join("sub/nested.lib"), ".lib TT // corner\n.lib tt_1.8v\n.lib TT//x\n.lib \"gone dir/missing.lib\"\n.lib x.dio\n.model DN D\n").unwrap();
+        std::fs::write(dir.join("sub/x.dio"), ".model DD D\n").unwrap();
         let mut wn = vec![];
         let nested = prepare("* t\n.include sub/nested.lib\n.end\n", Some(&dir), &mut wn);
-        assert!(nested.text().contains(".model DN D") && wn.len() == 2 && wn[0].contains("gone dir/missing.lib") && wn[1].contains("other.lib"), "{wn:?}");
+        assert!(nested.text().contains(".model DN D") && nested.text().contains(".model DD D") && wn.len() == 1 && wn[0].contains("gone dir/missing.lib"), "{wn:?}");
         let out = prepare("* t\n.include sub/models.lib\n.lib sub/models.lib fast ; vendor\n.lib \"with space/q.lib\"\n.inc missing.lib\n.lib sub/models.lib nope\n.inc sub\\cycle.lib\n.include sub/models.lib\n.end\n", Some(&dir), &mut w);
         let out = out.text();
         assert_eq!(out.matches(".model DX").count(), 1, "{out}");

@@ -310,7 +310,7 @@ async function fetchTrace(t: Trace): Promise<Trace> {
   if ((t.power || expr !== pre || unknown) && !powerMode(get().sim)) return { ...t, data: undefined, error: "power: only in .tran and .dc results" };
   // (a .func of the user's named zin is no two-port quantity: asked after the .funcs are written out)
   if (TWO_PORT_CALL.test(expr) || (TWO_PORT_CALL.test(fs) && !run.plot.startsWith("ac")))
-    return { ...t, data: undefined, error: "S11(V1), S21(V1), Zin(V1): an .ac result with .net I(R1) V1 (or .net V1: Zin and S11), the circuit terminated as measured: V1 with an Rser, R1 the load (S12, S22, Rin=, Rout= are not computed)" };
+    return { ...t, data: undefined, error: "S11(V1), S21(V1), Zin(V1): an .ac result with .net I(R1) V1 (or .net V1: Zin and S11), the circuit terminated as measured: V1 with an Rser and the only AC source, R1 the load (S12, S22, Rin=, Rout= are not computed)" };
   if (unknown) {
     const left = POWER_CALL.exec(expr)?.[1];
     return { ...t, data: undefined, error: `${left ? `P(${left}): no such two-pin part. ` : ""}P() is the power of a part with two pins, by its name: P(R1) (its menu's Plot power)` };

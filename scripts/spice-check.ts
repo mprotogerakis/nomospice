@@ -247,6 +247,7 @@ assert.equal(numInfo("1Meg", "Hz")!.text, "= 1MegHz"); // not "1M", the milli tr
   const one = { ...two, text: two.text.replace("* .net I(R1) V1 ; nomospice: two-port", "* .net V1 ; nomospice: two-port") }; // (a one-port: Zin and S11)
   assert.equal(twoPortIn("Zin(V1)", one), '((v("in")-0)/(-I(V1)))');
   assert.equal(twoPortIn("S21(V1)", one), "S21(V1)");
+  assert.equal(twoPortIn("Zin(V1)", { ...two, text: two.text + "\nV2 x 0 AC 1" }), "Zin(V1)"); assert.notEqual(twoPortIn("Zin(V1)", { ...two, text: two.text + "\nV2 x 0 DC 5 AC 0\nVsense y 0 0" }), "Zin(V1)"); // (another AC drive: left; one of 0, a DC source: none)
   assert.equal(twoPortIn("S21(V1)", { ...two, text: two.text.replace(/^(V1|R1|RV1_rser) /gm, "  $1 ") }), twoPortIn("S21(V1)", two)); assert.notEqual(twoPortIn("S21(V1)", two), "S21(V1)"); // (indented lines)
   assert.equal(exprUnit("S21(V1)"), ""); assert.equal(exprUnit("Zin(V1)"), "Ω"); assert.equal(exprUnit("Zin(V1)/2"), "Ω"); // (db() of it: the dialog's rule)
   const st = ".param Rs=50\n* .step param Rs list 50 100 (nomospice: one run per step)\n.func NF(x) {x/Rs}\n.func g(x) {x*2}";
