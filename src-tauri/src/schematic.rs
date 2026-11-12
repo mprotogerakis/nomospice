@@ -692,7 +692,7 @@ pub fn netlist_items(text: &str) -> Vec<Item> {
     const ANALYSES: [(&str, &str); 12] = [("tran", ".tran"), ("ac", ".ac"), ("dc", ".dc"), ("op", ".op"), ("noise", ".noise"), ("tf", ".tf"), ("pz", ".pz"), ("sens", ".sens"), ("fourier", ".four"), ("disto", ".disto"), ("pss", ".pss"), ("sp", ".sp")];
     let (mut body, mut control, mut taken, mut dropped) = (vec![], false, vec![], 0);
     let first = |l: &str| l.split_whitespace().next().unwrap_or("").to_ascii_lowercase();
-    for l in lines.iter().skip(usize::from(titled)).take_while(|l| first(l) != ".end") {
+    for l in lines.iter().skip(usize::from(titled)).take_while(|l| !is_end(&l.trim().to_ascii_lowercase())) {
         let (low, w) = (l.trim().to_ascii_lowercase(), first(l));
         match w.as_str() {
             ".control" => control = true,
@@ -2295,10 +2295,15 @@ fn include_args(t: &str) -> (String, Option<&str>) {
     let rest = t.split_once(char::is_whitespace).map_or("", |r| r.1).trim();
     let (file, tail) = match rest.chars().next() {
         Some(q @ ('"' | '\'')) => rest[1..].split_once(q).unwrap_or((&rest[1..], "")),
-        _ => rest.split_once(char::is_whitespace).unwrap_or((rest, "")),
+        // (a `;` comment touching the name, `models.lib;vendor`: nothing after it)
+        _ => match rest.split_once(char::is_whitespace).unwrap_or((rest, "")) {
+            (f, tail) => f.split_once(';').map_or((f, tail), |(f, _)| (f, "")),
+        },
     };
-    // (Windows-authored paths; a comment after them, `; vendor`, `// corner`, no section)
-    (file.replace('\\', "/"), tail.split_whitespace().next().filter(|s| !s.starts_with([';', '$']) && !s.starts_with("//")))
+    // (Windows-authored paths; a comment after them, `; vendor`, `TT;typical`, `$ x`, `// corner`, no
+    // section; `//` in the name a path's)
+    let sec = tail.split_whitespace().next().map(|s| s.split(';').next().unwrap_or("")).filter(|s| !s.is_empty() && !s.starts_with('$') && !s.starts_with("//"));
+    (file.replace('\\', "/"), sec)
 }
 
 fn resolve(file: &str, dir: Option<&std::path::Path>) -> Option<std::path::PathBuf> {
@@ -2364,14 +2369,10 @@ impl Expander<'_> {
             let t = line.trim();
             let l = t.to_ascii_lowercase();
             let tok: Vec<&str> = t.split_whitespace().collect();
-            // (an include's or a section marker's words without a comment: `;`, ` $`; not `//`, which a
-            // path may hold)
-            let inc = |s: &'_ str| -> String { let s = s.trim().split(';').next().unwrap_or(""); s.find(" $").map_or(s, |k| &s[..k]).trim_end().to_string() };
             if let Some(sec) = &sec_ascii {
                 if !in_section {
-                    let mark = inc(t);
-                    let mark: Vec<&str> = mark.split_whitespace().collect(); // (`.lib TT ; typical`)
-                    in_section = l.starts_with(".lib") && mark.len() == 2 && mark[1].eq_ignore_ascii_case(sec);
+                    // (a marker's words without a comment, `.lib TT ; typical`: it holds no path)
+                    in_section = l.starts_with(".lib") && matches!(uncommented(t).split_whitespace().collect::<Vec<_>>()[..], [_, m] if m.eq_ignore_ascii_case(sec));
                     found |= in_section;
                     continue;
                 }
@@ -2405,8 +2406,7 @@ impl Expander<'_> {
                 }
             }
             if opens_file(&l) {
-                let raw = inc(raw); // (the file's name as written: non-ASCII letters too)
-                self.include(&raw, &l, raw.split_whitespace().count(), dir, depth);
+                self.include(raw.trim(), &l, dir, depth); // (the file's name as written: non-ASCII letters too)
                 continue;
             }
             // LTspice's behavioural diode (Ron/Roff/Vfwd/Vrev) becomes an XSPICE device in ngspice:
@@ -2432,7 +2432,7 @@ impl Expander<'_> {
         }
     }
 
-    fn include(&mut self, t: &str, l: &str, ntok: usize, dir: Option<&std::path::Path>, depth: usize) {
+    fn include(&mut self, t: &str, l: &str, dir: Option<&std::path::Path>, depth: usize) {
         let (file, sec) = include_args(t);
         let sec = sec.filter(|_| l.starts_with(".lib"));
         // LTspice's own opamp.sub needs LTspice semantics; the built-in `opamp` subckt replaces it
@@ -2454,7 +2454,7 @@ impl Expander<'_> {
                 }
             }
             // inside an included file, `.lib name` without a file is a section marker
-            None if depth > 0 && ntok == 2 && l.starts_with(".lib") => {}
+            None if depth > 0 && l.starts_with(".lib") && sec.is_none() => {}
             None => self.warnings.push(format!("`{t}`: file not found")),
         }
     }
@@ -4402,6 +4402,9 @@ SYMBOL half 400 300 R0\nSYMATTR InstName U4\nSYMATTR Value R=3k\nFLAG 352 300 a\
         prepare(".include models.lib\nV1 a 0 1\n.end\n", None, &mut w);
         assert!(w.len() == 1 && w[0].contains(".include"), "{w:?}"); // (a plain .title unsaid; an .include as the title said)
         assert!(include_args(".lib x.lib // corner").1.is_none() && include_args(".include //nas/share/x.lib").0 == "//nas/share/x.lib");
+        assert_eq!(include_args(".lib x.lib TT;typical"), ("x.lib".into(), Some("TT")));
+        assert_eq!(include_args(".include models.lib;vendor"), ("models.lib".into(), None));
+        assert_eq!(include_args(".lib \"/Volumes/Models $ Lib;v2/x.lib\" TT\t$ x"), ("/Volumes/Models $ Lib;v2/x.lib".into(), Some("TT")));
         assert!(is_end(".end;done") && is_end(".end\t* x") && !is_end(".ends"));
         assert_eq!(before_end("* t\nR1 a 0 1\n.END\t; done\n", ".op"), "* t\nR1 a 0 1\n.op\n.END\t; done\n");
         let _s = SIM.lock();
