@@ -546,8 +546,6 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
     Ok(Run { id, plot, scale, vectors, op, aborted, meas, log, steps: if steps.is_none() { vec![] } else { done.iter().map(|d| d.0.clone()).collect() }, notes })
 }
 
-/// Load `deck`, run it (background thread, so `halt` can stop it): its plot, its log, whether it
-/// was halted.
 /// The last gate, whatever pass wrote the deck: no line ngspice would take for commands, nor a file
 /// it would open itself, unread by the expander.
 fn gate(deck: &str) -> Result<(), Vec<String>> {
@@ -557,6 +555,8 @@ fn gate(deck: &str) -> Result<(), Vec<String>> {
     }
 }
 
+/// Load `deck`, run it (background thread, so `halt` can stop it): its plot, its log, whether it
+/// was halted.
 fn one_run(api: &Api, deck: &str, stop: &dyn Fn() -> bool) -> Result<(String, Vec<String>, bool), Vec<String>> {
     gate(deck)?;
     let lines: Vec<CString> = deck.lines().map(|l| CString::new(l).unwrap_or_default()).collect();

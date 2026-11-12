@@ -1269,16 +1269,15 @@ pub(crate) fn command_line(line: &str) -> bool {
 /// Whether dropping command line `l` is said: not for a plain `.title` (of no use here), only for one
 /// that would make the deck a script.
 fn said(l: &str) -> bool {
-    let l = l.trim_start();
-    l.get(..6).is_none_or(|h| !h.eq_ignore_ascii_case(".title")) || l[6..].trim_start().get(..10).is_some_and(|h| h.eq_ignore_ascii_case("*ng_script"))
+    !starts_ci(l, ".title") || starts_ci(&l.trim_start()[".title".len()..], "*ng_script")
 }
 /// `.include`, `.inc`, `.lib`: a file ngspice would open itself (the expander inlines them).
 pub(crate) fn opens_file(line: &str) -> bool {
     [".inc", ".lib"].iter().any(|p| starts_ci(line, p))
 }
-/// `.end`, a blank (a tab too) or nothing after it: ngspice ends the circuit there.
+/// `.end`, a blank (a tab too), a comment or nothing after it: ngspice ends the circuit there.
 fn is_end(low: &str) -> bool {
-    low.trim_end().strip_prefix(".end").is_some_and(|r| r.is_empty() || r.starts_with(char::is_whitespace))
+    uncommented(low).trim_end().strip_prefix(".end").is_some_and(|r| r.is_empty() || r.starts_with(char::is_whitespace))
 }
 fn starts_ci(line: &str, p: &str) -> bool {
     line.trim_start().get(..p.len()).is_some_and(|h| h.eq_ignore_ascii_case(p))
@@ -1591,7 +1590,7 @@ fn after_title(text: &str, line: &str) -> String {
 
 /// `text` with `line` added before its `.end` (or at its end).
 fn before_end(text: &str, line: &str) -> String {
-    match deck_lines(text).iter().find(|l| l.top && is_end(uncommented(l.low.trim()))) {
+    match deck_lines(text).iter().find(|l| l.top && is_end(l.low.trim())) {
         Some(e) => format!("{}{line}\n{}", &text[..e.start], &text[e.start..]),
         None => format!("{}{}{line}\n", text, if text.ends_with('\n') || text.is_empty() { "" } else { "\n" }),
     }
@@ -2298,8 +2297,8 @@ fn include_args(t: &str) -> (String, Option<&str>) {
         Some(q @ ('"' | '\'')) => rest[1..].split_once(q).unwrap_or((&rest[1..], "")),
         _ => rest.split_once(char::is_whitespace).unwrap_or((rest, "")),
     };
-    // (Windows-authored paths; `; vendor models` after them no section)
-    (file.replace('\\', "/"), tail.split_whitespace().next().filter(|s| !s.starts_with([';', '$'])))
+    // (Windows-authored paths; a comment after them, `; vendor`, `// corner`, no section)
+    (file.replace('\\', "/"), tail.split_whitespace().next().filter(|s| !s.starts_with([';', '$']) && !s.starts_with("//")))
 }
 
 fn resolve(file: &str, dir: Option<&std::path::Path>) -> Option<std::path::PathBuf> {
@@ -2365,9 +2364,13 @@ impl Expander<'_> {
             let t = line.trim();
             let l = t.to_ascii_lowercase();
             let tok: Vec<&str> = t.split_whitespace().collect();
+            // (an include's or a section marker's words without a comment: `;`, ` $`; not `//`, which a
+            // path may hold)
+            let inc = |s: &'_ str| -> String { let s = s.trim().split(';').next().unwrap_or(""); s.find(" $").map_or(s, |k| &s[..k]).trim_end().to_string() };
             if let Some(sec) = &sec_ascii {
                 if !in_section {
-                    let mark: Vec<&str> = uncommented(t).split_whitespace().collect(); // (`.lib TT ; typical`)
+                    let mark = inc(t);
+                    let mark: Vec<&str> = mark.split_whitespace().collect(); // (`.lib TT ; typical`)
                     in_section = l.starts_with(".lib") && mark.len() == 2 && mark[1].eq_ignore_ascii_case(sec);
                     found |= in_section;
                     continue;
@@ -2382,7 +2385,7 @@ impl Expander<'_> {
                 self.warnings.push(".control blocks are not executed (security)".into());
                 continue;
             }
-            if control || l.starts_with(".endc") || l.starts_with(".endl") || (depth > 0 && is_end(uncommented(&l))) {
+            if control || l.starts_with(".endc") || l.starts_with(".endl") || (depth > 0 && is_end(&l)) {
                 control &= !l.starts_with(".endc");
                 continue;
             }
@@ -2402,7 +2405,8 @@ impl Expander<'_> {
                 }
             }
             if opens_file(&l) {
-                self.include(raw.trim(), &l, tok.len(), dir, depth); // (the file's name as written: non-ASCII letters too)
+                let raw = inc(raw); // (the file's name as written: non-ASCII letters too)
+                self.include(&raw, &l, raw.split_whitespace().count(), dir, depth);
                 continue;
             }
             // LTspice's behavioural diode (Ron/Roff/Vfwd/Vrev) becomes an XSPICE device in ngspice:
@@ -4397,7 +4401,8 @@ SYMBOL half 400 300 R0\nSYMATTR InstName U4\nSYMATTR Value R=3k\nFLAG 352 300 a\
         prepare(".title Amplifier\nV1 a 0 1\n.end\n", None, &mut w);
         prepare(".include models.lib\nV1 a 0 1\n.end\n", None, &mut w);
         assert!(w.len() == 1 && w[0].contains(".include"), "{w:?}"); // (a plain .title unsaid; an .include as the title said)
-        assert!(include_args(".lib x.lib ; vendor").1.is_none() && include_args(".include //nas/share/x.lib").0 == "//nas/share/x.lib");
+        assert!(include_args(".lib x.lib // corner").1.is_none() && include_args(".include //nas/share/x.lib").0 == "//nas/share/x.lib");
+        assert!(is_end(".end;done") && is_end(".end\t* x") && !is_end(".ends"));
         assert_eq!(before_end("* t\nR1 a 0 1\n.END\t; done\n", ".op"), "* t\nR1 a 0 1\n.op\n.END\t; done\n");
         let _s = SIM.lock();
         for deck in ["* t\n.title *ng_script\nshell echo x\n.end\n", "* t\n.include /tmp/nomospice-x.cir\n.end\n", "*ng_script\nshell echo x\n.end\n"] {
@@ -4421,6 +4426,7 @@ SYMBOL half 400 300 R0\nSYMATTR InstName U4\nSYMATTR Value R=3k\nFLAG 352 300 a\
         assert_eq!(out.matches(".model DX").count(), 1, "{out}");
         assert_eq!(out.matches(".model DC").count(), 1, "{out}");
         assert!(!out.contains("shell") && out.contains(".model DX D(Is=1n)") && out.contains(".model DF D") && out.contains(".model DQ D") && !out.contains(".END"), "{out}");
+        assert!(!w.iter().any(|w| w.contains("corner") || w.contains("vendor")), "{w:?}"); // (no comment taken for a file or a section)
         assert!(w.iter().any(|w| w.contains("missing.lib")) && w.iter().any(|w| w.contains("`nope`")), "{w:?}");
         std::fs::remove_dir_all(dir).ok();
     }

@@ -378,11 +378,13 @@ export const Schematic = memo(function Schematic() {
     const got = rows.length ? rows : inst ? opRows(`${inst}#branch`) : [];
     return got.length ? `${label || `I(${inst})`} = ${got.map((r) => si(r[1], "A", 4)).join(" / ")}` : null;
   };
-  /** A part's current, or one of more pins its pins' (a transistor's Ic, Ib, Ie, a subcircuit's Ix(U1:Out)) */
+  /** A part's current, or its pins' where several are sensed (a transistor's Ic, Ib, Ie, a
+   *  subcircuit's Ix(U1:Out)) */
   const opCurrents = (i: number) => {
+    const pins = nets?.pin_currents?.[i] ?? [];
+    if (pins.filter(Boolean).length > 1) return pins.flatMap((label, k) => (label && opCurrent(i, k)) || []);
     const one = opCurrent(i);
-    if (one || !nets) return one ? [one] : [];
-    return (nets.pin_currents?.[i] ?? []).flatMap((label, k) => (label && opCurrent(i, k)) || []);
+    return one ? [one] : [];
   };
   /** Values written beside the net labels and the parts (the canvas menu's Show operating point) */
   const [opShown, setOpShown] = useState(false);
