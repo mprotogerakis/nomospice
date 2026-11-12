@@ -707,7 +707,7 @@ pub fn netlist_items(text: &str) -> Vec<Item> {
                 }
             }
             // (a comment line in it: no command)
-            _ if control => dropped += usize::from(!low.is_empty() && !low.starts_with('*') && starred(&low).is_none()), // (comment lines there too, as ngspice reads them)
+            _ if control => dropped += usize::from(!low.is_empty() && !low.starts_with('*')),
             _ => body.push(l.to_string()),
         }
     }
@@ -1248,33 +1248,24 @@ fn starred(line: &str) -> Option<String> {
     l.strip_prefix("//").or_else(|| l.strip_prefix(COMMENT_LINE)).map(|r| format!("* {}", r.trim()))
 }
 /// A line as libngspice takes it: it rejects the whole deck on non-ASCII bytes (`10µ`, `4.7μF`,
-/// `10kΩ`). One character for one (a blank for other blanks and a lone Ω, the rest `_`), a unit Ω
-/// after a value dropped: the tokens stay those of the line as written (an include's file name is
-/// read there).
+/// `10kΩ`): Ω (Greek or the Ohm sign) dropped, `µ` a `u`, other blanks a blank, the rest `_`. The
+/// expander's checks read this line, so an Ω before a `.control` hides nothing.
 fn ascii(line: &str) -> std::borrow::Cow<'_, str> {
     if line.is_ascii() {
         return line.into();
     }
-    let (mut prev, mut it, mut out) = (' ', line.chars().peekable(), String::with_capacity(line.len()));
-    while let Some(c) = it.next() {
-        let p = std::mem::replace(&mut prev, c);
-        match c {
-            'Ω' | '\u{2126}' if !p.is_whitespace() => {} // (`10kΩ`; Greek and the Ohm sign)
-            // (`10 Ω`: a blank; `Ωa` a name of its own, not a)
-            'Ω' | '\u{2126}' => out.push(if it.peek().is_none_or(|n| n.is_whitespace()) { ' ' } else { '_' }),
-            'µ' | 'μ' => out.push('u'),
-            c if c.is_ascii() => out.push(c),
-            c if c.is_whitespace() => out.push(' '),
-            _ => out.push('_'),
-        }
-    }
-    out.into()
+    line.chars().filter(|c| !matches!(c, 'Ω' | '\u{2126}')).map(|c| match c {
+        'µ' | 'μ' => 'u',
+        c if c.is_ascii() => c,
+        c if c.is_whitespace() => ' ',
+        _ => '_',
+    }).collect::<String>().into()
 }
 
 /// A line ngspice would take for commands: `.control`, `*#` (a line's `#` it makes a `*`), and the
 /// title `*ng_script` (which `.title` sets), which makes it run the deck's lines as commands.
 pub(crate) fn command_line(line: &str) -> bool {
-    line.trim_start().starts_with('#') || ["*#", ".control", ".title", "*ng_script"].iter().any(|p| starts_ci(line, p))
+    ["#", "*#", ".control", ".title", "*ng_script"].iter().any(|p| starts_ci(line, p))
 }
 /// `.include`, `.inc`, `.lib`: a file ngspice would open itself (the expander inlines them).
 pub(crate) fn opens_file(line: &str) -> bool {
@@ -2351,7 +2342,7 @@ impl Expander<'_> {
             let tok: Vec<&str> = t.split_whitespace().collect();
             if let Some(sec) = section {
                 if !in_section {
-                    in_section = l.starts_with(".lib") && tok.len() == 2 && tok[1].eq_ignore_ascii_case(ascii(sec).trim());
+                    in_section = l.starts_with(".lib") && tok.len() == 2 && tok[1].eq_ignore_ascii_case(&ascii(sec));
                     found |= in_section;
                     continue;
                 }
@@ -2398,7 +2389,8 @@ impl Expander<'_> {
                     let t: Vec<&str> = l.split(|c: char| c.is_whitespace() || c == '(').filter(|s| !s.is_empty()).collect();
                     self.diode = (t.first() == Some(&".model") && t.get(2) == Some(&"d")).then(|| t[1].to_string());
                 }
-                if let Some(m) = self.diode.as_ref().filter(|_| ["ron=", "roff=", "vfwd=", "vrev="].iter().any(|p| code.split_whitespace().collect::<String>().contains(p))) {
+                let flat = || code.split_whitespace().collect::<String>();
+                if let Some(m) = self.diode.as_ref().filter(|_| { let f = flat(); ["ron=", "roff=", "vfwd=", "vrev="].iter().any(|p| f.contains(p)) }) {
                     self.behavioural.push(m.clone());
                     self.diode = None; // once per model
                 }
@@ -2751,7 +2743,7 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
         matches!(t.first().map(String::as_str), Some(".model" | ".subckt")).then(|| t.get(1).cloned()).flatten()
     }).collect();
     // (the top's models and includes are global: its sheets use them as their own)
-    let include = |d: &String| { let l = d.to_lowercase(); l.starts_with(".inc") || l.starts_with(".lib") };
+    let include = |d: &String| opens_file(d);
     if sub {
         defs.extend(h.top_defs.iter().cloned());
     } else {
@@ -4366,7 +4358,7 @@ SYMBOL half 400 300 R0\nSYMATTR InstName U4\nSYMATTR Value R=3k\nFLAG 352 300 a\
         let text = prepare("* t\n##shell touch /tmp/nomospice-pwned\n  ##shell touch /tmp/nomospice-pwned\nΩ*# shell touch /tmp/nomospice-pwned\nΩ.control\nshell touch /tmp/nomospice-pwned\nΩ.endc\n# note\n.op\n.end\n", None, &mut vec![]);
         let out = text.text();
         assert!(out.lines().map(|l| l.trim_start().to_ascii_lowercase()).all(|l| !l.starts_with(".control") && !l.starts_with("*#") && !l.starts_with('#')) && out.contains("* note\n"), "{out}");
-        assert_eq!(ascii("Ω.include x.lib\u{a0}R1 Ωa b 10kΩ 4.7µ Größe 10 \u{2126}"), "_.include x.lib R1 _a b 10k 4.7u Gr__e 10  "); // (tokens as written)
+        assert_eq!(ascii("Ω.include x.lib\u{a0}R1 a b 10kΩ 4.7µ Größe 10\u{2126}"), ".include x.lib R1 a b 10k 4.7u Gr__e 10");
         // (a deck ngspice would run as a script: `*ng_script` as its title, which .title sets; an
         // .include as the title it would read itself)
         let out = prepare(".include /tmp/nomospice-x.cir\n.TITLE *ng_script\n*ng_script\nV1 a 0 1\n.op\n.end\n", None, &mut vec![]).0;
