@@ -514,9 +514,22 @@ export function twoPortIn(expr: string, nl: Netlist): string {
   const across = (p?: string[]) => (p?.length === 2 ? `(${vexpr(p[0])}-${vexpr(p[1])})` : "");
   const vin = across(nets(src));
   if (!vin) return expr;
-  // (another AC drive anywhere, `V2 x 0 AC 1`: the voltages are not this source's alone)
-  const drives = (w: string[]) => ((k) => k >= 3 && !/^[0.]+$/.test(w[k + 1] ?? "1"))(w.findIndex((x, j) => j >= 3 && /^ac$/i.test(x)));
-  if (lines.some((l) => { const w = l.trim().split(/\s+/); return /^[vi]/i.test(w[0] ?? "") && w[0].toLowerCase() !== src.toLowerCase() && drives(w); })) return expr;
+  // (another AC drive, `V2 x 0 AC 1`, also over + lines or in a subcircuit (a V1 there too): the
+  // voltages are not this source's alone; an amplitude of 0, `0V`, `{a}` with a=0, none)
+  let depth = 0;
+  const logical: [string, number][] = [];
+  for (const raw of lines) {
+    const l = raw.split(/;|(?<![^\s])\$/)[0].trim();
+    if (!l || l.startsWith("*")) continue;
+    if (l.startsWith("+") && logical.length) logical[logical.length - 1][0] += " " + l.slice(1);
+    else logical.push([l, depth]), (depth += /^\.subckt\b/i.test(l) ? 1 : /^\.ends\b/i.test(l) ? -1 : 0);
+  }
+  const zero = (x: string) => parseFloat((resolved(x) ?? x).replace(/[{}]/g, "")) === 0;
+  const other = logical.some(([l, d]) => {
+    const w = l.split(/\s+/), k = w.findIndex((x, j) => j >= 3 && /^ac$/i.test(x));
+    return /^[vi]/i.test(w[0]) && (d > 0 || w[0].toLowerCase() !== src.toLowerCase()) && k > 0 && !zero(w[k + 1] ?? "1");
+  });
+  if (other) return expr;
   const z0 = resolved(line(`R${src}_rser`)?.[3]);
   // (the AC amplitude after the nodes, `AC 1`: a node named ac is none; a parameter: not here)
   // (no AC part: no drive for S21, the voltages come from elsewhere)

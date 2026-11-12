@@ -2384,7 +2384,7 @@ impl Expander<'_> {
             let tok: Vec<&str> = t.split_whitespace().collect();
             if let Some(sec) = &sec_ascii {
                 if !in_section {
-                    in_section = l.starts_with(".lib") && lib_word(t).is_some_and(|m| m.eq_ignore_ascii_case(sec));
+                    in_section = l.starts_with(".lib") && lib_word(t).is_some_and(|m| m.eq_ignore_ascii_case(sec)); // (the prefix: a cheap first test)
                     found |= in_section;
                     continue;
                 }
@@ -2465,8 +2465,9 @@ impl Expander<'_> {
                     Err(e) => self.warnings.push(format!("{}: {e}", path.display())),
                 }
             }
-            // inside an included file, `.lib name` without a file is a section marker (a quoted name a file's)
-            None if depth > 0 && lib_word(t).is_some_and(|m| !m.starts_with(['"', '\''])) => {}
+            // inside an included file, `.lib name` without a file is a section marker (a quoted name, a
+            // path, a file's)
+            None if depth > 0 && lib_word(t).is_some_and(|m| !m.starts_with(['"', '\'']) && !m.contains(['/', '\\'])) => {}
             None => self.warnings.push(format!("`{t}`: file not found")),
         }
     }
@@ -4442,11 +4443,11 @@ SYMBOL half 400 300 R0\nSYMATTR InstName U4\nSYMATTR Value R=3k\nFLAG 352 300 a\
         std::fs::write(dir.join("sub/cycle.lib"), ".include cycle.lib\n.model DC D\n").unwrap();
         // (in an included file: a section marker with a comment unsaid, a quoted file that is not there said)
         // (a file of the one word's name inlined, whatever its extension)
-        std::fs::write(dir.join("sub/nested.lib"), ".lib TT // corner\n.lib tt_1.8v\n.lib TT//x\n.lib \"gone dir/missing.lib\"\n.lib x.dio\n.model DN D\n").unwrap();
+        std::fs::write(dir.join("sub/nested.lib"), ".lib TT // corner\n.lib tt_1.8v\n.lib TT//x\n.lib \"gone dir/missing.lib\"\n.lib x.dio\n.lib ../gone/p.lib\n.model DN D\n").unwrap();
         std::fs::write(dir.join("sub/x.dio"), ".model DD D\n").unwrap();
         let mut wn = vec![];
         let nested = prepare("* t\n.include sub/nested.lib\n.end\n", Some(&dir), &mut wn);
-        assert!(nested.text().contains(".model DN D") && nested.text().contains(".model DD D") && wn.len() == 1 && wn[0].contains("gone dir/missing.lib"), "{wn:?}");
+        assert!(nested.text().contains(".model DN D") && nested.text().contains(".model DD D") && wn.len() == 2 && wn[0].contains("gone dir/missing.lib") && wn[1].contains("../gone/p.lib"), "{wn:?}");
         let out = prepare("* t\n.include sub/models.lib\n.lib sub/models.lib fast ; vendor\n.lib \"with space/q.lib\"\n.inc missing.lib\n.lib sub/models.lib nope\n.inc sub\\cycle.lib\n.include sub/models.lib\n.end\n", Some(&dir), &mut w);
         let out = out.text();
         assert_eq!(out.matches(".model DX").count(), 1, "{out}");
