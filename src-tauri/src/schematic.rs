@@ -692,24 +692,25 @@ pub fn netlist_items(text: &str) -> Vec<Item> {
     const ANALYSES: [(&str, &str); 12] = [("tran", ".tran"), ("ac", ".ac"), ("dc", ".dc"), ("op", ".op"), ("noise", ".noise"), ("tf", ".tf"), ("pz", ".pz"), ("sens", ".sens"), ("fourier", ".four"), ("disto", ".disto"), ("pss", ".pss"), ("sp", ".sp")];
     let (mut body, mut control, mut taken, mut dropped) = (vec![], false, vec![], 0);
     let first = |l: &str| l.split_whitespace().next().unwrap_or("").to_ascii_lowercase();
+    // (a control-language line without its comment: `;`, `//`, `$` and a blank; `$x` is a variable there)
+    let code = |l: &str| { let l = l.split_once(';').map_or(l, |p| p.0); let l = l.split_once("//").map_or(l, |p| p.0); l.find("$ ").map_or(l, |k| &l[..k]).trim_end().to_string() };
     for l in lines.iter().skip(usize::from(titled)).take_while(|l| !is_end(&l.trim().to_ascii_lowercase())) {
-        let (low, w) = (l.trim().to_ascii_lowercase(), first(uncommented(l))); // (`.endc;done`)
-        // (the control language's variables, `$&tstop`, `$n`; `$ comment` none)
-        let vars = |s: &str| s.contains('&') || s.match_indices('$').any(|(k, _)| s[k + 1..].starts_with(|c: char| !c.is_whitespace()));
+        let (low, c) = (l.trim().to_ascii_lowercase(), code(l));
+        let w = first(&c); // (`.endc;done`)
         match w.as_str() {
             ".control" => control = true,
             ".endc" => control = false,
             // (an analysis of the control language's variables, `tran 1n $&tstop`: no dot command, left
             // out; a `$ comment` after it is no variable)
-            w if control && !vars(l.split(';').next().unwrap_or("")) && ANALYSES.iter().any(|(c, _)| *c == w) => {
-                let dot = ANALYSES.iter().find(|(c, _)| *c == w).unwrap().1;
-                let line = format!("{dot}{}", &uncommented(l).trim()[w.len()..]);
+            w if control && !c.contains(['$', '&']) && ANALYSES.iter().any(|(a, _)| *a == w) => {
+                let dot = ANALYSES.iter().find(|(a, _)| *a == w).unwrap().1;
+                let line = format!("{dot}{}", &c.trim()[w.len()..]);
                 if !taken.contains(&line) {
                     taken.push(line); // (an analysis repeated in the block, `alter` between: once)
                 }
             }
             // (a comment line in it: no command)
-            _ if control => dropped += usize::from(!low.is_empty() && !low.starts_with('*')),
+            _ if control => dropped += usize::from(!c.trim().is_empty() && !low.starts_with('*')), // (a comment line no command)
             _ => body.push(l.to_string()),
         }
     }
@@ -2455,9 +2456,10 @@ impl Expander<'_> {
                     Err(e) => self.warnings.push(format!("{}: {e}", path.display())),
                 }
             }
-            // inside an included file, `.lib name` without a file is a section marker (a quoted name a file's)
-            None if depth > 0 && l.starts_with(".lib") && sec.is_none() && !t.split_whitespace().nth(1).is_some_and(|w| w.starts_with(['"', '\''])) => {}
-            None => self.warnings.push(format!("`{}`: file not found", t.split(';').next().unwrap_or(t).trim_end())),
+            // inside an included file, `.lib name` without a file is a section marker (a name with a path
+            // or an extension a file's)
+            None if depth > 0 && l.starts_with(".lib") && sec.is_none() && !file.contains(['/', '.']) => {}
+            None => self.warnings.push(format!("`{file}`: file not found")),
         }
     }
 }
@@ -2696,7 +2698,7 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
                 let l = line.to_lowercase();
                 if sub {
                     // (a sheet: its definitions and parts; its commands with their `+` lines go)
-                    let head = l.split_whitespace().next().unwrap_or("");
+                    let head = uncommented(&l).split_whitespace().next().unwrap_or(""); // (`.endc;done`)
                     let more = head.starts_with('+');
                     control = (control || head == ".control") && head != ".endc";
                     if head.starts_with('*') {
@@ -4092,8 +4094,9 @@ SYMBOL half 400 300 R0\nSYMATTR InstName U4\nSYMATTR Value R=3k\nFLAG 352 300 a\
         let items = netlist_items("* t\nV1 1 0 1\nR1 1 0 1k\n.control\n* show it\ntran 1n 1u\nop\nrun\nalter R1 2k\ntran 1n 1u\nfourier 1meg v(1)\nplot v(1)\n.endc\n.op\n.end ; deck\nmore\n");
         assert!(matches!(&items[1], Item::Text { text, .. } if text.ends_with("R1 1 0 1k\n.op\n.tran 1n 1u\n.four 1meg v(1)") && !text.contains("plot") && !text.contains("more")), "{items:?}");
         assert!(matches!(&items[0], Item::Text { text, .. } if text.contains(".tran 1n 1u .four 1meg v(1) taken") && text.contains("3 other commands")), "{items:?}");
-        let items = netlist_items("* t\nV1 1 0 1\n.control\ntran 1n $&tstop\nrun\n.endc;done\nR1 1 0 1k\n.op\n.end;deck\nmore\n");
-        assert!(matches!(&items[1], Item::Text { text, .. } if text.contains("R1 1 0 1k\n.op") && !text.contains(".tran") && !text.contains("more")), "{items:?}"); // (comments touching .endc, .end; a variable)
+        let items = netlist_items("* t\nV1 1 0 1\n.control\ntran 1n $&tstop\nac dec 10 1 1k $ R&D sweep\n; note\nrun\n.endc;done\nR1 1 0 1k\n.op\n.end;deck\nmore\n");
+        assert!(matches!(&items[1], Item::Text { text, .. } if text.contains("R1 1 0 1k\n.op") && text.contains(".ac dec 10 1 1k") && !text.contains(".tran") && !text.contains("more")), "{items:?}"); // (comments touching .endc, .end; a variable; a $ comment)
+        assert!(matches!(&items[0], Item::Text { text, .. } if text.contains("2 other commands")), "{items:?}"); // (tran with a variable, run; the ; line none)
         let lib = netlist_items(".subckt OPA 1 2 3\nR1 1 2 1k\n.ends\n");
         assert!(lib.len() == 1 && matches!(&lib[0], Item::Text { text, .. } if text.starts_with(".subckt OPA")));
     }
