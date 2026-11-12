@@ -547,10 +547,11 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
 /// Load `deck`, run it (background thread, so `halt` can stop it): its plot, its log, whether it
 /// was halted.
 fn one_run(api: &Api, deck: &str, stop: &dyn Fn() -> bool) -> Result<(String, Vec<String>, bool), Vec<String>> {
-    // (the last gate, whatever pass wrote the deck: no line that ngspice would run as a command; it
-    // makes a line's `#` a `*`, `*#` is one)
-    if let Some(l) = deck.lines().map(|l| l.trim_start().to_ascii_lowercase()).find(|l| l.starts_with(".control") || l.starts_with("*#") || l.starts_with('#')) {
-        return Err(vec![format!("`{l}`: a command line, not run (security)")]);
+    // (the last gate, whatever pass wrote the deck: no line ngspice would take for commands, nor a
+    // file it would open itself, unread by the expander)
+    let opens = |l: &str| [".inc", ".lib"].iter().any(|p| l.trim_start().get(..p.len()).is_some_and(|h| h.eq_ignore_ascii_case(p)));
+    if let Some(l) = deck.lines().find(|l| crate::schematic::command_line(l) || opens(l)) {
+        return Err(vec![format!("`{l}`: not passed to ngspice (security)")]);
     }
     let lines: Vec<CString> = deck.lines().map(|l| CString::new(l).unwrap_or_default()).collect();
     let mut ptrs: Vec<*const c_char> = lines.iter().map(|l| l.as_ptr()).collect();

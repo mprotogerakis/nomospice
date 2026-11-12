@@ -312,13 +312,13 @@ export function stripAnalyses(text: string) {
 }
 
 /** The lines after `li` that continue its statement: its `+` lines (blank and comment lines, `*`,
- *  `;`, `#`, `$`, between them are skipped, as the netlist reads them). */
+ *  `;`, `#`, `$`, `//`, between them are skipped, as the netlist reads them). */
 export function continuation(lines: string[], li: number) {
   const out: number[] = [];
   for (let j = li + 1; j < lines.length; j++) {
     const t = lines[j].trim();
     if (t.startsWith("+")) out.push(j);
-    else if (t && !/^[*;#$]/.test(t)) break; // (comments between: *, ; # and $ alike, as the netlist reads them)
+    else if (t && !/^([*;#$]|\/\/)/.test(t)) break; // (comments between: *, ;, #, $ and // alike, as the netlist reads them)
   }
   return out;
 }
