@@ -693,13 +693,15 @@ pub fn netlist_items(text: &str) -> Vec<Item> {
     let (mut body, mut control, mut taken, mut dropped) = (vec![], false, vec![], 0);
     let first = |l: &str| l.split_whitespace().next().unwrap_or("").to_ascii_lowercase();
     for l in lines.iter().skip(usize::from(titled)).take_while(|l| !is_end(&l.trim().to_ascii_lowercase())) {
-        let (low, w) = (l.trim().to_ascii_lowercase(), first(l));
+        let (low, w) = (l.trim().to_ascii_lowercase(), first(uncommented(l))); // (`.endc;done`)
+        // (the control language's variables, `$&tstop`, `$n`; `$ comment` none)
+        let vars = |s: &str| s.contains('&') || s.match_indices('$').any(|(k, _)| s[k + 1..].starts_with(|c: char| !c.is_whitespace()));
         match w.as_str() {
             ".control" => control = true,
             ".endc" => control = false,
             // (an analysis of the control language's variables, `tran 1n $&tstop`: no dot command, left
             // out; a `$ comment` after it is no variable)
-            w if control && !uncommented(l).contains(['$', '&']) && ANALYSES.iter().any(|(c, _)| *c == w) => {
+            w if control && !vars(l.split(';').next().unwrap_or("")) && ANALYSES.iter().any(|(c, _)| *c == w) => {
                 let dot = ANALYSES.iter().find(|(c, _)| *c == w).unwrap().1;
                 let line = format!("{dot}{}", &uncommented(l).trim()[w.len()..]);
                 if !taken.contains(&line) {
@@ -2295,15 +2297,15 @@ fn include_args(t: &str) -> (String, Option<&str>) {
     let rest = t.split_once(char::is_whitespace).map_or("", |r| r.1).trim();
     let (file, tail) = match rest.chars().next() {
         Some(q @ ('"' | '\'')) => rest[1..].split_once(q).unwrap_or((&rest[1..], "")),
-        // (a `;` comment touching the name, `models.lib;vendor`: nothing after it)
-        _ => match rest.split_once(char::is_whitespace).unwrap_or((rest, "")) {
-            (f, tail) => f.split_once(';').map_or((f, tail), |(f, _)| (f, "")),
-        },
+        _ => rest.split_once(char::is_whitespace).unwrap_or((rest, "")),
     };
-    // (Windows-authored paths; a comment after them, `; vendor`, `TT;typical`, `$ x`, `// corner`, no
-    // section; `//` in the name a path's)
-    let sec = tail.split_whitespace().next().map(|s| s.split(';').next().unwrap_or("")).filter(|s| !s.is_empty() && !s.starts_with('$') && !s.starts_with("//"));
-    (file.replace('\\', "/"), sec)
+    // (a `;` comment touching an unquoted name, `models.lib;vendor`: nothing after it; `//` in it a path's)
+    let (file, tail) = match file.split_once(';').filter(|_| !rest.starts_with(['"', '\''])) {
+        Some((f, _)) => (f, ""),
+        None => (file, tail),
+    };
+    // (Windows-authored paths; a comment after them no section, read as a section marker is)
+    (file.replace('\\', "/"), uncommented(tail).split_whitespace().next())
 }
 
 fn resolve(file: &str, dir: Option<&std::path::Path>) -> Option<std::path::PathBuf> {
@@ -2453,9 +2455,9 @@ impl Expander<'_> {
                     Err(e) => self.warnings.push(format!("{}: {e}", path.display())),
                 }
             }
-            // inside an included file, `.lib name` without a file is a section marker
-            None if depth > 0 && l.starts_with(".lib") && sec.is_none() => {}
-            None => self.warnings.push(format!("`{t}`: file not found")),
+            // inside an included file, `.lib name` without a file is a section marker (a quoted name a file's)
+            None if depth > 0 && l.starts_with(".lib") && sec.is_none() && !t.split_whitespace().nth(1).is_some_and(|w| w.starts_with(['"', '\''])) => {}
+            None => self.warnings.push(format!("`{}`: file not found", t.split(';').next().unwrap_or(t).trim_end())),
         }
     }
 }
@@ -4090,6 +4092,8 @@ SYMBOL half 400 300 R0\nSYMATTR InstName U4\nSYMATTR Value R=3k\nFLAG 352 300 a\
         let items = netlist_items("* t\nV1 1 0 1\nR1 1 0 1k\n.control\n* show it\ntran 1n 1u\nop\nrun\nalter R1 2k\ntran 1n 1u\nfourier 1meg v(1)\nplot v(1)\n.endc\n.op\n.end ; deck\nmore\n");
         assert!(matches!(&items[1], Item::Text { text, .. } if text.ends_with("R1 1 0 1k\n.op\n.tran 1n 1u\n.four 1meg v(1)") && !text.contains("plot") && !text.contains("more")), "{items:?}");
         assert!(matches!(&items[0], Item::Text { text, .. } if text.contains(".tran 1n 1u .four 1meg v(1) taken") && text.contains("3 other commands")), "{items:?}");
+        let items = netlist_items("* t\nV1 1 0 1\n.control\ntran 1n $&tstop\nrun\n.endc;done\nR1 1 0 1k\n.op\n.end;deck\nmore\n");
+        assert!(matches!(&items[1], Item::Text { text, .. } if text.contains("R1 1 0 1k\n.op") && !text.contains(".tran") && !text.contains("more")), "{items:?}"); // (comments touching .endc, .end; a variable)
         let lib = netlist_items(".subckt OPA 1 2 3\nR1 1 2 1k\n.ends\n");
         assert!(lib.len() == 1 && matches!(&lib[0], Item::Text { text, .. } if text.starts_with(".subckt OPA")));
     }
@@ -4404,6 +4408,7 @@ SYMBOL half 400 300 R0\nSYMATTR InstName U4\nSYMATTR Value R=3k\nFLAG 352 300 a\
         assert!(include_args(".lib x.lib // corner").1.is_none() && include_args(".include //nas/share/x.lib").0 == "//nas/share/x.lib");
         assert_eq!(include_args(".lib x.lib TT;typical"), ("x.lib".into(), Some("TT")));
         assert_eq!(include_args(".include models.lib;vendor"), ("models.lib".into(), None));
+        assert_eq!(include_args(".lib x.lib TT//typical").1, Some("TT"));
         assert_eq!(include_args(".lib \"/Volumes/Models $ Lib;v2/x.lib\" TT\t$ x"), ("/Volumes/Models $ Lib;v2/x.lib".into(), Some("TT")));
         assert!(is_end(".end;done") && is_end(".end\t* x") && !is_end(".ends"));
         assert_eq!(before_end("* t\nR1 a 0 1\n.END\t; done\n", ".op"), "* t\nR1 a 0 1\n.op\n.END\t; done\n");
@@ -4424,6 +4429,11 @@ SYMBOL half 400 300 R0\nSYMATTR InstName U4\nSYMATTR Value R=3k\nFLAG 352 300 a\
         std::fs::write(dir.join("with space/q.lib"), ".model DQ D\n.END\t* of the lib\n").unwrap();
         let mut w = vec![];
         std::fs::write(dir.join("sub/cycle.lib"), ".include cycle.lib\n.model DC D\n").unwrap();
+        // (in an included file: a section marker with a comment unsaid, a quoted file that is not there said)
+        std::fs::write(dir.join("sub/nested.lib"), ".lib TT // corner\n.lib \"gone dir/missing.lib\"\n.model DN D\n").unwrap();
+        let mut wn = vec![];
+        let nested = prepare("* t\n.include sub/nested.lib\n.end\n", Some(&dir), &mut wn);
+        assert!(nested.text().contains(".model DN D") && wn.len() == 1 && wn[0].contains("gone dir/missing.lib"), "{wn:?}");
         let out = prepare("* t\n.include sub/models.lib\n.lib sub/models.lib fast ; vendor\n.lib \"with space/q.lib\"\n.inc missing.lib\n.lib sub/models.lib nope\n.inc sub\\cycle.lib\n.include sub/models.lib\n.end\n", Some(&dir), &mut w);
         let out = out.text();
         assert_eq!(out.matches(".model DX").count(), 1, "{out}");
