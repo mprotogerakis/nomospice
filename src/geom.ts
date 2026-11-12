@@ -420,7 +420,7 @@ function deckDefs(text: string) {
   let depth = 0;
   // (a line's `;` or `$` comment is not of its body; a statement continued on + lines is one line,
   // comment lines between them skipped, as SPICE does)
-  const kept = text.split("\n").filter((l) => { const t = l.trim().toLowerCase(); depth += t.startsWith(".subckt") ? 1 : t.startsWith(".ends") ? -1 : 0; return depth === 0; }).map((l) => l.split(/;|\/\/|(?<![^\s])\$/)[0]);
+  const kept = text.split("\n").filter((l) => { const t = l.trim().toLowerCase(); depth = Math.max(0, depth + (t.startsWith(".subckt") ? 1 : t.startsWith(".ends") ? -1 : 0)); return depth === 0; }).map((l) => l.split(/;|\/\/|(?<![^\s])\$/)[0]);
   const joined: string[] = [];
   let last = -1;
   for (const l of kept) {
@@ -521,6 +521,7 @@ export function twoPortIn(expr: string, nl: Netlist): string {
     if (!l || /^[*#]/.test(l) || control || /^\.endc\b/i.test(l)) continue;
     const w = (x: string) => x.split(/[\s=,]+/).filter(Boolean);
     if (l.startsWith("+") && logical.length) logical[logical.length - 1][0].push(...w(l.slice(1)));
+    else if (!w(l).length) continue; // (a line of `=` alone: no statement)
     // (a stray .ends hides nothing)
     else logical.push([w(l), depth]), (depth = Math.max(0, depth + (/^\.subckt\b/i.test(l) ? 1 : /^\.ends\b/i.test(l) ? -1 : 0)));
   }
@@ -530,13 +531,15 @@ export function twoPortIn(expr: string, nl: Netlist): string {
   const resolved = (x?: string) => ((m) => (m && !stepped.has(m[1].toLowerCase()) ? params.get(m[1].toLowerCase()) ?? x : x))(x ? /^\{\s*(\w+)\s*\}$/.exec(x) : null);
   // (an amplitude written as 0, `0V`, `-0`, `0µ`, or a top-level .param of 0; in doubt, a drive)
   const zero = (x: string, top = true) => ((v) => /^[-+]?[0.]+(e[-+]?\d+)?[a-zµ]*$/i.test(v) && parseFloat(v) === 0)(top ? resolved(x)! : x);
-  // (`AC 1`, also ngspice's `acmag=1`)
-  const acAt = (w: string[]) => w.findIndex((x, j) => j >= 3 && /^(ac|acmag)$/i.test(x));
+  // (`AC 1`, also ngspice's `acmag=1`; the last one, as ngspice sets them in order)
+  const lastAt = (w: string[], re: RegExp) => w.map((x, j) => (j >= 3 && re.test(x) ? j : -1)).reduce((a, b) => Math.max(a, b), -1);
+  const acAt = (w: string[]) => lastAt(w, /^(ac|acmag)$/i);
   const acOf = (w: string[]) => ((k) => (k > 0 ? w[k + 1] ?? "1" : ""))(acAt(w));
   // (another AC drive, `V2 x 0 AC 1`, also over + lines or in a subcircuit (a V1 there too): the
   // voltages are not this source's alone)
   // ponytail: the netlist's own sources only, not those of an included file
-  if (logical.some(([w, d]) => /^[vi]/i.test(w[0]) && (d > 0 || w[0].toLowerCase() !== src.toLowerCase()) && acOf(w) && !zero(acOf(w), d === 0))) return expr;
+  // (`acphase=` alone a drive too: its magnitude 1)
+  if (logical.some(([w, d]) => /^[vi]/i.test(w[0]) && (d > 0 || w[0].toLowerCase() !== src.toLowerCase()) && (acOf(w) ? !zero(acOf(w), d === 0) : lastAt(w, /^acphase$/i) > 0))) return expr;
   const z0 = resolved(line(`R${src}_rser`)?.[3]);
   // (the AC amplitude after the nodes, `AC 1`: a node named ac is none; no AC part, or one of 0:
   // nothing drives the two-port, Zin would be 0/0)
@@ -544,8 +547,10 @@ export function twoPortIn(expr: string, nl: Netlist): string {
   if (!vs || zero(vs)) return expr;
   // (a drive of a phase, a number not 0 or a parameter's: not folded in; a waveform after it is none)
   // (`acphase=90` too)
-  const kp = own.findIndex((x) => /^acphase$/i.test(x)), p2 = own[acAt(own) + 2];
-  const ph = p2 && /^[-+\d.{]/.test(p2) ? p2 : kp > 0 ? own[kp + 1] : undefined, phased = !!ph && (ph.startsWith("{") || (Number.isFinite(parseFloat(ph)) && parseFloat(ph) !== 0));
+  // (the phase after the amplitude, or `acphase=`: either not 0, a parameter's, a quoted one: not folded in)
+  const kp = lastAt(own, /^acphase$/i), p2 = own[acAt(own) + 2];
+  const turned = (p?: string) => !!p && (/^[{']/.test(p) || (Number.isFinite(parseFloat(p)) && parseFloat(p) !== 0));
+  const phased = turned(p2 && /^[-+\d.{']/.test(p2) ? p2 : undefined) || (kp > 0 && turned(own[kp + 1]));
   const drive = nets(src)?.[0] === "0" ? `-${vs}` : vs; // (the source drawn with its + pin at ground: its EMF the other way)
   const zin = `(${vin}/(-I(${src})))`; // (I(V1): into its + pin)
   const r = /^I\((\w+)\)$/i.exec(out);
