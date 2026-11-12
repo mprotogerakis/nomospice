@@ -720,6 +720,24 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#arrange-the-axes" class="md-nav__link">
+    <span class="md-ellipsis">
+      Arrange the axes
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#two-port-quantities" class="md-nav__link">
+    <span class="md-ellipsis">
+      Two-port quantities
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#other-choices-in-the-plots-menu" class="md-nav__link">
     <span class="md-ellipsis">
       Other choices in the plot's menu
@@ -1403,6 +1421,24 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#arrange-the-axes" class="md-nav__link">
+    <span class="md-ellipsis">
+      Arrange the axes
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#two-port-quantities" class="md-nav__link">
+    <span class="md-ellipsis">
+      Two-port quantities
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#other-choices-in-the-plots-menu" class="md-nav__link">
     <span class="md-ellipsis">
       Other choices in the plot's menu
@@ -1454,7 +1490,11 @@
 <p>For measurements you want every run, write a <code>.meas</code> directive (press <span class="keys"><kbd class="key-s">S</kbd></span>, then the <em>Measurement</em> tab): its result is listed beside the plot.</p>
 <h2 id="look-at-the-spectrum">Look at the spectrum<a class="headerlink" href="#look-at-the-spectrum" title="Permanent link">&para;</a></h2>
 <p><img alt="The spectrum of the traces between the cursors" src="../img/plot-and-measure/05-fft.png" /></p>
-<p>Right-click a transient plot and choose <em>FFT (spectrum)</em>: the spectrum of the range between the cursors A and B, else of what is shown, with a Hann window and in decibels of the amplitude. <em>Back to the transient</em> returns.</p>
+<p>Right-click a transient plot and choose <em>FFT (spectrum)</em>: the spectrum of the range between the cursors A and B, else of what is shown, with a Hann window and in decibels of the amplitude. <em>FFT settings…</em> in the same menu chooses the window (Hann; rectangular for a whole number of periods; Hamming; Blackman-Harris for small lines beside big ones; flat top for exact amplitudes), the amplitude in dB or as it is (volts, amperes), and the number of points. <em>Back to the transient</em> returns.</p>
+<h2 id="arrange-the-axes">Arrange the axes<a class="headerlink" href="#arrange-the-axes" title="Permanent link">&para;</a></h2>
+<p>The plot's menu switches a frequency axis between logarithmic and linear, sets the x range by number (<em>X range…</em>), hides an AC result's phase (<em>Hide the phase</em>: the magnitude alone) and marks the points the simulator computed (<em>Mark data points</em>). A trace's menu puts it <em>Into a pane of its own</em>, so input and output, both in volts, are shown one above the other.</p>
+<h2 id="two-port-quantities">Two-port quantities<a class="headerlink" href="#two-port-quantities" title="Permanent link">&para;</a></h2>
+<p>With <code>.net I(R1) V1</code> beside an <code>.ac</code> analysis (V1 the source and the only AC source, with an Rser as the reference impedance; R1 the load), <em>Add trace</em> offers <code>S21(V1)</code>, <code>S11(V1)</code> and <code>Zin(V1)</code>: transmission, reflection and the input impedance in dB and phase (<code>mag(Zin(V1))</code>: the input impedance in ohms).</p>
 <h2 id="other-choices-in-the-plots-menu">Other choices in the plot's menu<a class="headerlink" href="#other-choices-in-the-plots-menu" title="Permanent link">&para;</a></h2>
 <p>Right-click the plot for the y axis (logarithmic, or a fixed range), copying the data as CSV, exporting the plot as SVG or all results as a <code>.raw</code> file, and for AC results the Nyquist and Nichols plots.</p>
 

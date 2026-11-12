@@ -1501,6 +1501,18 @@
 <td><code>.step</code> (Text)</td>
 <td>runs the analysis once per value: <code>.step param C list 47n 100n 220n</code>; also <code>lin</code>, <code>oct</code>, <code>dec</code>, a source's value, <code>temp</code>; up to three nested</td>
 </tr>
+<tr>
+<td><code>.tran … startup</code></td>
+<td>no operating point, the DC sources ramped up from 0 over 20 µs (oscillators start)</td>
+</tr>
+<tr>
+<td><code>.net I(R1) V1</code></td>
+<td>a two-port analysis: after an <code>.ac</code> run, <code>S21(V1)</code>, <code>S11(V1)</code> and <code>Zin(V1)</code> are traces of the circuit as it is terminated (V1's Rser the input's reference impedance, the load R1 the output's, V1 the only AC source); <code>S12</code>, <code>S22</code>, <code>Rin=</code> and <code>Rout=</code> are not computed</td>
+</tr>
+<tr>
+<td><code>.func f(x) {…}</code></td>
+<td>a function of your own, in values and in trace expressions (<code>.func NF(x) {10*log10(x*x/(50*4*boltz*300))}</code>, then <em>Add trace</em> <code>NF(V(inoise))</code>; for the plot it must stand in the schematic, not in an included file)</td>
+</tr>
 </tbody>
 </table>
 <p>Other dot commands that ngspice knows pass through as they are written.</p>
@@ -1542,10 +1554,11 @@
 <li><code>{expression}</code>: a value computed from parameters, such as <code>{R*2}</code>.</li>
 <li><code>mc(x, tol)</code>: x with a tolerance, uniform within ±tol (as a fraction); <code>flat(x)</code>: uniform within ±x; <code>gauss(x)</code>: normal with σ = x. They draw anew in each run of a <code>.step</code>, so <code>.step param run 1 100 1</code> is a Monte Carlo analysis.</li>
 <li><code>Laplace=H(s)</code> on an <code>e</code> or <code>g</code> source: a transfer function, any ratio of polynomials in <code>s</code>.</li>
-<li>Independent sources (V, I) are edited in a form: DC, sine, pulse, exponential, FM, piecewise linear (with a preview), an AC amplitude, and series resistance and parallel capacitance.</li>
+<li>Independent sources (V, I) are edited in a form: DC, sine, pulse, exponential, FM, noise, piecewise linear (with a preview), an AC amplitude, and series resistance and parallel capacitance. <em>Noise</em> is ngspice's <code>TRNOISE(rms step 1/f-exponent 1/f-amplitude)</code>, which not every simulator reads.</li>
+<li><code>white(c*time)</code> in a behavioral source (noise between -0.5 and 0.5, a new value every 1/c s) becomes a noise source whose new values have the same rms (Gaussian, clipped at ±0.5).</li>
 </ul>
 <h2 id="trace-expressions">Trace expressions<a class="headerlink" href="#trace-expressions" title="Permanent link">&para;</a></h2>
-<p><em>Add trace</em> takes ngspice expressions: <code>V(out)</code>, <code>V(a,b)</code>, <code>I(R1)</code>, <code>Ib(Q1)</code> (a pin's current), arithmetic on them, and functions such as <code>db()</code>, <code>ph()</code>, <code>group_delay()</code>. Units follow from the expression: a voltage times a current is in watts, an integral of power in joules.</p>
+<p><em>Add trace</em> takes ngspice expressions: <code>V(out)</code>, <code>V(a,b)</code>, <code>I(R1)</code>, <code>Ib(Q1)</code> (a pin's current), <code>P(R1)</code> (a two-pin part's power), arithmetic on them, functions such as <code>db()</code>, <code>ph()</code>, <code>group_delay()</code>, your own <code>.func</code>, and with <code>.net</code> the two-port's <code>S21(V1)</code>, <code>S11(V1)</code>, <code>Zin(V1)</code>. Units follow from the expression: a voltage times a current is in watts, an integral of power in joules.</p>
 
 
 

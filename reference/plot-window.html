@@ -1456,7 +1456,7 @@
 </tr>
 <tr>
 <td>right-click a row</td>
-<td>right axis, another pane, group delay (AC), copy expression, remove</td>
+<td>right axis, another pane, a pane of its own, group delay (AC), copy expression, remove</td>
 </tr>
 <tr>
 <td>right-click the plot</td>
@@ -1465,11 +1465,11 @@
 </tbody>
 </table>
 <h2 id="the-plots-menu">The plot's menu<a class="headerlink" href="#the-plots-menu" title="Permanent link">&para;</a></h2>
-<p>Reset zoom · Clear cursors · Add trace… · Bode, Nyquist and Nichols plot (AC) · FFT (spectrum) and back (transient) · Log y axis · Y range… · Copy data as CSV · Export plot as SVG… · Export results as .raw… · Remove all traces.</p>
+<p>Reset zoom · Clear cursors · Add trace… · Bode, Nyquist and Nichols plot (AC) · FFT (spectrum) and back (transient) · Log or linear x axis (frequencies) · X range… · Hide the phase (AC) · Mark data points · FFT settings… (window: Hann, rectangular, Hamming, Blackman-Harris, flat top; dB or linear amplitude; points) · Log y axis · Y range… · Copy data as CSV · Export plot as SVG… · Export results as .raw… · Remove all traces.</p>
 <h2 id="other-result-views">Other result views<a class="headerlink" href="#other-result-views" title="Permanent link">&para;</a></h2>
 <ul>
 <li>A single-frequency AC analysis (<code>.ac lin 1 50 50</code>) gives a table of phasors, magnitude ∠ phase, under <em>Phasors</em> in the bottom panel.</li>
-<li><code>.op</code>, <code>.tf</code> and the totals of <code>.noise</code> are tables under <em>Results</em> or <em>Operating point</em>.</li>
+<li><code>.op</code>, <code>.tf</code> and the totals of <code>.noise</code> are tables under <em>Results</em> or <em>Operating point</em>. After <code>.op</code>, hovering a wire shows its voltage and hovering a part its current in the status bar; the canvas menu's <em>Show operating point</em> writes them beside the labels and parts.</li>
 <li><code>.pz</code> shows the s-plane: see <a href="../how-to/poles-and-zeros.html">Find poles and zeros</a>.</li>
 </ul>
 

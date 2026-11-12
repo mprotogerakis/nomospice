@@ -1429,6 +1429,26 @@
 <td>E, G</td>
 </tr>
 <tr>
+<td><code>bv</code>, <code>bi</code></td>
+<td>behavioral voltage and current sources: <code>V=V(a)*V(b)</code>, <code>I=V(in)/1k</code>, any formula of voltages, currents and <code>time</code></td>
+<td>B</td>
+</tr>
+<tr>
+<td><code>tline</code>, <code>ltline</code></td>
+<td>transmission lines: lossless (<code>Td=50n Z0=50</code>), lossy (a <code>LTRA</code> model; the built-in one is 10 m of 50 Ω coax)</td>
+<td>T, O</td>
+</tr>
+<tr>
+<td><code>opamp2</code></td>
+<td>an op-amp with supply pins: output within the supplies less <code>Vsat</code>, slew rate, <code>GBW</code>, <code>Aol</code>; as Value also an op-amp of the model libraries (<code>TL072</code> …)</td>
+<td>X</td>
+</tr>
+<tr>
+<td><code>and2</code>, <code>nand2</code>, <code>or2</code>, <code>nor2</code>, <code>xor2</code>, <code>not</code>, <code>dff</code></td>
+<td>logic gates and a D flip-flop (rising edge), drawn per DIN EN 60617, made of behavioral sources: levels <code>Vlow</code>/<code>Vhigh</code> (0/5 V), threshold halfway, <code>Td</code> the outputs' time constant</td>
+<td>X</td>
+</tr>
+<tr>
 <td><code>sw</code>, <code>csw</code></td>
 <td>voltage- and current-controlled switches</td>
 <td>S, W</td>
