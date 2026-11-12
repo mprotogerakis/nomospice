@@ -389,7 +389,8 @@ fn read(api: &Api, name: &str) -> Option<Trace> {
 }
 
 /// Load a netlist, run it to completion (background thread, so `halt` can stop it).
-/// Takes a [`Prepared`] netlist only: includes inlined, `.control`/`*#` removed (see `schematic::prepare`).
+/// Takes a [`Prepared`] netlist only: includes inlined, command lines removed (see `schematic::prepare`;
+/// `one_run` refuses a deck with one left).
 pub fn run(netlist: &Prepared) -> Result<Run, Vec<String>> {
     run_until(netlist, &|| false)
 }
@@ -549,8 +550,7 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
 fn one_run(api: &Api, deck: &str, stop: &dyn Fn() -> bool) -> Result<(String, Vec<String>, bool), Vec<String>> {
     // (the last gate, whatever pass wrote the deck: no line ngspice would take for commands, nor a
     // file it would open itself, unread by the expander)
-    let opens = |l: &str| [".inc", ".lib"].iter().any(|p| l.trim_start().get(..p.len()).is_some_and(|h| h.eq_ignore_ascii_case(p)));
-    if let Some(l) = deck.lines().find(|l| crate::schematic::command_line(l) || opens(l)) {
+    if let Some(l) = deck.lines().find(|l| crate::schematic::command_line(l) || crate::schematic::opens_file(l)) {
         return Err(vec![format!("`{l}`: not passed to ngspice (security)")]);
     }
     let lines: Vec<CString> = deck.lines().map(|l| CString::new(l).unwrap_or_default()).collect();

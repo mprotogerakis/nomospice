@@ -707,7 +707,7 @@ pub fn netlist_items(text: &str) -> Vec<Item> {
                 }
             }
             // (a comment line in it: no command)
-            _ if control => dropped += usize::from(!low.is_empty() && !low.starts_with(['*', '#'])), // (`;cmd`, `$cmd`: commands there)
+            _ if control => dropped += usize::from(!low.is_empty() && !low.starts_with('*') && starred(&low).is_none()), // (comment lines there too, as ngspice reads them)
             _ => body.push(l.to_string()),
         }
     }
@@ -1248,28 +1248,40 @@ fn starred(line: &str) -> Option<String> {
     l.strip_prefix("//").or_else(|| l.strip_prefix(COMMENT_LINE)).map(|r| format!("* {}", r.trim()))
 }
 /// A line as libngspice takes it: it rejects the whole deck on non-ASCII bytes (`10µ`, `4.7μF`,
-/// `10kΩ`). One character for one (a blank for other blanks and for an Ω starting a word, the rest
-/// `_`), a unit Ω after a value dropped: an include's file name is read in the line as written.
+/// `10kΩ`). One character for one (a blank for other blanks and a lone Ω, the rest `_`), a unit Ω
+/// after a value dropped: the tokens stay those of the line as written (an include's file name is
+/// read there).
 fn ascii(line: &str) -> std::borrow::Cow<'_, str> {
     if line.is_ascii() {
         return line.into();
     }
-    let mut prev = ' ';
-    line.chars().filter_map(|c| match (std::mem::replace(&mut prev, c), c) {
-        (p, 'Ω' | '\u{2126}') if !p.is_whitespace() => None, // (Greek and the Ohm sign)
-        (_, 'Ω' | '\u{2126}') => Some(' '), // (`10 Ω`; `Ω.control` the .control the checks then see)
-        (_, 'µ' | 'μ') => Some('u'),
-        (_, c) if c.is_ascii() => Some(c),
-        (_, c) if c.is_whitespace() => Some(' '),
-        _ => Some('_'),
-    }).collect::<String>().into()
+    let (mut prev, mut it, mut out) = (' ', line.chars().peekable(), String::with_capacity(line.len()));
+    while let Some(c) = it.next() {
+        let p = std::mem::replace(&mut prev, c);
+        match c {
+            'Ω' | '\u{2126}' if !p.is_whitespace() => {} // (`10kΩ`; Greek and the Ohm sign)
+            // (`10 Ω`: a blank; `Ωa` a name of its own, not a)
+            'Ω' | '\u{2126}' => out.push(if it.peek().is_none_or(|n| n.is_whitespace()) { ' ' } else { '_' }),
+            'µ' | 'μ' => out.push('u'),
+            c if c.is_ascii() => out.push(c),
+            c if c.is_whitespace() => out.push(' '),
+            _ => out.push('_'),
+        }
+    }
+    out.into()
 }
 
 /// A line ngspice would take for commands: `.control`, `*#` (a line's `#` it makes a `*`), and the
 /// title `*ng_script` (which `.title` sets), which makes it run the deck's lines as commands.
 pub(crate) fn command_line(line: &str) -> bool {
-    let l = line.trim_start();
-    l.starts_with('#') || ["*#", ".control", ".title", "*ng_script"].iter().any(|p| l.get(..p.len()).is_some_and(|h| h.eq_ignore_ascii_case(p)))
+    line.trim_start().starts_with('#') || ["*#", ".control", ".title", "*ng_script"].iter().any(|p| starts_ci(line, p))
+}
+/// `.include`, `.inc`, `.lib`: a file ngspice would open itself (the expander inlines them).
+pub(crate) fn opens_file(line: &str) -> bool {
+    [".inc", ".lib"].iter().any(|p| starts_ci(line, p))
+}
+fn starts_ci(line: &str, p: &str) -> bool {
+    line.trim_start().get(..p.len()).is_some_and(|h| h.eq_ignore_ascii_case(p))
 }
 
 /// What else than `*` (and `//`) starts a comment line (see [`starred`]).
@@ -1969,8 +1981,10 @@ fn pin_labels(prefix: char, inst: &str, pins: &[Pin]) -> Vec<String> {
 /// Make a netlist safe and self-contained for ngspice. This is the single security filter:
 /// - `.include`/`.inc`/`.lib` are inlined here (relative to the schematic's folder, like LTspice),
 ///   so ngspice never opens a file itself;
-/// - `.control` blocks and `*#` lines are dropped everywhere (ngspice executes them on load,
-///   including `shell`), in the schematic and in included files alike.
+/// - `.control` blocks and every other line [`command_line`] names (`*#`, `.title`, `*ng_script`:
+///   ngspice executes them on load, including `shell`) are dropped everywhere, in the schematic and
+///   in included files alike; the title line is made a comment; the checks read each line as it goes
+///   out ([`ascii`], comment lines starred). `ngspice::run` refuses a deck with such a line left.
 pub fn prepare(text: &str, dir: Option<&std::path::Path>, warnings: &mut Vec<String>) -> Prepared {
     let mut x = Expander { warnings, out: String::new(), seen: HashSet::new(), scope: (None, 0), read: true, diode: None, behavioural: vec![] };
     x.expand(text, dir, None, 0);
@@ -2337,7 +2351,7 @@ impl Expander<'_> {
             let tok: Vec<&str> = t.split_whitespace().collect();
             if let Some(sec) = section {
                 if !in_section {
-                    in_section = l.starts_with(".lib") && tok.len() == 2 && tok[1].eq_ignore_ascii_case(&ascii(sec));
+                    in_section = l.starts_with(".lib") && tok.len() == 2 && tok[1].eq_ignore_ascii_case(ascii(sec).trim());
                     found |= in_section;
                     continue;
                 }
@@ -2351,12 +2365,15 @@ impl Expander<'_> {
                 self.warnings.push(".control blocks are not executed (security)".into());
                 continue;
             }
-            if command_line(t) {
-                self.warnings.push(format!("`{t}`: not passed to ngspice, which would take it for commands (security)"));
-                continue;
-            }
             if control || l.starts_with(".endc") || l.starts_with(".endl") || (depth > 0 && (l == ".end" || l.starts_with(".end "))) {
                 control &= !l.starts_with(".endc");
+                continue;
+            }
+            if command_line(t) {
+                // (a `.title` of no use here, said only when it would make the deck a script)
+                if !l.starts_with(".title") || l.contains("ng_script") {
+                    self.warnings.push(format!("`{t}`: not passed to ngspice, which would take it for commands (security)"));
+                }
                 continue;
             }
             if depth == 0 && tok.first().is_some_and(|w| w.eq_ignore_ascii_case(".subckt")) {
@@ -2368,7 +2385,7 @@ impl Expander<'_> {
                     self.scope.0 = None;
                 }
             }
-            if l.starts_with(".inc") || l.starts_with(".lib") {
+            if opens_file(&l) {
                 self.include(raw.trim(), &l, tok.len(), dir, depth); // (the file's name as written: non-ASCII letters too)
                 continue;
             }
@@ -2381,7 +2398,7 @@ impl Expander<'_> {
                     let t: Vec<&str> = l.split(|c: char| c.is_whitespace() || c == '(').filter(|s| !s.is_empty()).collect();
                     self.diode = (t.first() == Some(&".model") && t.get(2) == Some(&"d")).then(|| t[1].to_string());
                 }
-                if let Some(m) = self.diode.as_ref().filter(|_| ["ron=", "roff=", "vfwd=", "vrev="].iter().any(|p| code.replace(' ', "").contains(p))) {
+                if let Some(m) = self.diode.as_ref().filter(|_| ["ron=", "roff=", "vfwd=", "vrev="].iter().any(|p| code.split_whitespace().collect::<String>().contains(p))) {
                     self.behavioural.push(m.clone());
                     self.diode = None; // once per model
                 }
@@ -4349,12 +4366,14 @@ SYMBOL half 400 300 R0\nSYMATTR InstName U4\nSYMATTR Value R=3k\nFLAG 352 300 a\
         let text = prepare("* t\n##shell touch /tmp/nomospice-pwned\n  ##shell touch /tmp/nomospice-pwned\nΩ*# shell touch /tmp/nomospice-pwned\nΩ.control\nshell touch /tmp/nomospice-pwned\nΩ.endc\n# note\n.op\n.end\n", None, &mut vec![]);
         let out = text.text();
         assert!(out.lines().map(|l| l.trim_start().to_ascii_lowercase()).all(|l| !l.starts_with(".control") && !l.starts_with("*#") && !l.starts_with('#')) && out.contains("* note\n"), "{out}");
-        assert_eq!(ascii("Ω.include x.lib\u{a0}R1 a b 10kΩ 4.7µ Größe 10 \u{2126}"), " .include x.lib R1 a b 10k 4.7u Gr__e 10  "); // (a blank for a blank)
+        assert_eq!(ascii("Ω.include x.lib\u{a0}R1 Ωa b 10kΩ 4.7µ Größe 10 \u{2126}"), "_.include x.lib R1 _a b 10k 4.7u Gr__e 10  "); // (tokens as written)
         // (a deck ngspice would run as a script: `*ng_script` as its title, which .title sets; an
         // .include as the title it would read itself)
         let out = prepare(".include /tmp/nomospice-x.cir\n.TITLE *ng_script\n*ng_script\nV1 a 0 1\n.op\n.end\n", None, &mut vec![]).0;
         assert!(out.starts_with("* .include /tmp/nomospice-x.cir\nV1 a 0 1\n") && !out.lines().any(command_line), "{out}");
         assert!(prepare("*ng_script\nV1 a 0 1\n.end\n", None, &mut vec![]).0.starts_with("* *ng_script\n"));
+        let mut w = vec![];
+        assert!(!prepare("* t\n.title Amplifier\nV1 a 0 1\n.end\n", None, &mut w).0.contains(".title") && w.is_empty(), "{w:?}"); // (a plain .title: left out, unsaid)
         let _s = SIM.lock();
         for deck in ["* t\n.title *ng_script\nshell echo x\n.end\n", "* t\n.include /tmp/nomospice-x.cir\n.end\n", "*ng_script\nshell echo x\n.end\n"] {
             assert!(crate::ngspice::run(&Prepared(deck.into(), vec![], vec![])).is_err_and(|e| e[0].contains("security")), "{deck}"); // (the last gate)
