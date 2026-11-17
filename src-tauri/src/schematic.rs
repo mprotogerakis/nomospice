@@ -1659,7 +1659,8 @@ impl Netlist {
             let mut w = l.split_whitespace();
             match w.next() {
                 Some(d) if d.eq_ignore_ascii_case(".subckt") => {
-                    if let Some(n) = w.next().filter(|_| depth == 0) {
+                    // (only the own models' names: a vendor library's thousands are no matter here)
+                    if let Some(n) = w.next().filter(|n| depth == 0 && self.own_names.iter().any(|o| o.eq_ignore_ascii_case(n))) {
                         *defs.entry(n.to_ascii_lowercase()).or_default() += 1;
                     }
                     depth += 1;
@@ -2979,7 +2980,7 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
             // (a .subckt of the user's of that name runs instead; one of an included file: see
             // `own_models_in`, where a run has read the includes)
             nl.own_models[i] = !defined(&model);
-            nl.own_names[i] = model.to_ascii_lowercase();
+            nl.own_names[i] = model.clone(); // (lowercase already)
         }
         if "DQMXJS".contains(prefix) && model.is_empty() {
             nl.warnings.push(format!("{inst}: no model or subcircuit named (its Value is empty)"));
@@ -4256,8 +4257,9 @@ SYMBOL half 400 300 R0\nSYMATTR InstName U4\nSYMATTR Value R=3k\nFLAG 352 300 a\
         std::fs::write(dir.join("myopamp.lib"), ".SUBCKT Opamp a b c\nR1 a c 1k\n.ends\n").unwrap();
         let mut inc = netlist_for_sim(&parse_asc(&format!("{follower}TEXT 0 260 Left 2 !.include myopamp.lib\n")), &mut Library::builtin());
         let deck = inc.prepared(Some(&dir), &mut vec![]);
-        inc.own_models_in(deck.text());
         std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(deck.text().to_lowercase().matches(".subckt opamp ").count(), 2, "the include's and nomospice's: {}", deck.text());
+        inc.own_models_in(deck.text());
         assert!(!inc.own_models[u], "{}", deck.text());
         assert!(!f.text.contains("Rsense_XU1_2") && f.text.contains("Rsense_XU1 "), "In+ is held by V1, out only by U1 itself: {}", f.text);
         let lone = netlist_for_sim(&parse_asc("SYMBOL Opamps\\opamp 0 0 R0\nSYMATTR InstName U1\nTEXT 0 200 Left 2 !.op\n"), &mut Library::builtin());

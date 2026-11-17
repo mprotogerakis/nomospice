@@ -13,7 +13,7 @@ WINDOW 3 8 104 Left 2
 SYMATTR Value opamp
 SYMATTR SpiceLine Aol=100K GBW=10Meg
 SYMATTR Prefix X
-SYMATTR Description Single-pole opamp (Aol, GBW); no supply pins
+SYMATTR Description Single-pole opamp (Aol at most 1Meg, GBW); no supply pins
 PIN -32 48 NONE 0
 PINATTR PinName In-
 PINATTR SpiceOrder 1
