@@ -4225,6 +4225,10 @@ SYMBOL half 400 300 R0\nSYMATTR InstName U4\nSYMATTR Value R=3k\nFLAG 352 300 a\
         assert!(f.own_models[u] && !f.own_models[f.insts.iter().position(|n| n == "V1").unwrap()], "{:?}", f.own_models);
         let own = netlist_for_sim(&parse_asc(&format!("{follower}TEXT 0 260 Left 2 !.subckt opamp a b c\\nR1 a c 1k\\n.ends opamp\n")), &mut Library::builtin());
         assert!(!own.own_models[u], "{}", own.text);
+        // (the known limit: an included file's .subckt opamp is not seen here, the part still counts as
+        // nomospice's model; a test of the day this is read from the includes too)
+        let inc = netlist_for_sim(&parse_asc(&format!("{follower}TEXT 0 260 Left 2 !.include myopamp.lib\n")), &mut Library::builtin());
+        assert!(inc.own_models[u], "{}", inc.text);
         for (line, said) in [("Aol=1G", true), ("Aol = 1G", true), ("Aol=1G Aol=100K", false)] {
             let big = netlist_for_sim(&parse_asc(&follower.replace("SYMATTR InstName U1", &format!("SYMATTR InstName U1\nSYMATTR SpiceLine {line}"))), &mut Library::builtin());
             assert_eq!(big.warnings.iter().any(|w| w.starts_with("U1: Aol above 1Meg")), said, "{line}: {:?}", big.warnings);

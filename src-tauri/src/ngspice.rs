@@ -551,8 +551,9 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
     let op_fallback = log.iter().any(|l| l.contains("Transient op finished"))
         .then(|| "ngspice found no operating point by gmin or source stepping and took where a transient run ended instead: check the results".to_string());
     if let Some(w) = &op_fallback {
-        notes.push(format!("Warning: {w}"));
-        log.push(format!("Warning: {w}"));
+        let w = format!("Warning: {w}");
+        notes.push(w.clone());
+        log.push(w);
     }
     notes.extend(log.iter().filter(|l| l.starts_with("Warning: .step") || l.starts_with("--- .step") && l.ends_with("failed")).cloned());
     Ok(Run { id, plot, scale, vectors, op, aborted, meas, log, steps: if steps.is_none() { vec![] } else { done.iter().map(|d| d.0.clone()).collect() }, notes, op_fallback })
