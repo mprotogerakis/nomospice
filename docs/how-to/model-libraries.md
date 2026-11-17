@@ -17,7 +17,7 @@ When two libraries define the same name, the one listed first wins. Untick a lib
 
 ![The component library searching for 2N3904](../img/model-libraries/01-search.png)
 
-Press ++p++ (or ++f2++, ++cmd+k++) for the component library and type a name. The tabs narrow the list to symbols, diodes, BJTs, MOSFETs, JFETs or subcircuits; the right side shows a part's description and pins. Click *Place* and put the part down like any other.
+Press ++p++ (or ++f2++, ++cmd+k++) for the component library and type a name, or browse its tree: nomospice's own parts by what they are, the schematic folder's symbols and blocks, the libraries' models by kind and library, and the parts you used last. The right side draws the selected part as it will be placed, with its pins; for a diode, transistor or JFET model it also draws the characteristic curves (a diode's current over its voltage, a transistor's output curves per base current or gate voltage). Click *Place*, or double-click the part, and put it down like any other.
 
 A subcircuit without a symbol of its own gets a generated box symbol with its pins. Its definition, and the definitions it depends on, go into the netlist by themselves.
 

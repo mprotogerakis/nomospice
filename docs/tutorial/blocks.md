@@ -27,7 +27,7 @@ Right-click an empty spot of the canvas and choose Create block symbol. nomospic
 
 ![The Component Library listing the block rcfilter](../img/blocks/04-parts.png)
 
-Make a new schematic with ++cmd+n++ and save it in the same folder: a block is found beside the schematic that uses it. Press ++p++ for the component library. Search for rcfilter: it is listed as a block of rcfilter.asc, with its pins in and out. Place it like any other part.
+Make a new schematic with ++cmd+n++ and save it in the same folder: a block is found beside the schematic that uses it. Press ++p++ for the component library. Search for rcfilter: it is listed under *Blocks* and drawn on the right with its pins in and out. Place it like any other part.
 
 ![Two rcfilter blocks in series and their Bode plot](../img/blocks/05-cascade.png)
 
