@@ -235,10 +235,11 @@ function PartsDialog({ replace, kind0, libraries }: { replace?: number; kind0?: 
   useEffect(() => setLists({}), [view]); // (back from the library list: read again)
   const [found, setFound] = useState<LibEntry[]>([]);
   const [recent, setRecent] = useState(readRecent);
-  // (a model used last whose library is gone or switched off: not offered)
+  // (a model used last as the libraries in use have it now: its kind, its symbol; none, not offered)
   useEffect(() => {
     let live = true;
-    void Promise.all(readRecent().map((e) => (e.kind === "SYMBOL" ? e : invoke<string | null>("library_text", { name: e.name }).then((t) => (t ? e : null), () => null))))
+    const now = (e: LibEntry) => invoke<LibEntry[]>("library_search", { query: e.name, kind: null, limit: 20 }).then((hs) => hs.find((h) => h.name.toLowerCase() === e.name.toLowerCase()) ?? null, () => null);
+    void Promise.all(readRecent().map((e) => (e.kind === "SYMBOL" ? e : now(e))))
       .then((es) => live && setRecent(es.filter((e): e is LibEntry => !!e)));
     return () => void (live = false);
   }, [view]);
