@@ -1469,7 +1469,7 @@
 <h2 id="other-result-views">Other result views<a class="headerlink" href="#other-result-views" title="Permanent link">&para;</a></h2>
 <ul>
 <li>A single-frequency AC analysis (<code>.ac lin 1 50 50</code>) gives a table of phasors, magnitude ∠ phase, under <em>Phasors</em> in the bottom panel.</li>
-<li><code>.op</code>, <code>.tf</code> and the totals of <code>.noise</code> are tables under <em>Results</em> or <em>Operating point</em>. After <code>.op</code>, hovering a wire shows its voltage and hovering a part its current in the status bar; the canvas menu's <em>Show operating point</em> writes them beside the labels and parts.</li>
+<li><code>.op</code>, <code>.tf</code> and the totals of <code>.noise</code> are tables under <em>Results</em> or <em>Operating point</em>. After <code>.op</code>, hovering a wire shows its voltage and hovering a part its current in the status bar; the canvas menu's <em>Show operating point</em> writes them beside the labels and parts (nomospice's own op-amps and gates: none; the <em>Operating point</em> table leaves out their insides, unless they sit inside a block). If ngspice found no operating point by its usual methods and took the end of a transient run instead, a warning in the status bar (and above the table) says so: check such values.</li>
 <li><code>.pz</code> shows the s-plane: see <a href="../how-to/poles-and-zeros.html">Find poles and zeros</a>.</li>
 </ul>
 
