@@ -46,6 +46,7 @@ fn spec(kind: &str) -> Option<Spec> {
         "PNP" | "LPNP" => s("Vce c 0 0\nIb b 0 {ib}\nQ1 c b 0 {m}\n.param ib=20u\n.dc Vce 0 -10 -0.05", Some(".step param ib list 20u 40u 60u 80u 100u"), "i(vce)", ("|Vce|", "|Ic|")),
         "NMOS" => s("Vds d 0 0\nVgs g 0 {vg}\nM1 d g 0 0 {m}\n.param vg=2\n.dc Vds 0 10 0.05", Some(".step param vg list 2 3 4 6 8 10"), "-i(vds)", ("Vds", "Id")),
         "VDMOS" => s("Vds d 0 0\nVgs g 0 {vg}\nM1 d g 0 {m}\n.param vg=2\n.dc Vds 0 10 0.05", Some(".step param vg list 2 3 4 6 8 10"), "-i(vds)", ("Vds", "Id")),
+        "VDMOS PCHAN" => s("Vds d 0 0\nVgs g 0 {vg}\nM1 d g 0 {m}\n.param vg=-2\n.dc Vds 0 -10 -0.05", Some(".step param vg list -2 -3 -4 -6 -8 -10"), "i(vds)", ("|Vds|", "|Id|")),
         "PMOS" => s("Vds d 0 0\nVgs g 0 {vg}\nM1 d g 0 0 {m}\n.param vg=-2\n.dc Vds 0 -10 -0.05", Some(".step param vg list -2 -3 -4 -6 -8 -10"), "i(vds)", ("|Vds|", "|Id|")),
         "NJF" => s("Vds d 0 0\nVgs g 0 {vg}\nJ1 d g 0 {m}\n.param vg=0\n.dc Vds 0 10 0.05", Some(".step param vg list 0 -0.5 -1 -1.5 -2"), "-i(vds)", ("Vds", "Id")),
         "PJF" => s("Vds d 0 0\nVgs g 0 {vg}\nJ1 d g 0 {m}\n.param vg=0\n.dc Vds 0 -10 -0.05", Some(".step param vg list 0 0.5 1 1.5 2"), "i(vds)", ("|Vds|", "|Id|")),
@@ -58,34 +59,35 @@ pub fn shown(kind: &str) -> bool {
     spec(kind).is_some()
 }
 
-/// At most `n` points of `v`, evenly picked (the last kept).
-fn thin(v: &[f64], n: usize) -> Vec<f64> {
-    if v.len() <= n {
-        return v.to_vec();
-    }
-    (0..n).map(|k| v[k * (v.len() - 1) / (n - 1)]).collect()
-}
-
 /// The curves of `req`'s model, run in this process's ngspice.
 pub fn run(req: &Request) -> Result<Curves, String> {
-    let s = spec(&req.kind).ok_or_else(|| format!("no curves for a {} model", req.kind))?;
+    // (a p-channel VDMOS: `pchan` among its parameters, swept negative)
+    let pchan = req.kind.eq_ignore_ascii_case("VDMOS") && req.defs.iter().any(|d| d.to_ascii_lowercase().split(|c: char| !c.is_ascii_alphanumeric()).any(|w| w == "pchan"));
+    let s = spec(if pchan { "VDMOS PCHAN" } else { &req.kind }).ok_or_else(|| format!("no curves for a {} model", req.kind))?;
     let text = format!("* {} curves\n{}\n{}\n.end\n", req.name, s.body.replace("{m}", &req.name), req.defs.join("\n"));
     let deck = crate::schematic::prepare(&text, None, &mut vec![]).with_steps(s.step.iter().map(|l| l.to_string()).collect());
     let run = crate::ngspice::run(&deck).map_err(|log| log.iter().rev().find(|l| !l.trim().is_empty()).cloned().unwrap_or_else(|| "the model did not run".into()))?;
     let t = crate::ngspice::trace(s.y, &run.scale, run.id)?;
-    // (a .step run: one curve per step, end to end)
+    // (a .step run: one curve per step, end to end over a shared x)
     let parts: Vec<(String, std::ops::Range<usize>)> = match t.steps.as_deref() {
-        Some(ix) if !ix.is_empty() && t.re.len() % ix.len() == 0 => {
+        Some(ix) if !ix.is_empty() => {
+            if t.re.len() % ix.len() != 0 || t.x.len() != t.re.len() {
+                return Err("the model's curves came out uneven".into());
+            }
             let n = t.re.len() / ix.len();
             ix.iter().enumerate().map(|(k, &i)| (run.steps.get(i).cloned().unwrap_or_default(), k * n..(k + 1) * n)).collect()
         }
-        _ => vec![(String::new(), 0..t.re.len())],
+        _ => vec![(String::new(), 0..t.re.len().min(t.x.len()))],
     };
-    let curves = parts.into_iter().map(|(label, r)| {
-        let (x, y) = (&t.x[r.clone()], &t.re[r]);
-        let (x, y) = if s.swap { (y, x) } else { (x, y) };
-        Curve { label, x: thin(x, 100).iter().map(|v| v.abs()).collect(), y: thin(y, 100).iter().map(|v| v.abs()).collect() }
+    let curves: Vec<Curve> = parts.into_iter().filter_map(|(label, r)| {
+        // (a step that did not converge has no data: NaN there, no JSON number; left out)
+        let pts: Vec<(f64, f64)> = t.x[r.clone()].iter().zip(&t.re[r]).filter(|(a, b)| a.is_finite() && b.is_finite()).map(|(a, b)| if s.swap { (b.abs(), a.abs()) } else { (a.abs(), b.abs()) }).collect();
+        let keep = crate::ngspice::even(pts.len(), 100);
+        (!keep.is_empty()).then(|| Curve { label, x: keep.iter().map(|&k| pts[k].0).collect(), y: keep.iter().map(|&k| pts[k].1).collect() })
     }).collect();
+    if curves.is_empty() {
+        return Err("the model did not run".into());
+    }
     Ok(Curves { x: s.axes.0.into(), y: s.axes.1.into(), curves })
 }
 
@@ -109,6 +111,8 @@ mod tests {
         assert!(m.curves.len() == 6 && m.curves[5].y.last().unwrap() > m.curves[0].y.last().unwrap(), "{m:?}");
         let j = run(&Request { kind: "PJF".into(), name: "JX".into(), defs: vec![".model JX PJF(VTO=-2 BETA=1m)".into()] }).unwrap();
         assert!(j.curves.len() == 5 && *j.curves[0].y.last().unwrap() > 1e-3 && *j.curves[4].y.last().unwrap() < 1e-6, "{j:?}");
+        let p = run(&Request { kind: "VDMOS".into(), name: "MP".into(), defs: vec![".model MP VDMOS(pchan Vto=-2 Kp=1)".into()] }).unwrap();
+        assert!(p.x == "|Vds|" && *p.curves[5].y.last().unwrap() > 1.0, "{p:?}");
         assert!(run(&Request { kind: "SUBCKT".into(), name: "X".into(), defs: vec![] }).is_err());
     }
 }

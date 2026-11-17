@@ -398,7 +398,6 @@ assert.equal(setParam("l= Lmin w=1u", "l", "2u"), "l=2u w=1u");
   assert.equal(hit([flat], {}, [150, 0], 6), -1, "a long ellipse: not from 50 past its end");
 }
 
-console.log("spice-check: ok");
 
 { // the component library's tree (catalog.ts)
   const def = (name: string, more: object = {}) => ({ name, prefix: "", value: "", spice_line: "", desc: "", pins: [], shapes: [], windows: {}, pin_labels: false, ...more });
@@ -413,3 +412,5 @@ console.log("spice-check: ok");
   const amp = def("opamp2", { pins: [{ x: -32, y: 80, name: "In+" }, { x: -32, y: 48, name: "In-" }, { x: 0, y: 32, name: "V+" }, { x: 0, y: 96, name: "V-" }, { x: 32, y: 64, name: "OUT" }] });
   assert.deepEqual(amp.pins.map((p) => pinSide(amp, p)), ["left", "left", "top", "bottom", "right"]);
 }
+
+console.log("spice-check: ok");

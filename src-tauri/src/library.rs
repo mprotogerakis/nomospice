@@ -221,8 +221,6 @@ impl Index {
         Some(format!(".model {name} {ty}({})", params.join(" ")))
     }
 
-    /// Case-insensitive substring search over names; exact and prefix matches first.
-    /// `kind`: one type or several separated by `|` (`NPN|PNP`).
     /// Its entries counted by kind and source (the component library's tree): (kind, source, count),
     /// sorted by both.
     pub fn groups(&self) -> Vec<(String, String, usize)> {
@@ -242,6 +240,8 @@ impl Index {
         v
     }
 
+    /// Case-insensitive substring search over names; exact and prefix matches first.
+    /// `kind`: one type or several separated by `|` (`NPN|PNP`).
     pub fn search(&self, query: &str, kind: Option<&str>, limit: usize) -> Vec<&Entry> {
         let q = query.trim().to_lowercase();
         let kinds: Option<Vec<&str>> = kind.map(|k| k.split('|').collect());

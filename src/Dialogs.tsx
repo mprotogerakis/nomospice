@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { message, open } from "@tauri-apps/plugin-dialog";
 import type { Item, LibEntry, LibSource, SymbolDef } from "./types";
-import { addTrace, analysisItem, commit, currentTab, dirOf, fileName, forDoc, isSymbolDoc, loadSymbols, placePart, placeSymbol, setPlot, setYAxis, useS } from "./store";
+import { addTrace, analysisItem, commit, currentTab, fileName, forDoc, isSymbolDoc, loadSymbols, placePart, placeSymbol, setPlot, setYAxis, useS } from "./store";
 import { defOf, funcsIn, NET_DIRECTIVE, pinLine, portOf, POWER_ANY, powersIn, prefixOf, symBox, symKey, twoPortIn, vexpr } from "./geom";
 import { MODEL_GROUPS, modelGroup, PART_GROUPS, partGroup, pinSide, remember, sourceGroups, type SourceGroup } from "./catalog";
 import { shapeEl, SymTexts } from "./Schematic";
@@ -230,7 +230,7 @@ function PartsDialog({ replace, kind0, libraries }: { replace?: number; kind0?: 
   const kinds = kind0?.toUpperCase().split("|");
   const fits = (kind: string) => !kinds || kinds.includes(kind.toUpperCase());
   const [groups, setGroups] = useState<SourceGroup[]>([]);
-  useEffect(() => void invoke<[string, string, number][]>("library_groups").then((g) => setGroups(sourceGroups(g)), () => {}), [view]);
+  useEffect(() => void invoke<[string, string, number][]>("library_groups").then((g) => setGroups(sourceGroups(g.filter(([k]) => fits(k)))), () => {}), [view]);
   const [lists, setLists] = useState<Record<string, LibEntry[] | "loading">>({});
   useEffect(() => setLists({}), [view]); // (back from the library list: read again)
   const [found, setFound] = useState<LibEntry[]>([]);
@@ -266,7 +266,7 @@ function PartsDialog({ replace, kind0, libraries }: { replace?: number; kind0?: 
       if (o) children();
     };
     const leaves = (parent: string, es: LibEntry[], depth: number) => es.forEach((entry) => out.push({ key: `${parent}/${entry.kind}:${entry.name}`, label: entry.name, depth, entry }));
-    const shown = recent.filter((e) => (e.kind === "SYMBOL" ? !kinds : fits(e.kind)) && (!searching || e.name.toLowerCase().includes(ql)));
+    const shown = recent.filter((e) => (e.kind === "SYMBOL" ? !kinds && !!lib[symKey(e.name)] : fits(e.kind)) && (!searching || e.name.toLowerCase().includes(ql)));
     if (shown.length && !searching) group("recent", "Recently used", shown.length, 0, () => leaves("recent", shown, 1));
     if (!kinds) {
       const symbols = Object.values(lib).filter((d) => !d.name.startsWith("subckt:") && (!searching || `${d.name} ${d.desc}`.toLowerCase().includes(ql)));
@@ -290,9 +290,8 @@ function PartsDialog({ replace, kind0, libraries }: { replace?: number; kind0?: 
         });
       }
     } else {
-      const gs = groups.filter((g) => g.kinds.split("|").some(fits));
       for (const label of labels) {
-        const of = gs.filter((g) => g.group === label);
+        const of = groups.filter((g) => g.group === label);
         if (!of.length) continue;
         group(`m:${label}`, label, of.reduce((n, g) => n + g.count, 0), 0, () => {
           for (const g of of) {
@@ -439,8 +438,8 @@ function PartsDialog({ replace, kind0, libraries }: { replace?: number; kind0?: 
 /** The model kinds whose characteristic curves the preview draws (curves.rs). */
 const CURVE_KINDS = ["D", "NPN", "PNP", "LPNP", "NMOS", "PMOS", "VDMOS", "NJF", "PJF"];
 interface Curves { x: string; y: string; curves: { label: string; x: number[]; y: number[] }[] }
-/** Curves by model name, or why there are none (a model's curves do not change while the app runs). */
-const curveCache = new Map<string, Curves | string>();
+/** Curves by model name (a model's curves do not change while the app runs; a failure is asked again). */
+const curveCache = new Map<string, Curves>();
 
 /** A model's characteristic curves: a diode's I(V), a transistor's output curves per base current or
  *  gate voltage; computed by a process of its own (model_curve), so a simulation's results stay. */
@@ -453,7 +452,7 @@ function CurvePreview({ name }: { name: string }) {
     // (arrow keys run through the list: only the part rested on is computed)
     const t = setTimeout(() => {
       void invoke<Curves>("model_curve", { name }).then((c) => c, (e) => String(e)).then((c) => {
-        curveCache.set(name, c);
+        if (typeof c !== "string") curveCache.set(name, c);
         if (live) setGot(c);
       });
     }, 250);
@@ -493,18 +492,13 @@ function CurvePreview({ name }: { name: string }) {
 
 /** A symbol drawn as it is placed (unturned), its pins marked and named; pin `hi` highlighted. */
 function SymbolPreview({ name, hi }: { name: string; hi: number | null }) {
-  const path = useS((s) => s.path);
-  const known = useS((s) => s.lib[symKey(name)]);
-  const [fetched, setFetched] = useState<SymbolDef>();
+  const def = useS((s) => s.lib[symKey(name)]);
+  const [missing, setMissing] = useState("");
   useEffect(() => {
-    let live = true;
-    setFetched(undefined);
-    // (a library subcircuit's box, a symbol not loaded yet: asked for, as placing would)
-    if (!known) void invoke<SymbolDef[]>("symbols", { names: [name], dir: dirOf(path) }).then((ds) => live && setFetched(ds.find((d) => symKey(d.name) === symKey(name))), () => {});
-    return () => void (live = false);
-  }, [name, known, path]);
-  const def = known ?? fetched;
-  if (!def) return <div className="my-2 grid h-40 place-items-center text-2xs text-text-tertiary">…</div>;
+    // (a library subcircuit's box, a symbol not loaded yet: loaded as placing loads it)
+    if (!def) void loadSymbols([{ t: "sym", sym: name, x: 0, y: 0, rot: "R0", attrs: {} }]).then(() => useS.getState().lib[symKey(name)] || setMissing(name), () => setMissing(name));
+  }, [name, def]);
+  if (!def) return <div className="my-2 grid h-40 place-items-center text-2xs text-text-tertiary">{missing === name ? `no symbol ${name}` : "…"}</div>;
   const it: Extract<Item, { t: "sym" }> = { t: "sym", sym: def.name, x: 0, y: 0, rot: "R0", attrs: {} };
   const [x0, y0, x1, y1] = symBox(it, def), pad = 28;
   const anchor = { left: "end", right: "start", top: "middle", bottom: "middle" } as const;
