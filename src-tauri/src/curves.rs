@@ -63,7 +63,7 @@ pub fn shown(kind: &str) -> bool {
 pub fn run(req: &Request) -> Result<Curves, String> {
     // (a p-channel VDMOS: `pchan` a word of its own among its parameters, not in a comment or a
     // `mfg=…complement_of_pchan…`; swept negative)
-    let words = |l: &str| l.split(';').next().unwrap_or("").split(|c: char| c.is_whitespace() || "(),".contains(c)).any(|w| w.eq_ignore_ascii_case("pchan"));
+    let words = |l: &str| l.split([';', '$']).next().unwrap_or("").split(|c: char| c.is_whitespace() || "(),+".contains(c)).any(|w| w.eq_ignore_ascii_case("pchan"));
     let pchan = req.kind.eq_ignore_ascii_case("VDMOS") && req.defs.iter().flat_map(|d| d.lines()).filter(|l| !l.trim_start().starts_with('*')).any(words);
     let s = spec(if pchan { "VDMOS PCHAN" } else { &req.kind }).ok_or_else(|| format!("no curves for a {} model", req.kind))?;
     let text = format!("* {} curves\n{}\n{}\n.end\n", req.name, s.body.replace("{m}", &req.name), req.defs.join("\n"));
@@ -113,9 +113,9 @@ mod tests {
         assert!(m.curves.len() == 6 && m.curves[5].y.last().unwrap() > m.curves[0].y.last().unwrap(), "{m:?}");
         let j = run(&Request { kind: "PJF".into(), name: "JX".into(), defs: vec![".model JX PJF(VTO=-2 BETA=1m)".into()] }).unwrap();
         assert!(j.curves.len() == 5 && *j.curves[0].y.last().unwrap() > 1e-3 && *j.curves[4].y.last().unwrap() < 1e-6, "{j:?}");
-        let p = run(&Request { kind: "VDMOS".into(), name: "MP".into(), defs: vec![".model MP VDMOS(pchan Vto=-2 Kp=1)".into()] }).unwrap();
+        let p = run(&Request { kind: "VDMOS".into(), name: "MP".into(), defs: vec![".model MP VDMOS(Vto=-2 Kp=1\n+pchan)".into()] }).unwrap();
         assert!(p.x == "|Vds|" && *p.curves[5].y.last().unwrap() > 1.0, "{p:?}");
-        let n = run(&Request { kind: "VDMOS".into(), name: "MN".into(), defs: vec![".model MN VDMOS(Vto=2 Kp=1 mfg=complement_of_pchan) ; not pchan".into()] }).unwrap();
+        let n = run(&Request { kind: "VDMOS".into(), name: "MN".into(), defs: vec![".model MN VDMOS(Vto=2 Kp=1 mfg=complement_of_pchan) $ not pchan".into()] }).unwrap();
         assert!(n.x == "Vds" && *n.curves[5].y.last().unwrap() > 1.0, "{n:?}");
         assert!(run(&Request { kind: "SUBCKT".into(), name: "X".into(), defs: vec![] }).is_err());
     }

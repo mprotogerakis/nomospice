@@ -240,7 +240,7 @@ function PartsDialog({ replace, kind0, libraries }: { replace?: number; kind0?: 
     let live = true;
     const now = (e: LibEntry) => invoke<LibEntry[]>("library_search", { query: e.name, kind: null, limit: 20 }).then((hs) => hs.find((h) => h.name.toLowerCase() === e.name.toLowerCase()) ?? null, () => null);
     void Promise.all(readRecent().map((e) => (e.kind === "SYMBOL" ? e : now(e))))
-      .then((es) => live && setRecent(es.filter((e): e is LibEntry => !!e)));
+      .then((es) => live && setRecent(es.filter((e, k): e is LibEntry => !!e && es.findIndex((f) => f?.name === e.name && f.kind === e.kind) === k))); // (two stored as one now: once)
     return () => void (live = false);
   }, [view]);
   // open groups: nomospice's own and the recent ones; a library's models when choosing one
@@ -277,7 +277,7 @@ function PartsDialog({ replace, kind0, libraries }: { replace?: number; kind0?: 
     const shown = recent.filter((e) => (e.kind === "SYMBOL" ? !kinds && !!lib[symKey(e.name)] : fits(e.kind)) && (!searching || e.name.toLowerCase().includes(ql)));
     if (shown.length && !searching) group("recent", "Recently used", shown.length, 0, () => leaves("recent", shown, 1));
     if (!kinds) {
-      const symbols = Object.values(lib).filter((d) => !d.name.startsWith("subckt:") && (!searching || `${d.name} ${symbolEntry(d).source}`.toLowerCase().includes(ql)));
+      const symbols = Object.values(lib).filter((d) => !d.name.startsWith("subckt:") && (!searching || `${d.name} ${d.desc} ${d.sheet ? fileName(d.sheet) : ""}`.toLowerCase().includes(ql)));
       for (const g of PART_GROUPS) {
         const ds = symbols.filter((d) => partGroup(d) === g).sort((a, b) => a.name.localeCompare(b.name));
         if (ds.length) group(`p:${g}`, g, ds.length, 0, () => leaves(`p:${g}`, ds.map(symbolEntry), 1));
@@ -330,7 +330,7 @@ function PartsDialog({ replace, kind0, libraries }: { replace?: number; kind0?: 
     setText(""); // (not the last part's: the curves are known by it)
     if (cur && cur.kind !== "SYMBOL") invoke<string | null>("library_text", { name: cur.name }).then((t) => live && setText(t ?? ""), () => live && setText(""));
     return () => void (live = false);
-  }, [cur?.name, cur?.kind]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [cur?.name, cur?.kind, view]); // eslint-disable-line react-hooks/exhaustive-deps
   const toggle = (r: TreeRow, to = !r.open) => {
     if (r.entry || r.loading || ql) return;
     const next = new Set(open);
@@ -342,10 +342,9 @@ function PartsDialog({ replace, kind0, libraries }: { replace?: number; kind0?: 
     if (!e) return row && toggle(row); // (a group: Enter opens or closes it)
     if (!e.symbol) return; // a model type without a symbol (switch, core ...): stay open
     if (isSymbolDoc(useS.getState().path) && replace == null) return void message("A symbol holds no parts: open a schematic to place one.", { title: "nomospice" });
-    setRecent(remember(recent, e));
     try {
       localStorage.setItem(RECENT, JSON.stringify(remember(readRecent(), e))); // (those not shown now kept: a library switched on again)
-    } catch { /* (no storage: the list is this dialog's only) */ }
+    } catch { /* (no storage: no list) */ }
     close();
     const { items } = useS.getState();
     const target = replace != null ? items[replace] : undefined;
