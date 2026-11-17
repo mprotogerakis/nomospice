@@ -61,8 +61,10 @@ pub fn shown(kind: &str) -> bool {
 
 /// The curves of `req`'s model, run in this process's ngspice.
 pub fn run(req: &Request) -> Result<Curves, String> {
-    // (a p-channel VDMOS: `pchan` among its parameters, swept negative)
-    let pchan = req.kind.eq_ignore_ascii_case("VDMOS") && req.defs.iter().any(|d| d.to_ascii_lowercase().split(|c: char| !c.is_ascii_alphanumeric()).any(|w| w == "pchan"));
+    // (a p-channel VDMOS: `pchan` a word of its own among its parameters, not in a comment or a
+    // `mfg=…complement_of_pchan…`; swept negative)
+    let words = |l: &str| l.split(';').next().unwrap_or("").split(|c: char| c.is_whitespace() || "(),".contains(c)).any(|w| w.eq_ignore_ascii_case("pchan"));
+    let pchan = req.kind.eq_ignore_ascii_case("VDMOS") && req.defs.iter().flat_map(|d| d.lines()).filter(|l| !l.trim_start().starts_with('*')).any(words);
     let s = spec(if pchan { "VDMOS PCHAN" } else { &req.kind }).ok_or_else(|| format!("no curves for a {} model", req.kind))?;
     let text = format!("* {} curves\n{}\n{}\n.end\n", req.name, s.body.replace("{m}", &req.name), req.defs.join("\n"));
     let deck = crate::schematic::prepare(&text, None, &mut vec![]).with_steps(s.step.iter().map(|l| l.to_string()).collect());
@@ -113,6 +115,8 @@ mod tests {
         assert!(j.curves.len() == 5 && *j.curves[0].y.last().unwrap() > 1e-3 && *j.curves[4].y.last().unwrap() < 1e-6, "{j:?}");
         let p = run(&Request { kind: "VDMOS".into(), name: "MP".into(), defs: vec![".model MP VDMOS(pchan Vto=-2 Kp=1)".into()] }).unwrap();
         assert!(p.x == "|Vds|" && *p.curves[5].y.last().unwrap() > 1.0, "{p:?}");
+        let n = run(&Request { kind: "VDMOS".into(), name: "MN".into(), defs: vec![".model MN VDMOS(Vto=2 Kp=1 mfg=complement_of_pchan) ; not pchan".into()] }).unwrap();
+        assert!(n.x == "Vds" && *n.curves[5].y.last().unwrap() > 1.0, "{n:?}");
         assert!(run(&Request { kind: "SUBCKT".into(), name: "X".into(), defs: vec![] }).is_err());
     }
 }

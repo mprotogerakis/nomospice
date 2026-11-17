@@ -1051,9 +1051,12 @@ async fn library_list(kind: String, source: String, limit: usize) -> Vec<library
 #[tauri::command]
 async fn library_text(name: String) -> Option<String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let ix = library::index();
-        let ix = ix.as_ref()?;
-        ix.text(ix.get(&name)?)
+        let text = || {
+            let ix = library::index();
+            let ix = ix.as_ref()?;
+            ix.text(ix.get(&name)?)
+        };
+        text().or_else(text) // (a file edited since indexing: None once, the index rebuilt for the next)
     })
     .await
     .ok()?

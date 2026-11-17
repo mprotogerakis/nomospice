@@ -234,7 +234,7 @@ function PartsDialog({ replace, kind0, libraries }: { replace?: number; kind0?: 
   const [lists, setLists] = useState<Record<string, LibEntry[] | "loading">>({});
   useEffect(() => setLists({}), [view]); // (back from the library list: read again)
   const [found, setFound] = useState<LibEntry[]>([]);
-  const [recent, setRecent] = useState(readRecent);
+  const [recent, setRecent] = useState(() => readRecent().filter((e) => e.kind === "SYMBOL")); // (models: once confirmed)
   // (a model used last as the libraries in use have it now: its kind, its symbol; none, not offered)
   useEffect(() => {
     let live = true;
@@ -277,7 +277,7 @@ function PartsDialog({ replace, kind0, libraries }: { replace?: number; kind0?: 
     const shown = recent.filter((e) => (e.kind === "SYMBOL" ? !kinds && !!lib[symKey(e.name)] : fits(e.kind)) && (!searching || e.name.toLowerCase().includes(ql)));
     if (shown.length && !searching) group("recent", "Recently used", shown.length, 0, () => leaves("recent", shown, 1));
     if (!kinds) {
-      const symbols = Object.values(lib).filter((d) => !d.name.startsWith("subckt:") && (!searching || `${d.name} ${d.desc}`.toLowerCase().includes(ql)));
+      const symbols = Object.values(lib).filter((d) => !d.name.startsWith("subckt:") && (!searching || `${d.name} ${symbolEntry(d).source}`.toLowerCase().includes(ql)));
       for (const g of PART_GROUPS) {
         const ds = symbols.filter((d) => partGroup(d) === g).sort((a, b) => a.name.localeCompare(b.name));
         if (ds.length) group(`p:${g}`, g, ds.length, 0, () => leaves(`p:${g}`, ds.map(symbolEntry), 1));
@@ -330,7 +330,7 @@ function PartsDialog({ replace, kind0, libraries }: { replace?: number; kind0?: 
     setText(""); // (not the last part's: the curves are known by it)
     if (cur && cur.kind !== "SYMBOL") invoke<string | null>("library_text", { name: cur.name }).then((t) => live && setText(t ?? ""), () => live && setText(""));
     return () => void (live = false);
-  }, [cur]);
+  }, [cur?.name, cur?.kind]); // eslint-disable-line react-hooks/exhaustive-deps
   const toggle = (r: TreeRow, to = !r.open) => {
     if (r.entry || r.loading || ql) return;
     const next = new Set(open);
@@ -342,10 +342,9 @@ function PartsDialog({ replace, kind0, libraries }: { replace?: number; kind0?: 
     if (!e) return row && toggle(row); // (a group: Enter opens or closes it)
     if (!e.symbol) return; // a model type without a symbol (switch, core ...): stay open
     if (isSymbolDoc(useS.getState().path) && replace == null) return void message("A symbol holds no parts: open a schematic to place one.", { title: "nomospice" });
-    const next = remember(recent, e);
-    setRecent(next);
+    setRecent(remember(recent, e));
     try {
-      localStorage.setItem(RECENT, JSON.stringify(next));
+      localStorage.setItem(RECENT, JSON.stringify(remember(readRecent(), e))); // (those not shown now kept: a library switched on again)
     } catch { /* (no storage: the list is this dialog's only) */ }
     close();
     const { items } = useS.getState();
@@ -505,7 +504,9 @@ function SymbolPreview({ name, hi }: { name: string; hi: number | null }) {
   const [missing, setMissing] = useState("");
   useEffect(() => {
     // (a library subcircuit's box, a symbol not loaded yet: loaded as placing loads it)
-    if (!def) void loadSymbols([{ t: "sym", sym: name, x: 0, y: 0, rot: "R0", attrs: {} }]).then(() => useS.getState().lib[symKey(name)] || setMissing(name), () => setMissing(name));
+    if (def) return;
+    const t = setTimeout(() => void loadSymbols([{ t: "sym", sym: name, x: 0, y: 0, rot: "R0", attrs: {} }]).then(() => useS.getState().lib[symKey(name)] || setMissing(name), () => setMissing(name)), 150);
+    return () => clearTimeout(t);
   }, [name, def]);
   if (!def) return <div className="my-2 grid h-40 place-items-center text-2xs text-text-tertiary">{missing === name ? `no symbol ${name}` : "…"}</div>;
   const it: Extract<Item, { t: "sym" }> = { t: "sym", sym: def.name, x: 0, y: 0, rot: "R0", attrs: {} };
