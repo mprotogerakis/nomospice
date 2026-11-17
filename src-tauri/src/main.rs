@@ -287,6 +287,7 @@ async fn simulate(window: tauri::Window, items: Vec<Item>, dir: Option<String>, 
     tauri::async_runtime::spawn_blocking(move || {
         let prepared = sim.prepared(dir.as_deref().map(std::path::Path::new), &mut netlist.warnings);
         let simulated = prepared.text().to_string();
+        netlist.own_models_in(&simulated); // (an include's .subckt of a model's name: not nomospice's own)
         // (waiting for another window's root locus: this window's Halt still ends the wait)
         let sweep = sweep_lock(|| ngspice::halted_since(&who, op));
         let res = match &sweep {

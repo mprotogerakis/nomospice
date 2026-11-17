@@ -393,10 +393,10 @@ export function command(id: string) {
 
 let booted = false;
 
-/** The run's note that ngspice took its operating point from a transient run (see ngspice.rs), while
- *  the run is the circuit's: the status bar counts it, the netlist panel lists it. */
-const fallback = (run: { notes?: string[] } | null | undefined, stale: boolean) =>
-  stale ? [] : (run?.notes ?? []).filter((n) => n.startsWith("Warning: ngspice found no operating point")).map((n) => n.replace(/^Warning: /, ""));
+/** That ngspice took the run's operating point from a transient run (see ngspice.rs), while its
+ *  results are shown: the status bar counts it, the netlist panel lists it. */
+const fallback = (run: { op_fallback?: boolean } | null | undefined) =>
+  run?.op_fallback ? ["ngspice found no operating point by gmin or source stepping and took where a transient run ended instead: check the results"] : [];
 
 export function App() {
   const s = useS(useShallow((x) => ({
@@ -593,8 +593,8 @@ export function App() {
   };
 
   const run = s.sim?.run;
-  // (the netlist's, and the run's operating point by ngspice's fallback while it is the circuit's)
-  const warnings = [...(s.warnings ?? []), ...fallback(run, s.stale)];
+  // (the netlist's, and the run's operating point by ngspice's fallback)
+  const warnings = [...(s.warnings ?? []), ...fallback(run)];
   const errors = s.sim && !s.sim.run;
 
   const symbolDoc = isSymbolDoc(s.path); // (a symbol holds no parts, no ground)
@@ -836,7 +836,7 @@ function tfName(n: string, line: string): [string, string] | null {
 }
 
 function BottomPanel() {
-  const { panel, sim, nets, stale } = useS(useShallow((s) => ({ panel: s.panel, sim: s.sim, nets: s.nets, stale: s.stale })));
+  const { panel, sim, nets } = useS(useShallow((s) => ({ panel: s.panel, sim: s.sim, nets: s.nets })));
   const [simulated, setSimulated] = useState(false);
   const isOpPlot = !!sim?.run?.plot.startsWith("op");
   const phasors = !!sim?.run?.plot.startsWith("ac"); // a table from .ac means one frequency: phasors
@@ -887,7 +887,7 @@ function BottomPanel() {
         {panel === "history" && <History />}
         {panel === "netlist" && (
           <>
-            {[...(nets?.warnings ?? []), ...fallback(sim?.run, stale)].map((w, i) => <div key={i} className="text-status-warning">⚠ {w}</div>)}
+            {[...(nets?.warnings ?? []), ...fallback(sim?.run)].map((w, i) => <div key={i} className="text-status-warning">⚠ {w}</div>)}
             {sim?.simulated && (
               <label className="mb-1 flex items-center gap-1.5 font-sans text-2xs text-text-tertiary">
                 {/* blur: a label click focuses the box on Windows/Linux and Space would re-toggle it */}

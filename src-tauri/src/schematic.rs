@@ -1647,6 +1647,19 @@ impl Netlist {
     /// The deck ngspice runs for this (simulation) netlist: includes inlined and filtered, its
     /// current sensors known. The GUI's simulation and root locus and MCP all run this. It reads the
     /// .include/.lib files (can be slow): call it on a blocking thread, without the library lock.
+    /// Its own-model marks as `deck` (the prepared one, includes inlined) runs them: a model defined
+    /// there twice is also an include's of that name, which may be the one ngspice takes.
+    pub fn own_models_in(&mut self, deck: &str) {
+        let defined = |m: &str| deck.lines().filter(|l| matches!(l.split_whitespace().take(2).collect::<Vec<_>>()[..], [d, n] if d.eq_ignore_ascii_case(".subckt") && n.eq_ignore_ascii_case(m))).count();
+        let marked: Vec<usize> = (0..self.own_models.len()).filter(|&i| self.own_models[i]).collect();
+        for i in marked {
+            let words = self.text.lines().map(|l| l.split_whitespace().collect::<Vec<_>>()).find(|w| w.first().is_some_and(|f| f.eq_ignore_ascii_case(&self.insts[i])));
+            if words.and_then(|w| w.get(1 + self.nets[i].len()).map(|m| defined(m))).is_some_and(|n| n > 1) {
+                self.own_models[i] = false;
+            }
+        }
+    }
+
     pub fn prepared(&self, dir: Option<&std::path::Path>, warnings: &mut Vec<String>) -> Prepared {
         let p = prepare(&self.text, dir, warnings);
         Prepared(ltspice_meas(&p.0, &self.sensors, warnings), self.sensors.clone(), self.steps.clone())
@@ -4222,6 +4235,12 @@ SYMBOL half 400 300 R0\nSYMATTR InstName U4\nSYMATTR Value R=3k\nFLAG 352 300 a\
         assert!(f.own_models[u] && !f.own_models[f.insts.iter().position(|n| n == "V1").unwrap()], "{:?}", f.own_models);
         let own = netlist_for_sim(&parse_asc(&format!("{follower}TEXT 0 260 Left 2 !.subckt opamp a b c\\nR1 a c 1k\\n.ends opamp\n")), &mut Library::builtin());
         assert!(!own.own_models[u], "{}", own.text);
+        // (an include's .subckt opamp, inlined in the prepared deck beside nomospice's: not its own then)
+        let mut inc = netlist_for_sim(&parse_asc(follower), &mut Library::builtin());
+        inc.own_models_in(".subckt opamp inn inp out\n.ends opamp\n");
+        assert!(inc.own_models[u]);
+        inc.own_models_in(".SUBCKT Opamp a b c\nR1 a c 1k\n.ends\n.subckt opamp inn inp out\n.ends opamp\n");
+        assert!(!inc.own_models[u]);
         for (line, said) in [("Aol=1G", true), ("Aol = 1G", true), ("Aol=1G Aol=100K", false)] {
             let big = netlist_for_sim(&parse_asc(&follower.replace("SYMATTR InstName U1", &format!("SYMATTR InstName U1\nSYMATTR SpiceLine {line}"))), &mut Library::builtin());
             assert_eq!(big.warnings.iter().any(|w| w.starts_with("U1: Aol above 1Meg")), said, "{line}: {:?}", big.warnings);

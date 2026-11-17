@@ -94,6 +94,8 @@ export interface Run {
   aborted: boolean;
   /** said about the run beyond ngspice's log (a .step not run, an operating point by ngspice's transient fallback) */
   notes?: string[];
+  /** ngspice took the operating point from where a transient run ended (its last resort) */
+  op_fallback?: boolean;
   /** `.meas` results: name, value (null: failed), the rest of ngspice's line (trig/targ, from/to),
    *  whether the value is on the x axis (a TRIG/TARG span, a WHEN point) */
   meas: [string, number | null, string, boolean][];

@@ -383,7 +383,7 @@ export const Schematic = memo(function Schematic() {
    *  drawing */
   const opCurrents = (i: number) => {
     const pins = nets?.pin_currents?.[i] ?? [];
-    if (modelSub(nets, i)) return []; // (a two-pin one too, the not gate)
+    if (modelSub(sim?.netlist ?? nets, i)) return []; // (as the run ran it, an include's .subckt of its name not; a two-pin one too, the not gate)
     if (pins.filter(Boolean).length > 1) return pins.flatMap((label, k) => (label && opCurrent(i, k)) || []);
     const one = opCurrent(i);
     return one ? [one] : [];
