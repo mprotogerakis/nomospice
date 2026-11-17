@@ -837,6 +837,9 @@ pub struct Netlist {
     /// Aligned with items: the part runs one of nomospice's own model subcircuits (its op-amps, gates;
     /// not a `.subckt` of the user's of that name): its insides are the model's, not the circuit's.
     pub own_models: Vec<bool>,
+    /// Aligned with items: the model an own-model part calls (`own_models_in` checks it in the run's deck).
+    #[serde(skip)]
+    own_names: Vec<String>,
     /// Sensors of the simulated netlist (names are reserved in both builds, so they match).
     #[serde(skip)]
     pub sensors: Vec<Sensor>,
@@ -1648,24 +1651,28 @@ impl Netlist {
     /// defines twice at its top level is also an included file's, which ngspice takes, being first
     /// (a block's .subckt of that name inside the block's is the block's own and does not count).
     pub fn own_models_in(&mut self, deck: &str) {
+        if !self.own_models.contains(&true) {
+            return;
+        }
         let (mut depth, mut defs) = (0usize, HashMap::<String, usize>::new());
         for l in deck.lines() {
             let mut w = l.split_whitespace();
-            match w.next().map(str::to_ascii_lowercase).as_deref() {
-                Some(".subckt") => {
+            match w.next() {
+                Some(d) if d.eq_ignore_ascii_case(".subckt") => {
                     if let Some(n) = w.next().filter(|_| depth == 0) {
                         *defs.entry(n.to_ascii_lowercase()).or_default() += 1;
                     }
                     depth += 1;
                 }
-                Some(".ends") => depth = depth.saturating_sub(1),
+                Some(d) if d.eq_ignore_ascii_case(".ends") => depth = depth.saturating_sub(1),
                 _ => {}
             }
         }
-        // (each part's model: the word after its nodes on its line)
-        let lines: HashMap<String, Vec<&str>> = self.text.lines().filter_map(|l| { let w: Vec<&str> = l.split_whitespace().collect(); Some((w.first()?.to_ascii_lowercase(), w)) }).collect();
-        let own: Vec<bool> = (0..self.own_models.len()).map(|i| self.own_models[i] && !lines.get(&self.insts[i].to_ascii_lowercase()).and_then(|w| w.get(1 + self.nets[i].len())).is_some_and(|m| defs.get(&m.to_ascii_lowercase()).is_some_and(|&n| n > 1))).collect();
-        self.own_models = own;
+        for i in 0..self.own_models.len() {
+            if self.own_models[i] && defs.get(&self.own_names[i]).is_some_and(|&n| n > 1) {
+                self.own_models[i] = false;
+            }
+        }
     }
 
     /// The deck ngspice runs for this (simulation) netlist: includes inlined and filtered, its
@@ -2583,7 +2590,7 @@ const SHEET_KEEPS: [&str; 13] = [".param", ".func", ".function", ".model", ".sub
 /// body, a subcircuit's: no title, analyses or `.end`).
 fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -> Netlist {
     let sub = !h.stack.is_empty();
-    let mut nl = Netlist { nets: vec![vec![]; items.len()], insts: vec![String::new(); items.len()], probes: vec![String::new(); items.len()], pin_currents: vec![vec![]; items.len()], sheets: vec![String::new(); items.len()], own_models: vec![false; items.len()], ..Default::default() };
+    let mut nl = Netlist { nets: vec![vec![]; items.len()], insts: vec![String::new(); items.len()], probes: vec![String::new(); items.len()], pin_currents: vec![vec![]; items.len()], sheets: vec![String::new(); items.len()], own_models: vec![false; items.len()], own_names: vec![String::new(); items.len()], ..Default::default() };
 
     // 1. connection points
     let mut ids: HashMap<(i32, i32), usize> = HashMap::new();
@@ -2972,6 +2979,7 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
             // (a .subckt of the user's of that name runs instead; one of an included file: see
             // `own_models_in`, where a run has read the includes)
             nl.own_models[i] = !defined(&model);
+            nl.own_names[i] = model.to_ascii_lowercase();
         }
         if "DQMXJS".contains(prefix) && model.is_empty() {
             nl.warnings.push(format!("{inst}: no model or subcircuit named (its Value is empty)"));
@@ -4242,8 +4250,15 @@ SYMBOL half 400 300 R0\nSYMATTR InstName U4\nSYMATTR Value R=3k\nFLAG 352 300 a\
         let mut inc = netlist_for_sim(&parse_asc(follower), &mut Library::builtin());
         inc.own_models_in(".subckt blk a b\n.subckt opamp x y z\n.ends opamp\n.ends blk\n.subckt opamp inn inp out\n.ends opamp\n");
         assert!(inc.own_models[u]);
-        inc.own_models_in(".SUBCKT Opamp a b c\nR1 a c 1k\n.ends\n.subckt opamp inn inp out\n.ends opamp\n");
-        assert!(!inc.own_models[u]);
+        // (as a run has it: the include inlined by prepare, before nomospice's own)
+        let dir = std::env::temp_dir().join(format!("nomospice-own-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("myopamp.lib"), ".SUBCKT Opamp a b c\nR1 a c 1k\n.ends\n").unwrap();
+        let mut inc = netlist_for_sim(&parse_asc(&format!("{follower}TEXT 0 260 Left 2 !.include myopamp.lib\n")), &mut Library::builtin());
+        let deck = inc.prepared(Some(&dir), &mut vec![]);
+        inc.own_models_in(deck.text());
+        std::fs::remove_dir_all(&dir).ok();
+        assert!(!inc.own_models[u], "{}", deck.text());
         assert!(!f.text.contains("Rsense_XU1_2") && f.text.contains("Rsense_XU1 "), "In+ is held by V1, out only by U1 itself: {}", f.text);
         let lone = netlist_for_sim(&parse_asc("SYMBOL Opamps\\opamp 0 0 R0\nSYMATTR InstName U1\nTEXT 0 200 Left 2 !.op\n"), &mut Library::builtin());
         assert_eq!(lone.text.matches(" 0 1T").count(), 3, "open pins: held, so nothing floats: {}", lone.text);

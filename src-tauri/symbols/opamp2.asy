@@ -16,7 +16,7 @@ WINDOW 3 16 104 Left 2
 SYMATTR Value opamp2
 SYMATTR SpiceLine Aol=100K GBW=10Meg Slew=10Meg Vsat=0.1
 SYMATTR Prefix X
-SYMATTR Description Opamp with supply pins: output limited to the supplies less Vsat, slew rate (V/s); as Value also any opamp of the libraries (TL072 …)
+SYMATTR Description Opamp with supply pins: output limited to the supplies less Vsat, slew rate (V/s), Aol at most 1Meg (a larger acts as 1Meg); as Value also any opamp of the libraries (TL072 …)
 PIN -32 80 NONE 0
 PINATTR PinName In+
 PINATTR SpiceOrder 1
