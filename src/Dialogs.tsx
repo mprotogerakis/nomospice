@@ -233,6 +233,7 @@ function PartsDialog({ replace, kind0, libraries }: { replace?: number; kind0?: 
   useEffect(() => void invoke<[string, string, number][]>("library_groups").then((g) => setGroups(sourceGroups(g.filter(([k]) => fits(k)))), () => {}), [view]);
   const [lists, setLists] = useState<Record<string, LibEntry[] | "loading">>({});
   useEffect(() => setLists({}), [view]); // (back from the library list: read again)
+  useEffect(() => () => curveCache.clear(), [view]); // (libraries changed, the dialog closed: a model's base, `ako:`, may differ)
   const [found, setFound] = useState<LibEntry[]>([]);
   const [recent, setRecent] = useState(() => readRecent().filter((e) => e.kind === "SYMBOL")); // (models: once confirmed)
   // (a model used last as the libraries in use have it now: its kind, its symbol; none, not offered)
@@ -444,7 +445,7 @@ function PartsDialog({ replace, kind0, libraries }: { replace?: number; kind0?: 
 /** The model kinds whose characteristic curves the preview draws (curves.rs). */
 const CURVE_KINDS = ["D", "NPN", "PNP", "LPNP", "NMOS", "PMOS", "VDMOS", "NJF", "PJF"];
 interface Curves { x: string; y: string; curves: { label: string; x: number[]; y: number[] }[] }
-/** Curves by model name and text (a library edited or switched: computed again; a failure is asked again). */
+/** Curves by model name and text while the dialog is open (a library edited: computed again; a failure is asked again). */
 const curveCache = new Map<string, Curves>();
 
 /** A model's characteristic curves: a diode's I(V), a transistor's output curves per base current or
