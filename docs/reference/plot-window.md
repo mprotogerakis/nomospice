@@ -37,5 +37,5 @@ Reset zoom · Clear cursors · Add trace… · Bode, Nyquist and Nichols plot (A
 ## Other result views
 
 - A single-frequency AC analysis (`.ac lin 1 50 50`) gives a table of phasors, magnitude ∠ phase, under *Phasors* in the bottom panel.
-- `.op`, `.tf` and the totals of `.noise` are tables under *Results* or *Operating point*. After `.op`, hovering a wire shows its voltage and hovering a part its current in the status bar; the canvas menu's *Show operating point* writes them beside the labels and parts.
+- `.op`, `.tf` and the totals of `.noise` are tables under *Results* or *Operating point*. After `.op`, hovering a wire shows its voltage and hovering a part its current in the status bar; the canvas menu's *Show operating point* writes them beside the labels and parts (nomospice's own op-amps and gates: their pin currents on hover at a pin; the *Operating point* table leaves out their insides).
 - `.pz` shows the s-plane: see [Find poles and zeros](../how-to/poles-and-zeros.md).

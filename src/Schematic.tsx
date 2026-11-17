@@ -5,7 +5,7 @@ import { useShallow } from "zustand/react/shallow";
 import { Maximize, Minus, Plus } from "lucide-react";
 import type { Item, Shape, SymbolDef } from "./types";
 import {
-  box, connectivity, defOf, pinLine, portOf, arcSpan, dragPlan, mirror, outline, pins, prefixOf, rotate, dropZeroWires, dropZeroWiresKeepSel, GRID, hit, isNet, isShape, partCurrent, labelRect, leftLabels, matrix, shifted, snap, symBox,
+  box, connectivity, defOf, pinLine, portOf, arcSpan, dragPlan, mirror, modelSub, outline, pins, prefixOf, rotate, dropZeroWires, dropZeroWiresKeepSel, GRID, hit, isNet, isShape, partCurrent, labelRect, leftLabels, matrix, shifted, snap, symBox,
   textLines, union, xform, type Box, type Lib, type Pt,
 } from "./geom";
 import { canProbe, commit, currentNets, isSymbolDoc, nextInst, powerMode, powerName, probe, probeMode, simulate, useS, useStatus } from "./store";
@@ -378,11 +378,13 @@ export const Schematic = memo(function Schematic() {
     const got = rows.length ? rows : inst ? opRows(`${inst}#branch`) : [];
     return got.length ? `${label || `I(${inst})`} = ${got.map((r) => si(r[1], "A", 4)).join(" / ")}` : null;
   };
-  /** A part's current, or its pins' where several are sensed (a transistor's Ic, Ib, Ie, a
-   *  subcircuit's Ix(U1:Out)) */
+  /** A part's current, or its pins' where several are sensed (a transistor's Ic, Ib, Ie, a block's);
+   *  nomospice's own op-amp's and gate's only on hover at its pins: written out they cover the
+   *  drawing */
+  const ownModels = useMemo(() => new Set((nets?.insts ?? []).flatMap((_, i) => (modelSub(nets, i) ? [i] : []))), [nets]);
   const opCurrents = (i: number) => {
     const pins = nets?.pin_currents?.[i] ?? [];
-    if (pins.filter(Boolean).length > 1) return pins.flatMap((label, k) => (label && opCurrent(i, k)) || []);
+    if (pins.filter(Boolean).length > 1) return ownModels.has(i) ? [] : pins.flatMap((label, k) => (label && opCurrent(i, k)) || []);
     const one = opCurrent(i);
     return one ? [one] : [];
   };

@@ -542,6 +542,13 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
         notes.push(format!("Warning: the results table shows its first {MAX_ROWS} values (a value per node per step)"));
         log.push(notes[0].clone());
     }
+    // (ngspice 47's last resort after gmin and source stepping: a transient run, whose end is not
+    // always the operating point: a high-gain loop's slow pole, a latch)
+    if log.iter().any(|l| l.contains("Transient op finished")) {
+        let w = "Warning: ngspice found no operating point by gmin or source stepping; the values are where a transient run ended: check them".to_string();
+        notes.push(w.clone());
+        log.push(w);
+    }
     notes.extend(log.iter().filter(|l| l.starts_with("Warning: .step") || l.starts_with("--- .step") && l.ends_with("failed")).cloned());
     Ok(Run { id, plot, scale, vectors, op, aborted, meas, log, steps: if steps.is_none() { vec![] } else { done.iter().map(|d| d.0.clone()).collect() }, notes })
 }

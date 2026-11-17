@@ -962,8 +962,11 @@ const BUILTIN_MODELS: &[(&str, &str)] = &[
     ("opamp", ".subckt opamp inn inp out params: Aol=100K GBW=10Meg\nG1 0 n inp inn 1m\nR1 n 0 {Aol*1k}\nC1 n 0 {1/(6.2832*1k*GBW)}\nE1 out 0 n 0 1\n.ends opamp"),
     // with supplies (LTspice's opamp2 pins): a transconductance into R‖C around mid-supply (the
     // dominant pole; GBW = gm/2πC), its current limited (slew rate = Imax/C), that node kept within
-    // the supplies (no wind-up), the output limited to the supplies less Vsat
-    ("opamp2", ".subckt opamp2 inp inn vp vn out params: Aol=100K GBW=10Meg Slew=10Meg Vsat=0.1 Rout=1\n.param Cc=1n gm={6.2832*GBW*Cc} Imax={Slew*Cc}\nBm mid 0 V=(V(vp)+V(vn))/2\nB1 0 x I=max(min({gm}*V(inp,inn), {Imax}), -{Imax})\nR1 x mid {Aol/gm}\nC1 x mid {Cc}\nB2 x 0 I=V(x)>V(vp) ? V(x)-V(vp) : (V(x)<V(vn) ? V(x)-V(vn) : 0)\nB3 o 0 V=max(min(V(x), V(vp)-{Vsat}), V(vn)+{Vsat})\nR2 o out {Rout}\nR3 vp vn 1Meg\n.ends opamp2"),
+    // the supplies (no wind-up), the output limited to the supplies less Vsat; Aol at most 1Meg: with
+    // more, ngspice's operating point of a high-gain loop goes wrong (its convergence test is on the
+    // voltages' changes, which the gain makes tiny before the currents add up; past 100Meg its
+    // transient fallback stops before the pole of Aol/2πGBW settles), and 1Meg errs by 0.03 % at 300
+    ("opamp2", ".subckt opamp2 inp inn vp vn out params: Aol=100K GBW=10Meg Slew=10Meg Vsat=0.1 Rout=1\n.param Cc=1n gm={6.2832*GBW*Cc} Imax={Slew*Cc}\nBm mid 0 V=(V(vp)+V(vn))/2\nB1 0 x I=max(min({gm}*V(inp,inn), {Imax}), -{Imax})\nR1 x mid {min(Aol,1Meg)/gm}\nC1 x mid {Cc}\nB2 x 0 I=V(x)>V(vp) ? V(x)-V(vp) : (V(x)<V(vn) ? V(x)-V(vn) : 0)\nB3 o 0 V=max(min(V(x), V(vp)-{Vsat}), V(vn)+{Vsat})\nR2 o out {Rout}\nR3 vp vn 1Meg\n.ends opamp2"),
     // 10 m of 50 Ω coax (RG58-like: 250 nH/m, 100 pF/m, some loss)
     ("ltra", ".model LTRA LTRA(R=0.1 L=250n G=0 C=100p LEN=10)"),
     // logic gates and a D flip-flop of behavioral sources (levels Vlow/Vhigh, threshold halfway;
@@ -3617,6 +3620,13 @@ mod tests {
         let out = tr(&r, "v(out)");
         assert!((out(5e-6) - 0.1).abs() < 0.02 && (out(30e-6) - 3.0).abs() < 0.02, "clipped {} high {}", out(5e-6), out(30e-6));
         assert!((out(11.5e-6) - 1.6).abs() < 0.3, "slewing {}", out(11.5e-6));
+        // a gain of 301 with a chopper's Aol=1G (as 1Meg): its operating point right, not ngspice's
+        // transient fallback's unsettled one
+        for aol in ["100K", "1G"] {
+            let r = run(&format!("V1 vcc 0 15\nV2 0 vee 15\nV3 in 0 10m\nX1 in fb vcc vee out opamp2 Aol={aol} GBW=2.5Meg Slew=3Meg\nR1 out fb 300k\nR2 fb 0 1k\n.op"), &["opamp2"]);
+            let out = r.op.iter().find(|o| o.0 == "out").unwrap().1;
+            assert!((out - 3.01).abs() < 0.012 && !r.log.iter().any(|l| l.contains("Transient op")), "Aol={aol}: {out}");
+        }
         // gates: a high in [0,1µ) and [2µ,3µ), b in [0,2µ); a D flip-flop takes a at each rising clock edge
         let r = run("Va a 0 PULSE(0 5 0 1n 1n 1u 2u)\nVb b 0 PULSE(0 5 0 1n 1n 2u 4u)\nVc c 0 PULSE(0 5 0.25u 1n 1n 0.5u 1u)\n\
             X1 a b y1 and2\nX2 a b y2 or2\nX3 a b y3 xor2\nX4 a b y4 nand2\nX5 a b y5 nor2\nX6 a y6 not\nX7 a c q qn dff\n.tran 1n 4u",

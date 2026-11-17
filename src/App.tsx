@@ -20,7 +20,7 @@ import { Boundary } from "./Boundary";
 import { analysesOf, closeTab, currentTab, dirOf, fileName, docId, isSymbolDoc, viewOf, loadDoc, loadSymbols, placeSymbol, plotKind, probeMode, redo, refreshGit, refreshLibrarySymbols, refreshNets, relToDoc, selectTab, simulate, undo, useS, useStatus } from "./store";
 import { saveRaw } from "./svgExport";
 import { History } from "./History";
-import { mirror, rotate } from "./geom";
+import { mirror, modelSub, rotate } from "./geom";
 import { ANALYSES, si, tokens } from "./spice";
 import { copySelection, deleteSelection, duplicate, installClipboardEvents, newItem, pasteClipboard, placeFlag, swallow, TEXT_FIELD, textField, transform } from "./actions";
 import { ContextMenu, openMenu } from "./Menu";
@@ -834,6 +834,12 @@ function BottomPanel() {
   const [simulated, setSimulated] = useState(false);
   const isOpPlot = !!sim?.run?.plot.startsWith("op");
   const phasors = !!sim?.run?.plot.startsWith("ac"); // a table from .ac means one frequency: phasors
+  // (the model subcircuits of the run, an op-amp's XU1, and the run's own nets, which stay rows even
+  // when a label reads like one's insides, X1.OUT)
+  const [models, ownNets] = useMemo(() => {
+    const nl = sim?.netlist;
+    return [new Set((nl?.insts ?? []).filter((_, i) => modelSub(nl, i)).map((x) => x.toLowerCase())), new Set((nl?.nets ?? []).flat().map((n) => n.toLowerCase()))];
+  }, [sim]);
   // .tf: its statement (output, input source) names the results (only that line: no re-render per edit)
   // (the line that ran, from the deck: an edit since does not relabel these numbers)
   const tf = useMemo(() => (sim?.run?.plot.startsWith("tf") ? /^[ \t]*(\.tf[ \t].*)$/im.exec(sim.simulated)?.[1].trim() ?? ".tf" : null), [sim]);
@@ -899,6 +905,12 @@ function BottomPanel() {
                 // ngspice's vector type gives the unit; @dev[...] and the like stay as written
                 // (a .step run: `out [R=1k]`, named as without its step, the step after it)
                 const [, n, step] = /^(.*?)( \[[^\]]*\])?$/.exec(full)!;
+                // (in the operating point or its phasors, not the insides of nomospice's own op-amp or
+                // gate, `xu1.mid`, `b.xu1.b3#branch`, `@q.xu1.q1[ic]`; a block's nets are the user's, so
+                // is a label with a dot, 3.3V; a .tf's or .sens's rows were asked for by name)
+                // ponytail: a model in a block (x1.xu1.mid) still listed: its model is in the block's sheet
+                const inside = (isOpPlot || phasors) && !ownNets.has(n.toLowerCase()) && /^@?(?:[a-z]\.)?(x[^.]+)\./i.exec(n);
+                if (inside && models.has(inside[1].toLowerCase())) return null;
                 const named = tf && tfName(n, tf);
                 const unit = named ? named[1] : unit0;
                 const name = (named ? named[0] : !isOpPlot && !phasors ? n : unit === "A" && n.endsWith("#branch") ? `I(${((b) => nets?.insts.find((x) => x.toLowerCase() === b) ?? b)(n.replace("#branch", ""))})` /* a source's, as drawn */ : unit === "V" && !/[@(]/.test(n) ? `V(${n})` : n) + (step ?? "");

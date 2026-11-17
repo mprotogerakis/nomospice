@@ -574,6 +574,19 @@ export function twoPortIn(expr: string, nl: Netlist): string {
 /** A wire or a label: what has a net (a voltage to probe, a differential probe's end). */
 export const isNet = (it: Item | undefined) => it?.t === "wire" || it?.t === "flag";
 
+/** nomospice's own model subcircuits (its op-amps, gates, flip-flop): their insides are the model's. */
+const OWN_MODELS = new Set(["opamp", "opamp2", "and2", "nand2", "or2", "nor2", "xor2", "not", "dff"]);
+/** Whether part `i` of netlist `nl` is one of nomospice's own model subcircuits (an op-amp's XU1, a
+ *  gate's), by the model its netlist line calls: its insides and pin currents are no part of the
+ *  user's circuit, so the operating point leaves them out of its table and drawing. A block, a
+ *  `.subckt` of the user's, a library's model: shown as they are. */
+export function modelSub(nl: Netlist | null | undefined, i: number) {
+  const inst = nl?.insts[i] ?? "";
+  if (!nl || !/^x/i.test(inst) || nl.sheets?.[i]) return false;
+  const words = nl.text.split("\n").map((l) => l.trim().split(/\s+/)).find((w) => w[0]?.toLowerCase() === inst.toLowerCase());
+  return OWN_MODELS.has(words?.[1 + (nl.nets[i]?.length ?? 0)]?.toLowerCase() ?? "");
+}
+
 /** The name of part `i`'s current, which is also its trace expression (the backend reads I(R1),
  *  Ib(Q1) …): into `pin` where that has a sensor, else the part's own (pin 1; a source's I(V1)).
  *  "": none (a subcircuit's current is per pin). */
