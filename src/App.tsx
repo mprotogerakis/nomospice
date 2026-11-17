@@ -395,8 +395,7 @@ let booted = false;
 
 /** That ngspice took the run's operating point from a transient run (see ngspice.rs), while its
  *  results are shown: the status bar counts it, the netlist panel lists it. */
-const fallback = (run: { op_fallback?: boolean } | null | undefined) =>
-  run?.op_fallback ? ["ngspice found no operating point by gmin or source stepping and took where a transient run ended instead: check the results"] : [];
+const fallback = (run: { op_fallback?: string | null } | null | undefined) => (run?.op_fallback ? [run.op_fallback] : []);
 
 export function App() {
   const s = useS(useShallow((x) => ({

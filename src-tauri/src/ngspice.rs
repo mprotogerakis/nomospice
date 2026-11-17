@@ -297,9 +297,10 @@ pub struct Run {
     pub steps: Vec<String>,
     /// Said about the run beyond ngspice's log (a `.step` it could not run, so it ran once).
     pub notes: Vec<String>,
-    /// ngspice took the operating point from where a transient run ended (its last resort after gmin
-    /// and source stepping): not always the operating point (a high-gain loop's slow pole, a latch).
-    pub op_fallback: bool,
+    /// Said when ngspice took the operating point from where a transient run ended (its last resort
+    /// after gmin and source stepping): not always the operating point (a high-gain loop's slow pole,
+    /// a latch).
+    pub op_fallback: Option<String>,
 }
 
 /// The deck's `.meas` statements (their + lines joined): name (lowercase, as ngspice reports it) →
@@ -547,11 +548,11 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
     }
     // (ngspice 47's last resort after gmin and source stepping: a transient run, whose end is not
     // always the operating point: a high-gain loop's slow pole, a latch)
-    let op_fallback = log.iter().any(|l| l.contains("Transient op finished"));
-    if op_fallback {
-        let w = "Warning: ngspice found no operating point by gmin or source stepping and took where a transient run ended instead: check the results".to_string();
-        notes.push(w.clone());
-        log.push(w);
+    let op_fallback = log.iter().any(|l| l.contains("Transient op finished"))
+        .then(|| "ngspice found no operating point by gmin or source stepping and took where a transient run ended instead: check the results".to_string());
+    if let Some(w) = &op_fallback {
+        notes.push(format!("Warning: {w}"));
+        log.push(format!("Warning: {w}"));
     }
     notes.extend(log.iter().filter(|l| l.starts_with("Warning: .step") || l.starts_with("--- .step") && l.ends_with("failed")).cloned());
     Ok(Run { id, plot, scale, vectors, op, aborted, meas, log, steps: if steps.is_none() { vec![] } else { done.iter().map(|d| d.0.clone()).collect() }, notes, op_fallback })
