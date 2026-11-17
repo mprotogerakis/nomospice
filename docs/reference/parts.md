@@ -18,7 +18,7 @@
 | `opamp2` | an op-amp with supply pins: output within the supplies less `Vsat`, slew rate, `GBW`, `Aol` (at most `1Meg`: a larger one acts as `1Meg`, as SPICE's operating point of a loop with more gain is not to be trusted); as Value also an op-amp of the model libraries (`TL072` …) | X |
 | `and2`, `nand2`, `or2`, `nor2`, `xor2`, `not`, `dff` | logic gates and a D flip-flop (rising edge), drawn per DIN EN 60617, made of behavioral sources: levels `Vlow`/`Vhigh` (0/5 V), threshold halfway, `Td` the outputs' time constant | X |
 | `sw`, `csw` | voltage- and current-controlled switches | S, W |
-| `opamp` | an op-amp (a subcircuit) | X |
+| `opamp` | an op-amp (a subcircuit): `Aol` (at most `1Meg`), `GBW` | X |
 | `jumper` | a connection between two nets | |
 
 The ground is a net label named `0`.

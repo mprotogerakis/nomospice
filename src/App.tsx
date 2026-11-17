@@ -893,6 +893,9 @@ function BottomPanel() {
           </>
         )}
         {panel === "op" && <Measurements xUnit="" />}
+        {panel === "op" && sim?.run?.notes?.map((n) => (
+          <p key={n} className="mb-1 max-w-[70ch] font-sans text-2xs text-status-warning">{n.replace(/^Warning: /, "")}</p>
+        ))}
         {panel === "op" && tf && (
           <p className="mb-1 max-w-[70ch] font-sans text-2xs text-text-tertiary">
             Small-signal DC transfer (.tf): the circuit linearised at its operating point. The gain is how much the output changes per unit change of the input source; the output resistance is what a load at the output sees, the input resistance what the input source sees. No frequency dependence (capacitors open, inductors shorted): for that, use .ac.

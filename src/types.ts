@@ -77,6 +77,8 @@ export interface Netlist {
   pin_currents: string[][];
   /** per item: a block's schematic (the sheet it runs as), else "" */
   sheets: string[];
+  /** aligned with items: runs one of nomospice's own model subcircuits (op-amp, gate) */
+  own_models?: boolean[];
   warnings: string[];
 }
 
@@ -90,6 +92,8 @@ export interface Run {
   op: [string, number, number, string][];
   /** ngspice gave up part-way: the data is partial */
   aborted: boolean;
+  /** said about the run beyond ngspice's log (a .step not run, an operating point by ngspice's transient fallback) */
+  notes?: string[];
   /** `.meas` results: name, value (null: failed), the rest of ngspice's line (trig/targ, from/to),
    *  whether the value is on the x axis (a TRIG/TARG span, a WHEN point) */
   meas: [string, number | null, string, boolean][];

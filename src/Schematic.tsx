@@ -381,10 +381,9 @@ export const Schematic = memo(function Schematic() {
   /** A part's current, or its pins' where several are sensed (a transistor's Ic, Ib, Ie, a block's);
    *  nomospice's own op-amp's and gate's only on hover at its pins: written out they cover the
    *  drawing */
-  const ownModels = useMemo(() => new Set((nets?.insts ?? []).flatMap((_, i) => (modelSub(nets, i) ? [i] : []))), [nets]);
   const opCurrents = (i: number) => {
     const pins = nets?.pin_currents?.[i] ?? [];
-    if (pins.filter(Boolean).length > 1) return ownModels.has(i) ? [] : pins.flatMap((label, k) => (label && opCurrent(i, k)) || []);
+    if (pins.filter(Boolean).length > 1) return modelSub(nets, i) ? [] : pins.flatMap((label, k) => (label && opCurrent(i, k)) || []);
     const one = opCurrent(i);
     return one ? [one] : [];
   };

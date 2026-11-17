@@ -834,6 +834,9 @@ pub struct Netlist {
     pub pin_currents: Vec<Vec<String>>,
     /// Aligned with items: a block's schematic (the path of the sheet it runs as), else "".
     pub sheets: Vec<String>,
+    /// Aligned with items: the part runs one of nomospice's own model subcircuits (its op-amps, gates;
+    /// not a `.subckt` of the user's of that name): its insides are the model's, not the circuit's.
+    pub own_models: Vec<bool>,
     /// Sensors of the simulated netlist (names are reserved in both builds, so they match).
     #[serde(skip)]
     pub sensors: Vec<Sensor>,
@@ -959,7 +962,7 @@ const BUILTIN_MODELS: &[(&str, &str)] = &[
     ("1n4148", ".model 1N4148 D(IS=2n N=1.8 RS=0.5 CJO=2p VJ=0.7 M=0.33 TT=3n BV=100 IBV=1u)"),
     ("2n3904", ".model 2N3904 NPN(IS=12f BF=180 VAF=80 IKF=0.15 BR=2 RB=10 RC=0.5 RE=0.3 CJE=6p VJE=0.75 MJE=0.35 CJC=3p VJC=0.75 MJC=0.33 TF=0.45n TR=150n XTB=1.5)"),
     ("2n3906", ".model 2N3906 PNP(IS=12f BF=150 VAF=60 IKF=0.12 BR=2 RB=10 RC=0.6 RE=0.3 CJE=8p VJE=0.75 MJE=0.35 CJC=4p VJC=0.75 MJC=0.33 TF=0.6n TR=200n XTB=1.5)"),
-    ("opamp", ".subckt opamp inn inp out params: Aol=100K GBW=10Meg\nG1 0 n inp inn 1m\nR1 n 0 {Aol*1k}\nC1 n 0 {1/(6.2832*1k*GBW)}\nE1 out 0 n 0 1\n.ends opamp"),
+    ("opamp", ".subckt opamp inn inp out params: Aol=100K GBW=10Meg\nG1 0 n inp inn 1m\nR1 n 0 {min(Aol,1Meg)*1k}\nC1 n 0 {1/(6.2832*1k*GBW)}\nE1 out 0 n 0 1\n.ends opamp"),
     // with supplies (LTspice's opamp2 pins): a transconductance into R‖C around mid-supply (the
     // dominant pole; GBW = gm/2πC), its current limited (slew rate = Imax/C), that node kept within
     // the supplies (no wind-up), the output limited to the supplies less Vsat; Aol at most 1Meg: with
@@ -2556,7 +2559,7 @@ const SHEET_KEEPS: [&str; 13] = [".param", ".func", ".function", ".model", ".sub
 /// body, a subcircuit's: no title, analyses or `.end`).
 fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -> Netlist {
     let sub = !h.stack.is_empty();
-    let mut nl = Netlist { nets: vec![vec![]; items.len()], insts: vec![String::new(); items.len()], probes: vec![String::new(); items.len()], pin_currents: vec![vec![]; items.len()], sheets: vec![String::new(); items.len()], ..Default::default() };
+    let mut nl = Netlist { nets: vec![vec![]; items.len()], insts: vec![String::new(); items.len()], probes: vec![String::new(); items.len()], pin_currents: vec![vec![]; items.len()], sheets: vec![String::new(); items.len()], own_models: vec![false; items.len()], ..Default::default() };
 
     // 1. connection points
     let mut ids: HashMap<(i32, i32), usize> = HashMap::new();
@@ -2942,6 +2945,7 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
         let defaults = !(builtin_symbol(&def.name) && own_model(&def.value.to_lowercase())) || def.value.eq_ignore_ascii_case(&model);
         if builtin_symbol(&def.name) && own_model(&model) {
             own_used.insert(model.clone());
+            nl.own_models[i] = !defined(&model); // (a .subckt of the user's of that name runs instead)
         }
         if "DQMXJS".contains(prefix) && model.is_empty() {
             nl.warnings.push(format!("{inst}: no model or subcircuit named (its Value is empty)"));
@@ -2959,6 +2963,14 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
                 spice_tokens(&def.spice_line).into_iter().filter(|t| !t.split_once('=').is_some_and(|(k, _)| given.contains(&k.to_ascii_lowercase()))).collect::<Vec<_>>().join(" ")
             })))
             .filter(|s| !s.is_empty()).map(|s| one_line(&s)).collect();
+        // (nomospice's op-amps take Aol up to 1Meg: a larger one said, it acts as 1Meg)
+        if nl.own_models[i] {
+            let given = format!("{value} {}", extra.join(" "));
+            let aol = spice_tokens(&given).iter().filter_map(|t| t.split_once('=')).find(|(k, _)| k.eq_ignore_ascii_case("aol")).and_then(|(_, v)| spice_num(v));
+            if aol.is_some_and(|a| a > 1e6) {
+                nl.warnings.push(format!("{}: Aol above 1Meg acts as 1Meg (SPICE's operating point of a loop with more gain is not to be trusted)", attrs.get("InstName").map_or(inst.as_str(), String::as_str)));
+            }
+        }
         // LTspice accepts Rser=... in Value too: value and extras go through one pass
         let (rest, parasitics) = lt_instance_params(prefix, &inst, &format!("{value} {}", extra.join(" ")), &mut nl.warnings);
         // (a block's: the parameters it passes, declared on the subcircuit; the others it gets from
@@ -3620,8 +3632,8 @@ mod tests {
         let out = tr(&r, "v(out)");
         assert!((out(5e-6) - 0.1).abs() < 0.02 && (out(30e-6) - 3.0).abs() < 0.02, "clipped {} high {}", out(5e-6), out(30e-6));
         assert!((out(11.5e-6) - 1.6).abs() < 0.3, "slewing {}", out(11.5e-6));
-        // a gain of 301 with a chopper's Aol=1G (as 1Meg): its operating point right, not ngspice's
-        // transient fallback's unsettled one
+        // a gain of 301 with a chopper's Aol=1G (as 1Meg, said): its operating point right, not
+        // ngspice's transient fallback's unsettled one
         for aol in ["100K", "1G"] {
             let r = run(&format!("V1 vcc 0 15\nV2 0 vee 15\nV3 in 0 10m\nX1 in fb vcc vee out opamp2 Aol={aol} GBW=2.5Meg Slew=3Meg\nR1 out fb 300k\nR2 fb 0 1k\n.op"), &["opamp2"]);
             let out = r.op.iter().find(|o| o.0 == "out").unwrap().1;
@@ -4203,6 +4215,12 @@ SYMBOL half 400 300 R0\nSYMATTR InstName U4\nSYMATTR Value R=3k\nFLAG 352 300 a\
         let f = netlist_for_sim(&parse_asc(follower), &mut Library::builtin());
         let u = f.insts.iter().position(|n| n == "XU1").unwrap();
         assert_eq!(f.pin_currents[u], ["Ix(U1:In-)", "Ix(U1:In+)", "Ix(U1:Out)"], "{}", f.text);
+        // nomospice's own model (the operating point leaves out its insides), not a .subckt of the user's of that name
+        assert!(f.own_models[u] && !f.own_models[f.insts.iter().position(|n| n == "V1").unwrap()], "{:?}", f.own_models);
+        let own = netlist_for_sim(&parse_asc(&format!("{follower}TEXT 0 260 Left 2 !.subckt opamp a b c\\nR1 a c 1k\\n.ends opamp\n")), &mut Library::builtin());
+        assert!(!own.own_models[u], "{}", own.text);
+        let big = netlist_for_sim(&parse_asc(&follower.replace("SYMATTR InstName U1", "SYMATTR InstName U1\nSYMATTR SpiceLine Aol=1G")), &mut Library::builtin());
+        assert!(big.warnings.iter().any(|w| w.starts_with("U1: Aol above 1Meg")), "{:?}", big.warnings);
         assert!(!f.text.contains("Rsense_XU1_2") && f.text.contains("Rsense_XU1 "), "In+ is held by V1, out only by U1 itself: {}", f.text);
         let lone = netlist_for_sim(&parse_asc("SYMBOL Opamps\\opamp 0 0 R0\nSYMATTR InstName U1\nTEXT 0 200 Left 2 !.op\n"), &mut Library::builtin());
         assert_eq!(lone.text.matches(" 0 1T").count(), 3, "open pins: held, so nothing floats: {}", lone.text);

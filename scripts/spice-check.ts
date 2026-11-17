@@ -248,8 +248,8 @@ assert.equal(numInfo("1Meg", "Hz")!.text, "= 1MegHz"); // not "1M", the milli tr
   assert.equal(twoPortIn("Zin(V1)", one), '((v("in")-0)/(-I(V1)))');
   assert.equal(twoPortIn("S21(V1)", one), "S21(V1)");
   { // nomospice's own op-amp: a model whose insides the operating point leaves out; a .subckt of the user's, a block: not
-    const nlm = { ...two, text: "XU1 B N001 VCC VEE N002 opamp2 Aol=100K\nXS1 a b mysub\nX1 a b blk", nets: [["B", "N001", "VCC", "VEE", "N002"], ["a", "b"], ["a", "b"]], insts: ["XU1", "XS1", "X1"], sheets: ["", "", "blk"] };
-    assert.deepEqual([0, 1, 2].map((i) => modelSub(nlm, i)), [true, false, false]); }
+    const nlm = { ...two, insts: ["XU1", "XS1", "X1"], sheets: ["", "", "blk"], own_models: [true, false, false] };
+    assert.deepEqual([0, 1, 2].map((i) => modelSub(nlm, i)), [true, false, false]); assert.equal(modelSub(two, 0), false); }
   for (const more of ["V2 x 0 AC 1", "V2 x 0 AC=1", "V2 x 0 AC=\n+ 1", "V2 x 0 DC 0\n# c\n+ AC 1", "V2 x 0 acmag=1", "V2 x 0 DC 0,AC 1", "V2 x 0 DC 0\n+ AC 1", ".subckt blk a b\nV1 a b AC 1\n.ends", ".subckt blk n1 n2 params: a=1\nV2 n1 n2 AC {a}\n.ends"]) assert.equal(twoPortIn("Zin(V1)", { ...two, text: two.text + "\n" + more }), "Zin(V1)", more); // (another AC drive: left)
   for (const more of ["V2 x 0 DC 5 AC 0V", "V2 x 0 DC 5 ; AC 1 later", "V2 x 0 DC 5 // AC 1", "Vsense y 0 0"]) assert.equal(twoPortIn("S21(V1)", { ...two, text: two.text + "\n" + more }), twoPortIn("S21(V1)", two), more); // (none)
   for (const more of ["V2 x 0 AC {0+g}", ".param a=1\nV2 x 0 AC {a}"]) assert.equal(twoPortIn("Zin(V1)", { ...two, text: two.text + "\n" + more }), "Zin(V1)", more); // (in doubt: left)

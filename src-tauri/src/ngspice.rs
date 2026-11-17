@@ -545,7 +545,7 @@ pub fn run_until(netlist: &Prepared, stop: &dyn Fn() -> bool) -> Result<Run, Vec
     // (ngspice 47's last resort after gmin and source stepping: a transient run, whose end is not
     // always the operating point: a high-gain loop's slow pole, a latch)
     if log.iter().any(|l| l.contains("Transient op finished")) {
-        let w = "Warning: ngspice found no operating point by gmin or source stepping; the values are where a transient run ended: check them".to_string();
+        let w = "Warning: ngspice found no operating point by gmin or source stepping and took where a transient run ended instead: check the results".to_string();
         notes.push(w.clone());
         log.push(w);
     }
