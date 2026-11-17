@@ -51,7 +51,8 @@ function arcPath(p: number[]) {
 const DASH: Record<number, string> = { 1: "5 4", 2: "1 3", 3: "5 3 1 3", 4: "5 3 1 3 1 3" };
 
 /** A symbol's shape: line, rect, circle or arc, then its style. */
-function shapeEl(k: string, p: number[], key: number | string) {
+/** One shape of a symbol (its .asy's LINE, RECT, CIRCLE, ARC). */
+export function shapeEl(k: string, p: number[], key: number | string) {
   const s = { vectorEffect: "non-scaling-stroke", strokeDasharray: DASH[p[k === "arc" ? 8 : 4]] } as const;
   return k === "line" ? <line key={key} {...s} x1={p[0]} y1={p[1]} x2={p[2]} y2={p[3]} />
   : k === "rect" ? <rect key={key} {...s} x={Math.min(p[0], p[2])} y={Math.min(p[1], p[3])} width={Math.abs(p[2] - p[0])} height={Math.abs(p[3] - p[1])} />
@@ -75,7 +76,7 @@ function SymbolGraphics({ def }: { def: SymbolDef }) {
 }
 
 /** A symbol's TEXT lines (≥1, 1D …), placed as the part is turned but upright, never mirrored. */
-function SymTexts({ def, it }: { def: SymbolDef; it: Extract<Item, { t: "sym" }> }) {
+export function SymTexts({ def, it }: { def: SymbolDef; it: Extract<Item, { t: "sym" }> }) {
   return (
     <g fill="currentColor" stroke="none">
       {def.texts?.map(([x, y, just, size, t], i) => {

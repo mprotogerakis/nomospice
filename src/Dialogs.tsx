@@ -2,9 +2,11 @@ import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { message, open } from "@tauri-apps/plugin-dialog";
-import type { Item, LibEntry, LibSource } from "./types";
-import { addTrace, analysisItem, commit, currentTab, fileName, forDoc, isSymbolDoc, loadSymbols, placePart, placeSymbol, setPlot, setYAxis, useS } from "./store";
-import { defOf, funcsIn, NET_DIRECTIVE, pinLine, portOf, POWER_ANY, powersIn, prefixOf, twoPortIn, vexpr } from "./geom";
+import type { Item, LibEntry, LibSource, SymbolDef } from "./types";
+import { addTrace, analysisItem, commit, currentTab, dirOf, fileName, forDoc, isSymbolDoc, loadSymbols, placePart, placeSymbol, setPlot, setYAxis, useS } from "./store";
+import { defOf, funcsIn, NET_DIRECTIVE, pinLine, portOf, POWER_ANY, powersIn, prefixOf, symBox, symKey, twoPortIn, vexpr } from "./geom";
+import { MODEL_GROUPS, modelGroup, PART_GROUPS, partGroup, pinSide, remember, sourceGroups, type SourceGroup } from "./catalog";
+import { shapeEl, SymTexts } from "./Schematic";
 import { Button } from "./ui/button";
 import { closeDialog as close, Field, FIELD, Modal, numHelp, NumField, Rows, Select, TextField } from "./ui/dialog";
 import { SourceEditor } from "./SourceEditor";
@@ -197,58 +199,147 @@ function SymbolAttrs() {
   );
 }
 
-const KINDS: [string, string | null][] = [
-  ["All", null], ["Symbols", "SYMBOL"], ["Diodes", "D"], ["BJT", "NPN|PNP"], ["MOSFET", "NMOS|PMOS|VDMOS"], ["JFET", "NJF|PJF"], ["Subcircuits", "SUBCKT"],
-];
+/** The parts placed last (the tree's first group), kept per user. */
+const RECENT = "nomospice.recentParts";
+const readRecent = (): LibEntry[] => {
+  try {
+    const r = JSON.parse(localStorage.getItem(RECENT) ?? "[]");
+    return Array.isArray(r) ? r : [];
+  } catch {
+    return [];
+  }
+};
 
-/** Component library: the symbols plus every model and subcircuit of the configured libraries
- *  (LTspice, Micro-Cap 12, own folders), searchable; places a part with the matching symbol. */
+/** A row of the library's tree: a group (open or not, how many in it) or a part. */
+interface TreeRow { key: string; depth: number; label: string; count?: number; open?: boolean; entry?: LibEntry; loading?: boolean }
+
+const symbolEntry = (d: SymbolDef): LibEntry => ({ name: d.name, kind: "SYMBOL", pins: d.pins.map((p) => p.name), source: d.desc || (d.sheet ? `block: ${fileName(d.sheet)}` : ""), file: "", symbol: d.name });
+
+/** Component library: a tree of nomospice's symbols (by what they are), the schematic folder's and
+ *  blocks, the model libraries' models and subcircuits (by kind, then library), and the parts used
+ *  last; a search filters it. The selected part is drawn as it will be placed, with its pins. */
 function PartsDialog({ replace, kind0, libraries }: { replace?: number; kind0?: string; libraries?: boolean }) {
   const lib = useS((s) => s.lib);
   const [q, setQ] = useState("");
-  const [kind, setKind] = useState<string | null>(kind0 ?? null);
-  const [hits, setHits] = useState<LibEntry[]>([]);
-  const [i, setI] = useState(0);
-  const [text, setText] = useState("");
   const [view, setView] = useState<"parts" | "sources">(libraries ? "sources" : "parts");
   const [start, setStart] = useState<"add" | "microcap">(); // the empty-library hint's buttons act at once
   // no library in use: say where they come from (the settings are otherwise one click away)
   const [srcs, setSrcs] = useState<LibSource[] | null>(null);
   useEffect(() => void invoke<LibSource[]>("library_sources").then(setSrcs, () => {}), [view]);
+  // (choosing a part's model: only models of its kind, `NPN|PNP`)
+  const kinds = kind0?.toUpperCase().split("|");
+  const fits = (kind: string) => !kinds || kinds.includes(kind.toUpperCase());
+  const [groups, setGroups] = useState<SourceGroup[]>([]);
+  useEffect(() => void invoke<[string, string, number][]>("library_groups").then((g) => setGroups(sourceGroups(g)), () => {}), [view]);
+  const [lists, setLists] = useState<Record<string, LibEntry[] | "loading">>({});
+  useEffect(() => setLists({}), [view]); // (back from the library list: read again)
+  const [found, setFound] = useState<LibEntry[]>([]);
+  const [recent, setRecent] = useState(readRecent);
+  // open groups: nomospice's own and the recent ones; a library's models when choosing one
+  const [open, setOpen] = useState(() => new Set(["recent", ...PART_GROUPS.map((g) => `p:${g}`), ...(kind0 ? MODEL_GROUPS.map(([g]) => `m:${g}`) : [])]));
+  const [sel, setSel] = useState("");
+  const [hi, setHi] = useState<number | null>(null); // a pin pointed at in the preview's list
+  const [text, setText] = useState("");
   const listRef = useRef<HTMLUListElement>(null);
-  // only real pointer movement highlights: rows scrolled under a resting pointer must not steal it
-  const last = useRef<[number, number]>([0, 0]);
-  const hover = (e: React.MouseEvent, j: number) => {
-    if (e.clientX === last.current[0] && e.clientY === last.current[1]) return;
-    last.current = [e.clientX, e.clientY];
-    setI(j);
-  };
-  // braces: Chromium's (WebView2) scrollIntoView returns a Promise, which React would call as the cleanup
-  useEffect(() => { listRef.current?.children[i]?.scrollIntoView({ block: "nearest" }); }, [i]);
-  const symbols = useMemo<LibEntry[]>(
-    () => Object.values(lib).filter((d) => !d.name.startsWith("subckt:")).map((d) => ({ name: d.name, kind: "SYMBOL", pins: d.pins.map((p) => p.name), source: d.desc || (d.sheet ? `block: ${fileName(d.sheet)}` : ""), file: "", symbol: d.name })),
-    [lib],
-  );
+  const ql = q.trim().toLowerCase();
   useEffect(() => {
     let live = true;
+    if (!ql) return void setFound([]);
     const t = setTimeout(async () => {
-      const ql = q.trim().toLowerCase();
-      const syms = kind && kind !== "SYMBOL" ? [] : symbols.filter((s) => `${s.name} ${s.source}`.toLowerCase().includes(ql)).sort((a, b) => a.name.localeCompare(b.name));
-      const found = kind === "SYMBOL" || (!ql && !kind) ? [] : await invoke<LibEntry[]>("library_search", { query: ql, kind, limit: 300 });
-      if (live) setHits([...syms, ...found]), setI(0);
-    }, 60);
+      const hits = await invoke<LibEntry[]>("library_search", { query: ql, kind: kind0 ?? null, limit: 300 }).catch(() => []);
+      if (live) setFound(hits);
+    }, 80);
     return () => ((live = false), clearTimeout(t));
-  }, [q, kind, symbols, view]); // view: back from the library list, results reflect its changes
-  const cur = hits[i];
+  }, [ql, kind0, view]);
+  const load = (key: string, g: SourceGroup) => {
+    if (lists[key]) return;
+    setLists((l) => ({ ...l, [key]: "loading" }));
+    // (a library of thousands: the first 500 by name; a search finds the rest)
+    void invoke<LibEntry[]>("library_list", { kind: g.kinds, source: g.source, limit: 500 }).then((es) => setLists((l) => ({ ...l, [key]: es })), () => setLists((l) => ({ ...l, [key]: [] })));
+  };
+  const rows = useMemo(() => {
+    const out: TreeRow[] = [];
+    const searching = !!ql;
+    const group = (key: string, label: string, count: number, depth: number, children: () => void) => {
+      const o = searching || open.has(key);
+      out.push({ key, label, count, depth, open: o });
+      if (o) children();
+    };
+    const leaves = (parent: string, es: LibEntry[], depth: number) => es.forEach((entry) => out.push({ key: `${parent}/${entry.kind}:${entry.name}`, label: entry.name, depth, entry }));
+    const shown = recent.filter((e) => (e.kind === "SYMBOL" ? !kinds : fits(e.kind)) && (!searching || e.name.toLowerCase().includes(ql)));
+    if (shown.length && !searching) group("recent", "Recently used", shown.length, 0, () => leaves("recent", shown, 1));
+    if (!kinds) {
+      const symbols = Object.values(lib).filter((d) => !d.name.startsWith("subckt:") && (!searching || `${d.name} ${d.desc}`.toLowerCase().includes(ql)));
+      for (const g of PART_GROUPS) {
+        const ds = symbols.filter((d) => partGroup(d) === g).sort((a, b) => a.name.localeCompare(b.name));
+        if (ds.length) group(`p:${g}`, g, ds.length, 0, () => leaves(`p:${g}`, ds.map(symbolEntry), 1));
+      }
+    }
+    // the libraries' models: a search's hits, else the libraries by kind and source (read when opened)
+    const labels = [...MODEL_GROUPS.map(([g]) => g), "Other models"];
+    if (searching) {
+      const hits = found.filter((e) => fits(e.kind));
+      for (const label of labels) {
+        const of = hits.filter((e) => modelGroup(e.kind) === label);
+        if (!of.length) continue;
+        group(`m:${label}`, label, of.length, 0, () => {
+          for (const source of [...new Set(of.map((e) => e.source))]) {
+            const es = of.filter((e) => e.source === source);
+            group(`m:${label}/${source}`, source, es.length, 1, () => leaves(`m:${label}/${source}`, es, 2));
+          }
+        });
+      }
+    } else {
+      const gs = groups.filter((g) => g.kinds.split("|").some(fits));
+      for (const label of labels) {
+        const of = gs.filter((g) => g.group === label);
+        if (!of.length) continue;
+        group(`m:${label}`, label, of.reduce((n, g) => n + g.count, 0), 0, () => {
+          for (const g of of) {
+            const key = `m:${label}/${g.source}`, l = lists[key];
+            group(key, g.source, g.count, 1, () => (l === "loading" || !l ? out.push({ key: `${key}/…`, label: "…", depth: 2, loading: true }) : leaves(key, l.filter((e) => fits(e.kind)), 2)));
+          }
+        });
+      }
+    }
+    return out;
+  }, [ql, open, recent, lib, found, groups, lists, kind0]); // eslint-disable-line react-hooks/exhaustive-deps
+  // (an open source group is read: also one opened by a search's end or before it loaded)
+  useEffect(() => {
+    if (ql) return;
+    for (const g of groups) {
+      const key = `m:${g.group}/${g.source}`;
+      if (open.has(key) && open.has(`m:${g.group}`) && !lists[key]) load(key, g);
+    }
+  }, [open, groups, ql]); // eslint-disable-line react-hooks/exhaustive-deps
+  // the selection: kept while it is shown, else the first part
+  const at = rows.findIndex((r) => r.key === sel);
+  const i = at >= 0 ? at : Math.max(0, rows.findIndex((r) => r.entry));
+  const row = rows[i], cur = row?.entry;
+  useEffect(() => { listRef.current?.children[i]?.scrollIntoView({ block: "nearest" }); }, [i]);
   useEffect(() => {
     let live = true;
+    setHi(null);
     if (cur && cur.kind !== "SYMBOL") invoke<string | null>("library_text", { name: cur.name }).then((t) => live && setText(t ?? ""), () => live && setText(""));
     else setText("");
     return () => void (live = false);
   }, [cur]);
+  const toggle = (r: TreeRow, to = !r.open) => {
+    if (r.entry || r.loading || ql) return;
+    const next = new Set(open);
+    if (to) next.add(r.key);
+    else next.delete(r.key);
+    setOpen(next);
+  };
   const pick = async (e = cur) => {
-    if (!e || !e.symbol) return; // nothing, or a model type without a symbol (switch, core ...): stay open
+    if (!e) return row && toggle(row); // (a group: Enter opens or closes it)
+    if (!e.symbol) return; // a model type without a symbol (switch, core ...): stay open
     if (isSymbolDoc(useS.getState().path) && replace == null) return void message("A symbol holds no parts: open a schematic to place one.", { title: "nomospice" });
+    const next = remember(recent, e);
+    setRecent(next);
+    try {
+      localStorage.setItem(RECENT, JSON.stringify(next));
+    } catch { /* (no storage: the list is this dialog's only) */ }
     close();
     const { items } = useS.getState();
     const target = replace != null ? items[replace] : undefined;
@@ -264,6 +355,7 @@ function PartsDialog({ replace, kind0, libraries }: { replace?: number; kind0?: 
   // distinct keys: switching views mounts a fresh dialog, so focus lands in the new view
   if (view === "sources") return <Modal key="sources" title="Model Libraries" wide="xl" ok="Done" onSubmit={() => (libraries ? close() : (setStart(undefined), setView("parts")))}><Sources start={start} /></Modal>;
   const setUp = (s: "add" | "microcap") => (setStart(s), setView("sources"));
+  const move = (to: number) => rows[to] && setSel(rows[to].key);
   return (
     <Modal key="parts" title={replace != null ? "Choose Model" : "Component Library"} wide="xl" ok={replace != null ? "Use model" : "Place"} onSubmit={() => pick()}>
       <div className="flex gap-2">
@@ -271,8 +363,15 @@ function PartsDialog({ replace, kind0, libraries }: { replace?: number; kind0?: 
           data-autofocus className={FIELD} placeholder="Search symbols, models, subcircuits… (e.g. 2N2222, 1N4148, TL072)" value={q}
           onChange={(e) => setQ(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "ArrowDown") e.preventDefault(), setI(Math.min(i + 1, hits.length - 1));
-            if (e.key === "ArrowUp") e.preventDefault(), setI(Math.max(i - 1, 0));
+            if (e.key === "ArrowDown") e.preventDefault(), move(Math.min(i + 1, rows.length - 1));
+            if (e.key === "ArrowUp") e.preventDefault(), move(Math.max(i - 1, 0));
+            // (in a group: right opens it, left closes it; in a part: left goes to its group)
+            if (e.key === "ArrowRight" && row && !row.entry && !row.open) e.preventDefault(), toggle(row, true);
+            if (e.key === "ArrowLeft" && row && !q) {
+              e.preventDefault();
+              if (!row.entry && row.open) toggle(row, false);
+              else move(rows.slice(0, i).map((r) => r.depth < row.depth && !r.entry).lastIndexOf(true));
+            }
           }}
         />
         <Button type="button" onClick={() => setView("sources")}>Libraries…</Button>
@@ -284,43 +383,90 @@ function PartsDialog({ replace, kind0, libraries }: { replace?: number; kind0?: 
           <Button type="button" size="sm" onClick={() => setUp("add")}>Add folder…</Button>
         </div>
       )}
-      <div className="flex flex-wrap gap-1">
-        {KINDS.map(([label, k]) => (
-          <button key={label} type="button" onClick={() => setKind(k)}
-            className={cn("h-5 rounded-control border px-2 text-2xs", kind === k ? "border-selection bg-selection-soft text-text-strong" : "border-border-control text-text-secondary hover:bg-surface-hover")}>
-            {label}
-          </button>
-        ))}
-      </div>
-      <div className="grid h-80 grid-cols-[1fr_1.1fr] gap-2">
-        <ul ref={listRef} className="overflow-auto rounded-control border border-border">
-          {hits.map((e, j) => (
-            <li key={`${e.kind}:${e.name}`}>
-              <button type="button" onClick={() => pick(e)} onMouseMove={(ev) => hover(ev, j)}
-                className={cn("flex h-[24px] w-full items-center gap-2 px-2 text-left text-xs", j === i ? "bg-menu-highlight text-text-strong" : "text-text")}>
-                <span className="min-w-0 flex-1 truncate font-mono">{e.name}</span>
-                <span className="w-14 shrink-0 font-mono text-2xs text-text-tertiary">{e.kind === "SYMBOL" ? "symbol" : e.kind.toLowerCase()}</span>
-                <span className="w-24 shrink-0 truncate text-2xs text-text-tertiary">{e.source}</span>
+      <div className="grid h-[26rem] grid-cols-[minmax(15rem,1fr)_1.3fr] gap-2">
+        <ul ref={listRef} role="tree" aria-label="Components" className="overflow-auto rounded-control border border-border py-0.5">
+          {rows.map((r, j) => (
+            <li key={r.key} role="treeitem" aria-expanded={r.entry ? undefined : r.open} aria-selected={j === i}>
+              <button type="button" onClick={() => (setSel(r.key), r.entry || toggle(r))} onDoubleClick={() => r.entry && pick(r.entry)}
+                style={{ paddingLeft: 6 + r.depth * 14 }}
+                className={cn("flex h-[24px] w-full items-center gap-1.5 pr-2 text-left text-xs", j === i ? "bg-menu-highlight text-text-strong" : "text-text", r.loading && "text-text-tertiary")}>
+                {!r.entry && !r.loading && <span className="w-3 shrink-0 text-text-tertiary">{r.open ? "▾" : "▸"}</span>}
+                {r.entry ? (
+                  <>
+                    <span className="min-w-0 flex-1 truncate font-mono">{r.label}</span>
+                    {r.entry.kind !== "SYMBOL" && <span className="shrink-0 font-mono text-2xs text-text-tertiary">{r.entry.kind.toLowerCase()}</span>}
+                  </>
+                ) : (
+                  <>
+                    <span className={cn("min-w-0 flex-1 truncate", !r.loading && r.depth === 0 && "font-medium")}>{r.label}</span>
+                    {r.count != null && <span className="shrink-0 text-2xs text-text-tertiary">{r.count}</span>}
+                  </>
+                )}
               </button>
             </li>
           ))}
-          {!hits.length && <li className="p-3 text-xs text-text-tertiary">{q || kind ? "Nothing found." : "Type to search the symbols and model libraries."}</li>}
+          {!rows.length && <li className="p-3 text-xs text-text-tertiary">{q ? "Nothing found." : "No parts."}</li>}
         </ul>
         <div className="min-w-0 overflow-auto rounded-control border border-border bg-surface-raised p-2">
           {cur ? (
             <>
               <div className="font-mono text-sm text-text-strong">{cur.name}</div>
               <div className="text-2xs text-text-tertiary">
-                {cur.kind === "SYMBOL" ? `symbol · ${cur.source}` : `${cur.kind === "SUBCKT" ? "subcircuit" : `${cur.kind} model`} · ${cur.source} · ${cur.symbol ? `placed as ${cur.symbol.replace("subckt:", "box ")}` : "no symbol for this model type: use it via a directive"}`}
+                {cur.kind === "SYMBOL" ? `symbol${cur.source ? ` · ${cur.source}` : ""}` : `${cur.kind === "SUBCKT" ? "subcircuit" : `${cur.kind} model`} · ${cur.source} · ${cur.symbol ? `placed as ${cur.symbol.replace("subckt:", "box ")}` : "no symbol for this model type: use it via a directive"}`}
               </div>
-              {cur.pins.length > 0 && <div className="mt-1 text-2xs text-text-secondary">pins: {cur.pins.join(" · ")}</div>}
+              {cur.symbol && <SymbolPreview name={cur.symbol} hi={hi} />}
+              {cur.pins.length > 0 && (
+                <div className="mt-1 flex flex-wrap items-center gap-1 text-2xs text-text-secondary">
+                  pins:
+                  {cur.pins.map((p, k) => (
+                    <span key={k} onMouseEnter={() => setHi(k)} onMouseLeave={() => setHi(null)}
+                      className={cn("rounded-control border px-1 font-mono", hi === k ? "border-selection bg-selection-soft text-text-strong" : "border-border")}>{p || k + 1}</span>
+                  ))}
+                </div>
+              )}
+              {cur.kind === "SYMBOL" && ((d) => d?.spice_line && <div className="mt-1 font-mono text-2xs text-text-secondary">{d.spice_line}</div>)(lib[symKey(cur.name)])}
               {cur.file && <div className="mt-1 truncate text-2xs text-text-tertiary" title={cur.file}>{cur.file}</div>}
               {text && <pre className="mt-2 font-mono text-2xs leading-4 whitespace-pre-wrap text-text">{text.length > 6000 ? text.slice(0, 6000) + "\n…" : text}</pre>}
             </>
-          ) : <div className="text-xs text-text-tertiary">No selection</div>}
+          ) : <div className="text-xs text-text-tertiary">{row ? "Open a group: double-click or Enter places a part." : "No selection"}</div>}
         </div>
       </div>
     </Modal>
+  );
+}
+
+/** A symbol drawn as it is placed (unturned), its pins marked and named; pin `hi` highlighted. */
+function SymbolPreview({ name, hi }: { name: string; hi: number | null }) {
+  const path = useS((s) => s.path);
+  const known = useS((s) => s.lib[symKey(name)]);
+  const [fetched, setFetched] = useState<SymbolDef>();
+  useEffect(() => {
+    let live = true;
+    setFetched(undefined);
+    // (a library subcircuit's box, a symbol not loaded yet: asked for, as placing would)
+    if (!known) void invoke<SymbolDef[]>("symbols", { names: [name], dir: dirOf(path) }).then((ds) => live && setFetched(ds.find((d) => symKey(d.name) === symKey(name))), () => {});
+    return () => void (live = false);
+  }, [name, known, path]);
+  const def = known ?? fetched;
+  if (!def) return <div className="my-2 grid h-40 place-items-center text-2xs text-text-tertiary">…</div>;
+  const it: Extract<Item, { t: "sym" }> = { t: "sym", sym: def.name, x: 0, y: 0, rot: "R0", attrs: {} };
+  const [x0, y0, x1, y1] = symBox(it, def), pad = 28;
+  const anchor = { left: "end", right: "start", top: "middle", bottom: "middle" } as const;
+  return (
+    <svg viewBox={`${x0 - pad} ${y0 - pad} ${x1 - x0 + 2 * pad} ${y1 - y0 + 2 * pad}`} className="my-2 h-44 w-full text-text-strong" aria-label={`symbol ${def.name}`}>
+      <g fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round">{def.shapes.map(([k, p], j) => shapeEl(k, p, j))}</g>
+      <SymTexts def={def} it={it} />
+      {def.pins.map((p, k) => {
+        const side = pinSide(def, p), on = hi === k;
+        const [dx, dy] = { left: [-5, 0], right: [5, 0], top: [0, -6], bottom: [0, 12] }[side];
+        return (
+          <g key={k} className={on ? "fill-[var(--selection)]" : "fill-[var(--text-tertiary)]"}>
+            <circle cx={p.x} cy={p.y} r={on ? 4.5 : 2.5} />
+            {p.name && <text x={p.x + dx} y={p.y + dy} fontSize={9} textAnchor={anchor[side]} dominantBaseline={side === "left" || side === "right" ? "middle" : "auto"}>{p.name}</text>}
+          </g>
+        );
+      })}
+    </svg>
   );
 }
 

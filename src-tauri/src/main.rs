@@ -981,6 +981,20 @@ async fn library_search(query: String, kind: Option<String>, limit: usize) -> Ve
     .unwrap_or_default()
 }
 
+/// The library's entries counted by kind and source (the component library's tree).
+#[tauri::command]
+async fn library_groups() -> Vec<(String, String, usize)> {
+    tauri::async_runtime::spawn_blocking(|| library::index().as_ref().map(|ix| ix.groups()).unwrap_or_default()).await.unwrap_or_default()
+}
+
+/// The entries of one source and kind (`NPN|PNP`), by name, at most `limit`.
+#[tauri::command]
+async fn library_list(kind: String, source: String, limit: usize) -> Vec<library::Entry> {
+    tauri::async_runtime::spawn_blocking(move || library::index().as_ref().map(|ix| ix.list(&kind, &source, limit).into_iter().cloned().collect()).unwrap_or_default())
+        .await
+        .unwrap_or_default()
+}
+
 #[tauri::command]
 async fn library_text(name: String) -> Option<String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -1377,7 +1391,7 @@ fn main() {
         .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![symbols, examples, path_exists, open_asc, save_asc, block_symbol, export_svg, export_raw, netlist, simulate, root_locus, cancel_locus, folder_symbols, trace, run_id, halt, cli_args, recovery_save, recovery_take, recovery_count, recovery_resolve, recovery_clear,
             new_window, window_count, doc_path, doc_window, quit_answer, quit_waiting, unsaved_windows, scene, scene_shot, scene_log, scene_done,
-            library_sources, library_set_sources, library_search, library_text, library_fetch_microcap,
+            library_sources, library_set_sources, library_search, library_groups, library_list, library_text, library_fetch_microcap,
             git_status, git_log, git_show, git_commit, git_init])
         .setup(|app| {
             use tauri::Manager;

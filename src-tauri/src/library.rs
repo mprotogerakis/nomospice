@@ -223,6 +223,25 @@ impl Index {
 
     /// Case-insensitive substring search over names; exact and prefix matches first.
     /// `kind`: one type or several separated by `|` (`NPN|PNP`).
+    /// Its entries counted by kind and source (the component library's tree): (kind, source, count),
+    /// sorted by both.
+    pub fn groups(&self) -> Vec<(String, String, usize)> {
+        let mut counts = std::collections::BTreeMap::<(String, String), usize>::new();
+        for e in &self.entries {
+            *counts.entry((e.kind.to_uppercase(), e.source.clone())).or_default() += 1;
+        }
+        counts.into_iter().map(|((k, s), n)| (k, s, n)).collect()
+    }
+
+    /// The entries of one source and kind (`D`, or several: `NPN|PNP`), by name, at most `limit`.
+    pub fn list(&self, kind: &str, source: &str, limit: usize) -> Vec<&Entry> {
+        let kinds: Vec<&str> = kind.split('|').collect();
+        let mut v: Vec<&Entry> = self.entries.iter().filter(|e| e.source == source && kinds.iter().any(|k| e.kind.eq_ignore_ascii_case(k))).collect();
+        v.sort_by_cached_key(|e| e.name.to_lowercase());
+        v.truncate(limit);
+        v
+    }
+
     pub fn search(&self, query: &str, kind: Option<&str>, limit: usize) -> Vec<&Entry> {
         let q = query.trim().to_lowercase();
         let kinds: Option<Vec<&str>> = kind.map(|k| k.split('|').collect());
@@ -431,6 +450,12 @@ mod tests {
         let kind = ix.resolve("KIND", &mut HashSet::new());
         assert_eq!(kind[0], ".model KIND NPN(BF=50 mfg=Y)", "{kind:?}");
         assert_eq!(ix.search("a", Some("SUBCKT"), 10).len(), 1);
+        // the tree: counted by kind and source, listed by name
+        let groups = ix.groups();
+        assert!(groups.contains(&("NPN".into(), "test".into(), 3)) && groups.contains(&("SUBCKT".into(), "test".into(), 1)), "{groups:?}");
+        let npn: Vec<&str> = ix.list("NPN|PNP", "test", 10).iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(npn, ["BASE", "KIND", "QX"]);
+        assert_eq!(ix.list("NPN", "test", 2).len(), 2);
         std::fs::remove_dir_all(dir).ok();
     }
 }

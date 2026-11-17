@@ -1,6 +1,7 @@
 // Self-check of src/spice.ts (the form editors' SPICE parsing/formatting): node scripts/spice-check.ts
 import assert from "node:assert/strict";
 import { box, connectivity, dragPlan, expandPowers, funcsIn, funcsLeft, hit, modelSub, outline, POWER_CALL, powersIn, shifted, twoPortIn } from "../src/geom.ts";
+import { modelGroup, partGroup, pinSide, remember, sourceGroups } from "../src/catalog.ts";
 import {
   tokens, formatAnalysis, formatIc, formatInclude, formatMeas, formatModel, formatParams, formatSource, numInfo, parseAnalysis,
   parseIc, parseInclude, parseMeas, parseModel, parseParams, parseSource, sample, si, spiceNum, directiveKind, analysisRoundTrips, analysisEditable, analysisOptions, analysisLineIndex, at, integrate, stripAnalyses, portablePaths, sourceRoundTrips,
@@ -398,3 +399,17 @@ assert.equal(setParam("l= Lmin w=1u", "l", "2u"), "l=2u w=1u");
 }
 
 console.log("spice-check: ok");
+
+{ // the component library's tree (catalog.ts)
+  const def = (name: string, more: object = {}) => ({ name, prefix: "", value: "", spice_line: "", desc: "", pins: [], shapes: [], windows: {}, pin_labels: false, ...more });
+  assert.deepEqual(["res", "opamp2", "and2", "NPN", "tline"].map((n) => partGroup(def(n))), ["Passive", "Op-amps", "Logic", "Transistors", "Switches and lines"]);
+  assert.equal(partGroup(def("amp", { sheet: "/x/amp.asc" })), "Blocks"); assert.equal(partGroup(def("res", { file: "/x/res.asy" })), "This folder"); assert.equal(partGroup(def("LT1001")), "Other symbols");
+  assert.deepEqual(["D", "npn", "VDMOS", "SUBCKT", "SW"].map(modelGroup), ["Diode models", "BJT models", "MOSFET models", "Subcircuits", "Other models"]);
+  // (kinds of one group and source merged; groups in the tree's order, sources by name)
+  assert.deepEqual(sourceGroups([["SUBCKT", "lt", 5], ["NPN", "mc", 2], ["PNP", "mc", 3], ["D", "mc", 1]]), [
+    { group: "Diode models", source: "mc", kinds: "D", count: 1 }, { group: "BJT models", source: "mc", kinds: "NPN|PNP", count: 5 }, { group: "Subcircuits", source: "lt", kinds: "SUBCKT", count: 5 }]);
+  const e = (name: string) => ({ name, kind: "D", pins: [], source: "", file: "", symbol: "diode" });
+  assert.deepEqual(remember([e("a"), e("b"), e("c")], e("b"), 2).map((x) => x.name), ["b", "a"]);
+  const amp = def("opamp2", { pins: [{ x: -32, y: 80, name: "In+" }, { x: -32, y: 48, name: "In-" }, { x: 0, y: 32, name: "V+" }, { x: 0, y: 96, name: "V-" }, { x: 32, y: 64, name: "OUT" }] });
+  assert.deepEqual(amp.pins.map((p) => pinSide(amp, p)), ["left", "left", "top", "bottom", "right"]);
+}
