@@ -588,7 +588,8 @@ export function App() {
   };
 
   const run = s.sim?.run;
-  const warnings = s.warnings ?? [];
+  // (the netlist's, and the run's own: a .step not run, an operating point by ngspice's fallback)
+  const warnings = [...(s.warnings ?? []), ...(run?.notes ?? []).map((n) => n.replace(/^Warning: /, ""))];
   const errors = s.sim && !s.sim.run;
 
   const symbolDoc = isSymbolDoc(s.path); // (a symbol holds no parts, no ground)

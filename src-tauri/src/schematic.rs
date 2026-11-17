@@ -2963,16 +2963,19 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
                 spice_tokens(&def.spice_line).into_iter().filter(|t| !t.split_once('=').is_some_and(|(k, _)| given.contains(&k.to_ascii_lowercase()))).collect::<Vec<_>>().join(" ")
             })))
             .filter(|s| !s.is_empty()).map(|s| one_line(&s)).collect();
-        // (nomospice's op-amps take Aol up to 1Meg: a larger one said, it acts as 1Meg)
+        let given = format!("{value} {}", extra.join(" "));
+        // (nomospice's op-amps take Aol up to 1Meg: a larger one said, it acts as 1Meg; the last
+        // given counts, as in ngspice, `Aol = 1G` too)
         if nl.own_models[i] {
-            let given = format!("{value} {}", extra.join(" "));
-            let aol = spice_tokens(&given).iter().filter_map(|t| t.split_once('=')).find(|(k, _)| k.eq_ignore_ascii_case("aol")).and_then(|(_, v)| spice_num(v));
+            let low = given.to_ascii_lowercase();
+            let aol = param_defs(&given, &low).into_iter().filter(|(n, _)| n.eq_ignore_ascii_case("aol")).last().and_then(|(_, (a, e))| spice_num(&given[a..e]));
             if aol.is_some_and(|a| a > 1e6) {
-                nl.warnings.push(format!("{}: Aol above 1Meg acts as 1Meg (SPICE's operating point of a loop with more gain is not to be trusted)", attrs.get("InstName").map_or(inst.as_str(), String::as_str)));
+                let name = attrs.get("InstName").filter(|n| !n.is_empty()).unwrap_or(&inst);
+                nl.warnings.push(format!("{name}: Aol above 1Meg acts as 1Meg (SPICE's operating point of a loop with more gain is not to be trusted)"));
             }
         }
         // LTspice accepts Rser=... in Value too: value and extras go through one pass
-        let (rest, parasitics) = lt_instance_params(prefix, &inst, &format!("{value} {}", extra.join(" ")), &mut nl.warnings);
+        let (rest, parasitics) = lt_instance_params(prefix, &inst, &given, &mut nl.warnings);
         // (a block's: the parameters it passes, declared on the subcircuit; the others it gets from
         // its caller where its sheet has none, filled in once all its instances are known)
         let tag = block.as_ref().and_then(|(name, _)| {
@@ -4219,8 +4222,10 @@ SYMBOL half 400 300 R0\nSYMATTR InstName U4\nSYMATTR Value R=3k\nFLAG 352 300 a\
         assert!(f.own_models[u] && !f.own_models[f.insts.iter().position(|n| n == "V1").unwrap()], "{:?}", f.own_models);
         let own = netlist_for_sim(&parse_asc(&format!("{follower}TEXT 0 260 Left 2 !.subckt opamp a b c\\nR1 a c 1k\\n.ends opamp\n")), &mut Library::builtin());
         assert!(!own.own_models[u], "{}", own.text);
-        let big = netlist_for_sim(&parse_asc(&follower.replace("SYMATTR InstName U1", "SYMATTR InstName U1\nSYMATTR SpiceLine Aol=1G")), &mut Library::builtin());
-        assert!(big.warnings.iter().any(|w| w.starts_with("U1: Aol above 1Meg")), "{:?}", big.warnings);
+        for (line, said) in [("Aol=1G", true), ("Aol = 1G", true), ("Aol=1G Aol=100K", false)] {
+            let big = netlist_for_sim(&parse_asc(&follower.replace("SYMATTR InstName U1", &format!("SYMATTR InstName U1\nSYMATTR SpiceLine {line}"))), &mut Library::builtin());
+            assert_eq!(big.warnings.iter().any(|w| w.starts_with("U1: Aol above 1Meg")), said, "{line}: {:?}", big.warnings);
+        }
         assert!(!f.text.contains("Rsense_XU1_2") && f.text.contains("Rsense_XU1 "), "In+ is held by V1, out only by U1 itself: {}", f.text);
         let lone = netlist_for_sim(&parse_asc("SYMBOL Opamps\\opamp 0 0 R0\nSYMATTR InstName U1\nTEXT 0 200 Left 2 !.op\n"), &mut Library::builtin());
         assert_eq!(lone.text.matches(" 0 1T").count(), 3, "open pins: held, so nothing floats: {}", lone.text);
