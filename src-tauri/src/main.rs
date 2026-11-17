@@ -1,6 +1,7 @@
 // Prevents an extra console window on Windows in release.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod curves;
 mod git;
 mod laplace;
 mod library;
@@ -981,6 +982,58 @@ async fn library_search(query: String, kind: Option<String>, limit: usize) -> Ve
     .unwrap_or_default()
 }
 
+/// A library model's characteristic curves (curves.rs), run by a `nomospice --curve` process of its
+/// own (at most 10 s): the app's ngspice and its results stay as they are.
+#[tauri::command]
+async fn model_curve(name: String) -> Result<curves::Curves, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use std::io::{Read, Write};
+        let req = {
+            let ix = library::index();
+            let ix = ix.as_ref().ok_or("no model library")?;
+            let e = ix.get(&name).ok_or_else(|| format!("{name}: not in the libraries"))?;
+            if !curves::shown(&e.kind) {
+                return Err(format!("no curves for a {} model", e.kind));
+            }
+            curves::Request { kind: e.kind.clone(), name: e.name.clone(), defs: ix.resolve(&e.name, &mut std::collections::HashSet::new()) }
+        };
+        let mut child = std::process::Command::new(std::env::current_exe().map_err(|e| e.to_string())?)
+            .arg("--curve")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        child.stdin.take().ok_or("no stdin")?.write_all(&serde_json::to_vec(&req).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+        // (its output read while it runs: a full pipe would stall it)
+        let read = |mut r: Box<dyn Read + Send>| std::thread::spawn(move || {
+            let mut b = Vec::new();
+            let _ = r.read_to_end(&mut b);
+            b
+        });
+        let (out, err) = (read(Box::new(child.stdout.take().ok_or("no stdout")?)), read(Box::new(child.stderr.take().ok_or("no stderr")?)));
+        let start = std::time::Instant::now();
+        let status = loop {
+            if let Some(s) = child.try_wait().map_err(|e| e.to_string())? {
+                break s;
+            }
+            if start.elapsed() > std::time::Duration::from_secs(10) {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("the model's curves took too long".into());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        let (out, err) = (out.join().unwrap_or_default(), err.join().unwrap_or_default());
+        if !status.success() {
+            return Err(String::from_utf8_lossy(&err).lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("the model did not run").to_string());
+        }
+        serde_json::from_slice(&out).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// The library's entries counted by kind and source (the component library's tree).
 #[tauri::command]
 async fn library_groups() -> Vec<(String, String, usize)> {
@@ -1376,6 +1429,21 @@ fn main() {
     if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
         let _ = std::env::set_current_dir(home);
     }
+    if std::env::args().any(|a| a == "--curve") {
+        // a model's curves for the component library (curves.rs): its request on stdin, JSON out,
+        // in a process of its own so the app's ngspice and its results stay as they are
+        use std::io::Read;
+        let mut input = String::new();
+        let _ = std::io::stdin().read_to_string(&mut input);
+        match serde_json::from_str::<curves::Request>(&input).map_err(|e| e.to_string()).and_then(|r| curves::run(&r)) {
+            Ok(c) => println!("{}", serde_json::to_string(&c).unwrap_or_default()),
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
     if std::env::args().any(|a| a == "--mcp") {
         // MCP server on stdio instead of the GUI (same libraries as the app)
         if let Some(list) = config_dir().and_then(|d| std::fs::read(d.join("libraries.json")).ok()).and_then(|b| serde_json::from_slice(&b).ok()) {
@@ -1391,7 +1459,7 @@ fn main() {
         .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![symbols, examples, path_exists, open_asc, save_asc, block_symbol, export_svg, export_raw, netlist, simulate, root_locus, cancel_locus, folder_symbols, trace, run_id, halt, cli_args, recovery_save, recovery_take, recovery_count, recovery_resolve, recovery_clear,
             new_window, window_count, doc_path, doc_window, quit_answer, quit_waiting, unsaved_windows, scene, scene_shot, scene_log, scene_done,
-            library_sources, library_set_sources, library_search, library_groups, library_list, library_text, library_fetch_microcap,
+            library_sources, library_set_sources, library_search, library_groups, library_list, library_text, model_curve, library_fetch_microcap,
             git_status, git_log, git_show, git_commit, git_init])
         .setup(|app| {
             use tauri::Manager;

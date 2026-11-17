@@ -12,7 +12,7 @@ import { closeDialog as close, Field, FIELD, Modal, numHelp, NumField, Rows, Sel
 import { SourceEditor } from "./SourceEditor";
 import { SimDialog } from "./SimDialog";
 import { DirectiveDialog } from "./DirectiveDialog";
-import { analysisEditable, analysisEditableAt, analysisLine, analysisLineIndex, analysisOptions, balanced, exprUnit, FFT_DEFAULT, FFT_WINDOWS, getParam, paramValue, setParam, spiceNum, tokens, xUnitOf, type FftWindow } from "./spice";
+import { analysisEditable, analysisEditableAt, analysisLine, analysisLineIndex, analysisOptions, balanced, exprUnit, FFT_DEFAULT, FFT_WINDOWS, getParam, paramValue, setParam, spiceNum, tokens, xUnitOf, type FftWindow, si } from "./spice";
 import { cn, keys as shortcut } from "@/lib/utils";
 import thirdParty from "./third-party.json";
 import { checkForUpdate } from "./updater";
@@ -415,6 +415,7 @@ function PartsDialog({ replace, kind0, libraries }: { replace?: number; kind0?: 
                 {cur.kind === "SYMBOL" ? `symbol${cur.source ? ` · ${cur.source}` : ""}` : `${cur.kind === "SUBCKT" ? "subcircuit" : `${cur.kind} model`} · ${cur.source} · ${cur.symbol ? `placed as ${cur.symbol.replace("subckt:", "box ")}` : "no symbol for this model type: use it via a directive"}`}
               </div>
               {cur.symbol && <SymbolPreview name={cur.symbol} hi={hi} />}
+              {CURVE_KINDS.includes(cur.kind.toUpperCase()) && <CurvePreview name={cur.name} />}
               {cur.pins.length > 0 && (
                 <div className="mt-1 flex flex-wrap items-center gap-1 text-2xs text-text-secondary">
                   pins:
@@ -432,6 +433,61 @@ function PartsDialog({ replace, kind0, libraries }: { replace?: number; kind0?: 
         </div>
       </div>
     </Modal>
+  );
+}
+
+/** The model kinds whose characteristic curves the preview draws (curves.rs). */
+const CURVE_KINDS = ["D", "NPN", "PNP", "LPNP", "NMOS", "PMOS", "VDMOS", "NJF", "PJF"];
+interface Curves { x: string; y: string; curves: { label: string; x: number[]; y: number[] }[] }
+/** Curves by model name, or why there are none (a model's curves do not change while the app runs). */
+const curveCache = new Map<string, Curves | string>();
+
+/** A model's characteristic curves: a diode's I(V), a transistor's output curves per base current or
+ *  gate voltage; computed by a process of its own (model_curve), so a simulation's results stay. */
+function CurvePreview({ name }: { name: string }) {
+  const [got, setGot] = useState<Curves | string | undefined>(curveCache.get(name));
+  useEffect(() => {
+    let live = true;
+    setGot(curveCache.get(name));
+    if (curveCache.has(name)) return;
+    // (arrow keys run through the list: only the part rested on is computed)
+    const t = setTimeout(() => {
+      void invoke<Curves>("model_curve", { name }).then((c) => c, (e) => String(e)).then((c) => {
+        curveCache.set(name, c);
+        if (live) setGot(c);
+      });
+    }, 250);
+    return () => ((live = false), clearTimeout(t));
+  }, [name]);
+  if (got === undefined) return <div className="my-1 grid h-36 place-items-center text-2xs text-text-tertiary">computing its curves…</div>;
+  if (typeof got === "string") return <div className="my-1 text-2xs text-text-tertiary">no curves: {got}</div>;
+  const [w, h, l, b] = [320, 150, 46, 18]; // (left and bottom: the axes' numbers)
+  const xmax = Math.max(...got.curves.flatMap((c) => c.x), 1e-12), ymax = Math.max(...got.curves.flatMap((c) => c.y), 1e-12);
+  const px = (x: number) => l + (x / xmax) * (w - l - 8), py = (y: number) => h - b - (y / ymax) * (h - b - 8);
+  const unit = (axis: string) => (/V/.test(axis) ? "V" : "A");
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} className="my-1 h-40 w-full" aria-label={`curves of ${name}`}>
+      <g className="stroke-[var(--border-control)]" strokeWidth={1}>
+        <line x1={l} y1={h - b} x2={w - 8} y2={h - b} />
+        <line x1={l} y1={8} x2={l} y2={h - b} />
+      </g>
+      <g className="fill-[var(--text-tertiary)]" fontSize={9}>
+        <text x={l} y={h - 4} textAnchor="middle">0</text>
+        <text x={w - 8} y={h - 4} textAnchor="end">{si(xmax, unit(got.x), 2)}</text>
+        <text x={w / 2} y={h - 4} textAnchor="middle">{got.x}</text>
+        <text x={l - 3} y={12} textAnchor="end">{si(ymax, unit(got.y), 2)}</text>
+        <text x={l - 3} y={(h - b) / 2} textAnchor="end">{got.y}</text>
+      </g>
+      {got.curves.map((c, k) => {
+        const end = c.x.length - 1;
+        return (
+          <g key={k}>
+            <polyline fill="none" className="stroke-[var(--selection)]" strokeWidth={1.4} points={c.x.map((x, j) => `${px(x).toFixed(1)},${py(c.y[j]).toFixed(1)}`).join(" ")} />
+            {c.label && end >= 0 && <text x={px(c.x[end]) - 2} y={Math.max(py(c.y[end]) - 3, 9)} fontSize={8} textAnchor="end" className="fill-[var(--text-tertiary)]">{c.label}</text>}
+          </g>
+        );
+      })}
+    </svg>
   );
 }
 

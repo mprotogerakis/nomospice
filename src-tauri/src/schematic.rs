@@ -1369,6 +1369,12 @@ fn directive(line: &str, warnings: &mut Vec<String>) -> Option<String> {
 pub struct Prepared(String, Vec<Sensor>, Vec<String>);
 
 impl Prepared {
+    /// This deck with `steps` (`.step` statements) to run it by (the netlist's own come from it).
+    pub fn with_steps(mut self, steps: Vec<String>) -> Prepared {
+        self.2 = steps;
+        self
+    }
+
     pub fn text(&self) -> &str {
         &self.0
     }
