@@ -1644,6 +1644,30 @@ pub struct Sensor {
 }
 
 impl Netlist {
+    /// Its own-model marks as `deck` (the prepared one, includes inlined) runs them: a model the deck
+    /// defines twice at its top level is also an included file's, which ngspice takes, being first
+    /// (a block's .subckt of that name inside the block's is the block's own and does not count).
+    pub fn own_models_in(&mut self, deck: &str) {
+        let (mut depth, mut defs) = (0usize, HashMap::<String, usize>::new());
+        for l in deck.lines() {
+            let mut w = l.split_whitespace();
+            match w.next().map(str::to_ascii_lowercase).as_deref() {
+                Some(".subckt") => {
+                    if let Some(n) = w.next().filter(|_| depth == 0) {
+                        *defs.entry(n.to_ascii_lowercase()).or_default() += 1;
+                    }
+                    depth += 1;
+                }
+                Some(".ends") => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+        }
+        // (each part's model: the word after its nodes on its line)
+        let lines: HashMap<String, Vec<&str>> = self.text.lines().filter_map(|l| { let w: Vec<&str> = l.split_whitespace().collect(); Some((w.first()?.to_ascii_lowercase(), w)) }).collect();
+        let own: Vec<bool> = (0..self.own_models.len()).map(|i| self.own_models[i] && !lines.get(&self.insts[i].to_ascii_lowercase()).and_then(|w| w.get(1 + self.nets[i].len())).is_some_and(|m| defs.get(&m.to_ascii_lowercase()).is_some_and(|&n| n > 1))).collect();
+        self.own_models = own;
+    }
+
     /// The deck ngspice runs for this (simulation) netlist: includes inlined and filtered, its
     /// current sensors known. The GUI's simulation and root locus and MCP all run this. It reads the
     /// .include/.lib files (can be slow): call it on a blocking thread, without the library lock.
@@ -2945,9 +2969,8 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
         let defaults = !(builtin_symbol(&def.name) && own_model(&def.value.to_lowercase())) || def.value.eq_ignore_ascii_case(&model);
         if builtin_symbol(&def.name) && own_model(&model) {
             own_used.insert(model.clone());
-            // (a .subckt of the user's of that name runs instead)
-            // ponytail: one of an included file is not seen here (the includes are read in prepare):
-            // such a part counts as nomospice's model, its Aol said as capped; read them here if it bites
+            // (a .subckt of the user's of that name runs instead; one of an included file: see
+            // `own_models_in`, where a run has read the includes)
             nl.own_models[i] = !defined(&model);
         }
         if "DQMXJS".contains(prefix) && model.is_empty() {
@@ -2966,19 +2989,8 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
                 spice_tokens(&def.spice_line).into_iter().filter(|t| !t.split_once('=').is_some_and(|(k, _)| given.contains(&k.to_ascii_lowercase()))).collect::<Vec<_>>().join(" ")
             })))
             .filter(|s| !s.is_empty()).map(|s| one_line(&s)).collect();
-        let given = format!("{value} {}", extra.join(" "));
-        // (nomospice's op-amps take Aol up to 1Meg: a larger one said, it acts as 1Meg; the last
-        // given counts, as in ngspice, `Aol = 1G` too)
-        if nl.own_models[i] {
-            let low = given.to_ascii_lowercase();
-            let aol = param_defs(&given, &low).into_iter().filter(|(n, _)| n.eq_ignore_ascii_case("aol")).last().and_then(|(_, (a, e))| spice_num(&given[a..e]));
-            if aol.is_some_and(|a| a > 1e6) {
-                let name = attrs.get("InstName").filter(|n| !n.is_empty()).unwrap_or(&inst);
-                nl.warnings.push(format!("{name}: Aol above 1Meg acts as 1Meg (SPICE's operating point of a loop with more gain is not to be trusted)"));
-            }
-        }
         // LTspice accepts Rser=... in Value too: value and extras go through one pass
-        let (rest, parasitics) = lt_instance_params(prefix, &inst, &given, &mut nl.warnings);
+        let (rest, parasitics) = lt_instance_params(prefix, &inst, &format!("{value} {}", extra.join(" ")), &mut nl.warnings);
         // (a block's: the parameters it passes, declared on the subcircuit; the others it gets from
         // its caller where its sheet has none, filled in once all its instances are known)
         let tag = block.as_ref().and_then(|(name, _)| {
@@ -3638,8 +3650,8 @@ mod tests {
         let out = tr(&r, "v(out)");
         assert!((out(5e-6) - 0.1).abs() < 0.02 && (out(30e-6) - 3.0).abs() < 0.02, "clipped {} high {}", out(5e-6), out(30e-6));
         assert!((out(11.5e-6) - 1.6).abs() < 0.3, "slewing {}", out(11.5e-6));
-        // a gain of 301 with a chopper's Aol=1G (as 1Meg, said): its operating point right, not
-        // ngspice's transient fallback's unsettled one
+        // a gain of 301 with a chopper's Aol=1G (as 1Meg): its operating point right, not ngspice's
+        // transient fallback's unsettled one
         for aol in ["100K", "1G"] {
             let r = run(&format!("V1 vcc 0 15\nV2 0 vee 15\nV3 in 0 10m\nX1 in fb vcc vee out opamp2 Aol={aol} GBW=2.5Meg Slew=3Meg\nR1 out fb 300k\nR2 fb 0 1k\n.op"), &["opamp2"]);
             let out = r.op.iter().find(|o| o.0 == "out").unwrap().1;
@@ -4225,14 +4237,13 @@ SYMBOL half 400 300 R0\nSYMATTR InstName U4\nSYMATTR Value R=3k\nFLAG 352 300 a\
         assert!(f.own_models[u] && !f.own_models[f.insts.iter().position(|n| n == "V1").unwrap()], "{:?}", f.own_models);
         let own = netlist_for_sim(&parse_asc(&format!("{follower}TEXT 0 260 Left 2 !.subckt opamp a b c\\nR1 a c 1k\\n.ends opamp\n")), &mut Library::builtin());
         assert!(!own.own_models[u], "{}", own.text);
-        // (the known limit: an included file's .subckt opamp is not seen here, the part still counts as
-        // nomospice's model; a test of the day this is read from the includes too)
-        let inc = netlist_for_sim(&parse_asc(&format!("{follower}TEXT 0 260 Left 2 !.include myopamp.lib\n")), &mut Library::builtin());
-        assert!(inc.own_models[u], "{}", inc.text);
-        for (line, said) in [("Aol=1G", true), ("Aol = 1G", true), ("Aol=1G Aol=100K", false)] {
-            let big = netlist_for_sim(&parse_asc(&follower.replace("SYMATTR InstName U1", &format!("SYMATTR InstName U1\nSYMATTR SpiceLine {line}"))), &mut Library::builtin());
-            assert_eq!(big.warnings.iter().any(|w| w.starts_with("U1: Aol above 1Meg")), said, "{line}: {:?}", big.warnings);
-        }
+        // (an included file's .subckt opamp, inlined in the prepared deck before nomospice's: the run
+        // says it is not its own; a block's own .subckt opamp, nested, does not count)
+        let mut inc = netlist_for_sim(&parse_asc(follower), &mut Library::builtin());
+        inc.own_models_in(".subckt blk a b\n.subckt opamp x y z\n.ends opamp\n.ends blk\n.subckt opamp inn inp out\n.ends opamp\n");
+        assert!(inc.own_models[u]);
+        inc.own_models_in(".SUBCKT Opamp a b c\nR1 a c 1k\n.ends\n.subckt opamp inn inp out\n.ends opamp\n");
+        assert!(!inc.own_models[u]);
         assert!(!f.text.contains("Rsense_XU1_2") && f.text.contains("Rsense_XU1 "), "In+ is held by V1, out only by U1 itself: {}", f.text);
         let lone = netlist_for_sim(&parse_asc("SYMBOL Opamps\\opamp 0 0 R0\nSYMATTR InstName U1\nTEXT 0 200 Left 2 !.op\n"), &mut Library::builtin());
         assert_eq!(lone.text.matches(" 0 1T").count(), 3, "open pins: held, so nothing floats: {}", lone.text);
