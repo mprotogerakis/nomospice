@@ -1065,19 +1065,27 @@ async fn library_text(name: String) -> Option<String> {
 #[tauri::command]
 async fn library_unpack_microcap(app: tauri::AppHandle, zip: String) -> Result<Vec<library::Source>, String> {
     use tauri::Manager;
-    let libraries = app.path().app_data_dir().map_err(|e| e.to_string())?.join("libraries");
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("libraries").join("Micro-Cap 12");
     static UNPACKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if UNPACKING.swap(true, std::sync::atomic::Ordering::SeqCst) {
         return Err("the Micro-Cap 12 library is already being unpacked".into());
     }
-    // (the unpacked library's folders: `Micro-Cap 12`, `Micro-Cap 12 (2)` …)
-    let ours = |p: &std::path::Path| p.parent() == Some(libraries.as_path()) && p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("Micro-Cap 12"));
-    let at = libraries.clone();
-    let res = tauri::async_runtime::spawn_blocking(move || -> Result<std::path::PathBuf, String> {
+    let res = unpack_microcap(app, zip, dir).await;
+    UNPACKING.store(false, std::sync::atomic::Ordering::SeqCst);
+    res
+}
+
+/// `library_unpack_microcap` into `dir`, its one place: one there already is replaced only if no
+/// source uses it (an earlier unpack whose source was removed); nothing else is touched.
+async fn unpack_microcap(app: tauri::AppHandle, zip: String, dir: std::path::PathBuf) -> Result<Vec<library::Source>, String> {
+    if library::sources().iter().any(|s| s.path == dir) {
+        return Err("the Micro-Cap 12 library is unpacked already: tick it in the list".into());
+    }
+    let at = dir.clone();
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
         let zip = std::path::Path::new(&zip);
-        // unpacked beside the library (one file system), then renamed into a folder of its own that
-        // is not there yet: the library in use stays where it is until the sources point at the new one
-        let staging = at.join(".Micro-Cap 12.new");
+        // (unpacked beside its place, one file system: renamed into it once complete)
+        let staging = at.with_file_name(".Micro-Cap 12.new");
         let _ = std::fs::remove_dir_all(&staging);
         std::fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
         let mut cmd = if cfg!(target_os = "linux") {
@@ -1101,24 +1109,16 @@ async fn library_unpack_microcap(app: tauri::AppHandle, zip: String) -> Result<V
             let why = why.map_or_else(|| if out.status.success() { "the archive has no LIBRARY folder".into() } else { out.status.to_string() }, |l| l.chars().take(200).collect());
             return Err(format!("{}: no LIBRARY folder unpacked ({why}): choose Micro-Cap 12's CD archive, mc12cd.zip", zip.display()));
         }
-        let dir = std::iter::once("Micro-Cap 12".to_string()).chain((2..).map(|k| format!("Micro-Cap 12 ({k})"))).map(|n| at.join(n)).find(|p| !p.exists()).unwrap();
-        let moved = std::fs::rename(&lib, &dir).map_err(|e| e.to_string());
+        let _ = std::fs::remove_dir_all(&at); // (an earlier unpack no source uses)
+        let moved = std::fs::rename(&lib, &at).map_err(|e| e.to_string());
         let _ = std::fs::remove_dir_all(&staging);
-        moved.map(|()| dir)
+        moved
     })
-    .await;
-    UNPACKING.store(false, std::sync::atomic::Ordering::SeqCst);
-    let dir = res.map_err(|e| e.to_string())??;
+    .await
+    .map_err(|e| e.to_string())??;
     let mut list = library::sources();
-    let was: Vec<std::path::PathBuf> = list.iter().filter(|s| ours(&s.path)).map(|s| s.path.clone()).collect();
-    list.retain(|s| !ours(&s.path));
-    list.push(library::Source { name: "Micro-Cap 12".into(), path: dir.clone(), enabled: true });
+    list.push(library::Source { name: "Micro-Cap 12".into(), path: dir, enabled: true });
     library_set_sources(app, list.clone()).await?;
-    // the earlier unpacked library, now in no source: gone (and one an unpack that stopped left)
-    let gone = std::fs::read_dir(&libraries).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| ours(p) && *p != dir);
-    for p in gone.chain(was.into_iter().filter(|p| *p != dir)) {
-        let _ = std::fs::remove_dir_all(p);
-    }
     Ok(list)
 }
 

@@ -3217,10 +3217,7 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
             (Some(defs), _) => {
                 // (`theirs`: a library file's, not one of nomospice's built-in models the index lists too)
                 let out: Vec<String> = defs.into_iter().map(|(d, theirs)| {
-                    if !theirs {
-                        return d;
-                    }
-                    let name = d.split_whitespace().nth(1).unwrap_or("?").to_string();
+                    let Some(name) = theirs else { return d };
                     let shown = if h.shared { format!("* {name}: from a model library, its text left out") } else { d };
                     h.library.push(name);
                     shown

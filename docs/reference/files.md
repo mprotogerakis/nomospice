@@ -19,7 +19,7 @@ Saving writes a new file next to the old one and then replaces it, so a failed s
 |---|---|
 | model library list | `libraries.json` in the configuration folder: `~/Library/Application Support/de.nomospice.app` (macOS), `%APPDATA%\de.nomospice.app` (Windows), `~/.config/de.nomospice.app` (Linux) |
 | recovery copies of unsaved work | `recovery-…json` in the data folder: the same folder on macOS and Windows, `~/.local/share/de.nomospice.app` on Linux |
-| a downloaded Micro-Cap 12 library | `libraries/Micro-Cap 12` in the data folder |
+| the Micro-Cap 12 library, unpacked from its CD archive | `libraries/Micro-Cap 12` in the data folder |
 | crash reports of the app itself | `panic.log` in the configuration folder |
 
 The theme and the panel sizes are kept by the app's web view.

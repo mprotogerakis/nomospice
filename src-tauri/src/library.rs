@@ -179,15 +179,15 @@ impl Index {
         self.resolve_marked(name, seen).into_iter().map(|(d, _)| d).collect()
     }
 
-    /// [`Index::resolve`], each definition marked whether a model library file's (not one of
+    /// [`Index::resolve`], each definition with its name if a model library file's (None: one of
     /// nomospice's built-in models).
-    pub fn resolve_marked(&self, name: &str, seen: &mut HashSet<String>) -> Vec<(String, bool)> {
+    pub fn resolve_marked(&self, name: &str, seen: &mut HashSet<String>) -> Vec<(String, Option<String>)> {
         let mut out = vec![];
         self.collect(name, seen, &mut out, 0);
         out
     }
 
-    fn collect(&self, name: &str, seen: &mut HashSet<String>, out: &mut Vec<(String, bool)>, depth: usize) {
+    fn collect(&self, name: &str, seen: &mut HashSet<String>, out: &mut Vec<(String, Option<String>)>, depth: usize) {
         if depth > 8 || !seen.insert(name.to_lowercase()) {
             return;
         }
@@ -208,7 +208,7 @@ impl Index {
                 }
             }
         }
-        out.push((if e.kind == "SUBCKT" { subckt_header(&text) } else { self.ako(&text, depth).unwrap_or(text) }, !e.builtin()));
+        out.push((if e.kind == "SUBCKT" { subckt_header(&text) } else { self.ako(&text, depth).unwrap_or(text) }, (!e.builtin()).then(|| e.name.clone())));
     }
 
     /// LTspice `ako:` ("a kind of"): `.model ZTX849 ako:FZT849 NPN(overrides)`; ngspice has no
@@ -402,9 +402,9 @@ pub fn definitions(name: &str, seen: &mut HashSet<String>) -> Option<Vec<String>
     definitions_marked(name, seen).map(|defs| defs.into_iter().map(|(d, _)| d).collect())
 }
 
-/// [`definitions`], each marked whether a model library file's (not one of nomospice's built-in
+/// [`definitions`], each with its name if a model library file's (None: one of nomospice's built-in
 /// models), as the index that resolved them has it.
-pub fn definitions_marked(name: &str, seen: &mut HashSet<String>) -> Option<Vec<(String, bool)>> {
+pub fn definitions_marked(name: &str, seen: &mut HashSet<String>) -> Option<Vec<(String, Option<String>)>> {
     let ix = index();
     let ix = ix.as_ref()?;
     ix.get(name)?;
