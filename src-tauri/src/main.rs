@@ -1100,7 +1100,10 @@ async fn unpack_microcap(app: tauri::AppHandle, zip: String, dir: std::path::Pat
             c.arg("-xf").arg(zip).arg("-C").arg(&staging).arg("LIBRARY");
             c
         };
-        let out = cmd.output().map_err(|e| format!("{cmd:?}: {e}"))?;
+        let out = cmd.output().map_err(|e| {
+            let _ = std::fs::remove_dir_all(&staging);
+            format!("{cmd:?}: {e}")
+        })?;
         let lib = staging.join("LIBRARY");
         // (unzip's 1: warnings only)
         if !(out.status.success() || cfg!(target_os = "linux") && out.status.code() == Some(1)) || !lib.is_dir() {

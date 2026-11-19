@@ -21,7 +21,9 @@ On Windows the program is `nomospice.exe` in the installation folder.
 | `read_schematic` | parts, net labels and directives of a schematic |
 | `write_schematic` | writes `.asc` text to a file (an existing file only when asked to overwrite it) |
 | `library_search` | searches the models and subcircuits of the libraries |
-| `library_get` | the `.model` or `.subckt` text of a part, with what it depends on |
+| `library_get` | a library part's kind, pins and library; the `.model` text only of nomospice's own default models |
 | `examples` | the example schematics, a good starting point for the `.asc` format |
+
+A model library's text stays on your computer: model files come with their makers' terms. The netlist the assistant gets has a comment line in place of each library definition, and when a circuit uses one (or a file it includes), a failed run's ngspice log and the warnings about the deck are not passed on; nomospice shows them.
 
 Open a schematic the assistant wrote in nomospice to see it, and save it from there.

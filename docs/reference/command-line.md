@@ -32,5 +32,5 @@ The MCP server offers these tools to an AI assistant (see [Let an AI assistant u
 | `read_schematic` | `path` or `asc` | parts (instance, symbol, value, pin nets), net labels, directives |
 | `write_schematic` | `path`, `asc`, `overwrite` | writes the file; an existing one only with `overwrite` |
 | `library_search` | `query`, `kind` (a model type or `SUBCKT`), `limit` | matching models and subcircuits |
-| `library_get` | `name` | the `.model`/`.subckt` text with its dependencies |
+| `library_get` | `name` | the part's kind, pins, library and symbol; the `.model` text only of nomospice's built-in models (a model library's text stays on the computer: in the netlist a comment line stands in its place, and for a circuit using one, or a file it includes, `simulate` passes on neither ngspice's log nor the warnings about the deck) |
 | `examples` | | the example schematics as `.asc` text |
