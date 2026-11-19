@@ -93,30 +93,6 @@ fn downsample(v: &[f64], n: usize) -> Vec<f64> {
     ngspice::even(v.len(), n).into_iter().map(|k| v[k]).collect()
 }
 
-/// A model library file's definitions in the netlist (nomospice's built-in models are not among them).
-fn library_defs(nl: &schematic::Netlist) -> Vec<&str> {
-    let ix = library::index();
-    let ours = |d: &str| d.split_whitespace().nth(1).is_some_and(|n| ix.as_ref().and_then(|ix| ix.get(n)).is_some_and(|e| e.builtin()));
-    nl.library.iter().map(String::as_str).filter(|d| !ours(d)).collect()
-}
-
-/// The netlist's text as passed to an AI client: a model library file's definitions left out, a
-/// comment line for each; None if one is not found as written (then nothing of it is passed on).
-fn shareable(nl: &schematic::Netlist) -> Option<String> {
-    library_defs(nl).into_iter().try_fold(nl.text.clone(), |text, d| {
-        let name = d.split_whitespace().nth(1).unwrap_or("?");
-        text.contains(d).then(|| text.replacen(d, &format!("* {name}: from a model library, its text left out"), 1))
-    })
-}
-
-/// Whether the deck holds a model library's text: a library's definitions, or a file the schematic
-/// includes (.include/.lib, inlined when it runs). Then ngspice's log and the warnings about the deck
-/// are not passed to an AI client: ngspice echoes lines it rejects, rewritten, and a warning may quote
-/// a statement, so no line of them can be told free of that text.
-fn holds_library_text(nl: &schematic::Netlist, dir: Option<&Path>) -> bool {
-    !library_defs(nl).is_empty() || schematic::includes_files(&nl.text, dir)
-}
-
 fn call(base: &Path, name: &str, args: &Value) -> Result<Value, String> {
     let mut lib = schematic::Library::builtin();
     match name {
@@ -126,9 +102,12 @@ fn call(base: &Path, name: &str, args: &Value) -> Result<Value, String> {
             let sim = schematic::netlist_for_sim(&items, &mut lib);
             let mut warnings = shown.warnings.clone();
             let dir = path.as_ref().and_then(|p| p.parent().map(Path::to_path_buf));
+            // (the deck holds a model library's text: a library's definitions, a file it includes. Then
+            // ngspice's log and the warnings about the deck are not passed on: ngspice echoes lines it
+            // rejects, rewritten, and a warning may quote a statement: no line can be told free of it)
             let mut about_deck = vec![];
-            let prepared = sim.prepared(dir.as_deref(), &mut about_deck);
-            let private = holds_library_text(&sim, dir.as_deref());
+            let (prepared, read) = sim.prepared_reading(dir.as_deref(), &mut about_deck);
+            let private = !sim.library.is_empty() || read;
             if private && !about_deck.is_empty() {
                 warnings.push(format!("{} warnings about the deck are not passed on: it holds a model library's text (nomospice shows them)", about_deck.len()));
             } else {
@@ -184,13 +163,8 @@ fn call(base: &Path, name: &str, args: &Value) -> Result<Value, String> {
         }
         "netlist" => {
             let (items, _) = schematic_of(base, args, &mut lib)?;
-            let nl = schematic::netlist(&items, &mut lib);
-            let mut warnings = nl.warnings.clone();
-            let text = shareable(&nl);
-            if text.is_none() {
-                warnings.push("the netlist is not passed on: a model library's text could not be left out of it".into());
-            }
-            Ok(json!({ "netlist": text, "warnings": warnings, "nets": nl.nets, "instances": nl.insts, "current_probes": nl.probes, "pin_currents": nl.pin_currents }))
+            let nl = schematic::netlist_shared(&items, &mut lib); // (a model library's text left out)
+            Ok(json!({ "netlist": nl.text, "warnings": nl.warnings, "nets": nl.nets, "instances": nl.insts, "current_probes": nl.probes, "pin_currents": nl.pin_currents }))
         }
         "read_schematic" => {
             let (items, _) = schematic_of(base, args, &mut lib)?;
@@ -315,15 +289,19 @@ mod tests {
         let g = call(&dir, "library_get", &json!({ "name": "QLOCAL" })).unwrap();
         assert!(g["kind"] == "NPN" && g["text"].is_null(), "{g}");
         assert!(call(&dir, "library_get", &json!({ "name": "2N3904" })).unwrap()["text"].as_str().unwrap().contains("BF=180"));
-        // the deck holds a library's text: a library's model, an included file; nomospice's own: not
-        let deck = |asc: &str| holds_library_text(&schematic::netlist(&schematic::parse_asc(asc), &mut schematic::Library::builtin()), Some(&dir));
+        // a failed run: no log when the deck holds a library's text (a library's model, a file it
+        // reads, written with an Ω the deck's reading drops too), the log without
         let own = asc.replace("QLOCAL", "2N3904");
-        assert!(deck(asc) && !deck(&own));
-        assert!(deck(&format!("{own}TEXT 0 300 Left 2 !.inc q.lib\n")), "a file there");
-        assert!(!deck(&format!("{own}TEXT 0 300 Left 2 !.inc nothere.lib\n")) && !deck(&format!("{own}TEXT 0 300 Left 2 !.lib opamp.sub\n")), "none read");
-        // a failed run of such a deck: no log, said why
-        let r = call(&dir, "simulate", &json!({ "asc": format!("{asc}TEXT 0 300 Left 2 !.tran 1m\nTEXT 0 340 Left 2 !XU1 a b nosuchsubckt\n") })).unwrap();
-        assert!(r["ok"] == false && r["log"].is_null() && r["warnings"].to_string().contains("log is not passed on"), "{r}");
+        let fails = |asc: &str, more: &str| call(&dir, "simulate", &json!({ "asc": format!("{asc}TEXT 0 300 Left 2 !.tran 1m\nTEXT 0 340 Left 2 !XU1 a b nosuchsubckt\n{more}") })).unwrap();
+        for r in [fails(asc, ""), fails(&own, &format!("TEXT 0 380 Left 2 !Ω.inc {}\n", dir.join("q.lib").display()))] {
+            assert!(r["ok"] == false && r["log"].is_null() && r["warnings"].to_string().contains("log is not passed on"), "{r}");
+        }
+        for r in [fails(&own, ""), fails(&own, "TEXT 0 380 Left 2 !.lib opamp.sub\n")] {
+            assert!(r["ok"] == false && r["log"].is_array(), "{r}");
+        }
+        // a definition written in a comment before the library's own: the library's left out all the same
+        let r = call(&dir, "netlist", &json!({ "asc": format!("{asc}TEXT 0 300 Left 2 !* .model QLOCAL NPN(BF=123\n") })).unwrap();
+        assert_eq!(r["netlist"].as_str().unwrap().matches("BF=123").count(), 1, "{r}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

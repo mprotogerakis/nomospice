@@ -847,8 +847,8 @@ pub struct Netlist {
     #[serde(skip)]
     pub steps: Vec<String>,
     pub warnings: Vec<String>,
-    /// The model libraries' definitions in `text`, each as written there (the MCP server leaves
-    /// a library file's out: its text stays on this computer).
+    /// The model library files' definitions in the deck (not nomospice's built-in models): the MCP
+    /// server passes none of their text on (`netlist_shared`, no log of a deck holding them).
     #[serde(skip)]
     pub library: Vec<String>,
 }
@@ -881,8 +881,10 @@ struct Hier {
     /// includes, in its subcircuit, win there), and the names they define
     models: Vec<String>,
     emitted: HashSet<String>,
-    /// the model libraries' definitions among them (the netlist's `library`)
+    /// the model library files' definitions among them (the netlist's `library`)
     library: Vec<String>,
+    /// those left out (`netlist_shared`)
+    shared: bool,
 
 }
 
@@ -1692,8 +1694,14 @@ impl Netlist {
     /// current sensors known. The GUI's simulation and root locus and MCP all run this. It reads the
     /// .include/.lib files (can be slow): call it on a blocking thread, without the library lock.
     pub fn prepared(&self, dir: Option<&std::path::Path>, warnings: &mut Vec<String>) -> Prepared {
-        let p = prepare(&self.text, dir, warnings);
-        Prepared(ltspice_meas(&p.0, &self.sensors, warnings), self.sensors.clone(), self.steps.clone())
+        self.prepared_reading(dir, warnings).0
+    }
+
+    /// [`Netlist::prepared`], and whether it read a file (.include/.lib) into the deck.
+    pub fn prepared_reading(&self, dir: Option<&std::path::Path>, warnings: &mut Vec<String>) -> (Prepared, bool) {
+        let mut read = false;
+        let p = prepare_reading(&self.text, dir, warnings, &mut read);
+        (Prepared(ltspice_meas(&p.0, &self.sensors, warnings), self.sensors.clone(), self.steps.clone()), read)
     }
 }
 
@@ -2057,8 +2065,14 @@ fn pin_labels(prefix: char, inst: &str, pins: &[Pin]) -> Vec<String> {
 ///   in included files alike; the title line is made a comment; the checks read each line as it goes
 ///   out ([`ascii`], comment lines starred). `ngspice::run` refuses a deck with such a line left.
 pub fn prepare(text: &str, dir: Option<&std::path::Path>, warnings: &mut Vec<String>) -> Prepared {
+    prepare_reading(text, dir, warnings, &mut false)
+}
+
+/// [`prepare`], and `read`: whether a file (.include/.lib) was read into the deck.
+fn prepare_reading(text: &str, dir: Option<&std::path::Path>, warnings: &mut Vec<String>, read: &mut bool) -> Prepared {
     let mut x = Expander { warnings, out: String::new(), seen: HashSet::new(), scope: (None, 0), read: true, diode: None, behavioural: vec![] };
     x.expand(text, dir, None, 0);
+    *read = !x.seen.is_empty(); // (a file is in `seen` once it is to be read)
     x.warn_behavioural();
     // (also in included files; Laplace first: a random call there is said by its own name)
     let out = crate::laplace::rewrite(&x.out, x.warnings);
@@ -2369,21 +2383,6 @@ fn include_args(t: &str) -> (String, Option<&str>) {
     (file.replace('\\', "/"), uncommented(tail).split_whitespace().next())
 }
 
-/// LTspice's own opamp.sub needs LTspice semantics: the built-in `opamp` subckt replaces it (unless
-/// the schematic's folder has one of its own).
-fn ours_for(file: &str, dir: Option<&std::path::Path>) -> bool {
-    file.eq_ignore_ascii_case("opamp.sub") && !dir.is_some_and(|d| d.join(file).is_file())
-}
-
-/// Whether `text` includes a file that is there (`.include`/`.lib`, as the deck's expansion finds
-/// them): its text is inlined into the deck when it runs.
-pub(crate) fn includes_files(text: &str, dir: Option<&std::path::Path>) -> bool {
-    text.lines().skip(1).filter(|l| opens_file(l)).any(|l| {
-        let (file, _) = include_args(l.trim());
-        !ours_for(&file, dir) && resolve(&file, dir).is_some()
-    })
-}
-
 fn resolve(file: &str, dir: Option<&std::path::Path>) -> Option<std::path::PathBuf> {
     let p = std::path::Path::new(file);
     if p.is_absolute() {
@@ -2512,7 +2511,8 @@ impl Expander<'_> {
     fn include(&mut self, t: &str, l: &str, dir: Option<&std::path::Path>, depth: usize) {
         let (file, sec) = include_args(t);
         let sec = sec.filter(|_| l.starts_with(".lib"));
-        if ours_for(&file, dir) {
+        // LTspice's own opamp.sub needs LTspice semantics; the built-in `opamp` subckt replaces it
+        if file.eq_ignore_ascii_case("opamp.sub") && !dir.is_some_and(|d| d.join(&file).is_file()) {
             self.warnings.push("`opamp.sub`: using nomospice's built-in opamp model".into());
             return;
         }
@@ -2594,6 +2594,12 @@ fn jumper_root(parent: &mut HashMap<String, String>, net: &str) -> String {
 /// The netlist as the user writes it (shown in the UI).
 pub fn netlist(items: &[Item], lib: &mut Library) -> Netlist {
     build_netlist(items, lib, false, &mut Hier::default())
+}
+
+/// [`netlist`] as passed to an AI client (MCP): a model library file's definitions left out, a
+/// comment line in their place (nomospice's built-in models stay).
+pub fn netlist_shared(items: &[Item], lib: &mut Library) -> Netlist {
+    build_netlist(items, lib, false, &mut Hier { shared: true, ..Default::default() })
 }
 
 /// The netlist that is simulated: every probe-able device gets 0 V current sensors: two-pin parts
@@ -3203,8 +3209,16 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
         let lib = if own_used.contains(&m) || m == "opamp" { None } else { crate::library::definitions(&m, &mut h.emitted) };
         let def = match (lib, builtin) {
             (Some(defs), _) => {
-                h.library.extend(defs.iter().cloned());
-                Some(defs.join("\n"))
+                // (a library file's, not one of nomospice's built-in models the index lists too)
+                let ix = crate::library::index();
+                let name = |d: &str| d.split_whitespace().nth(1).unwrap_or("?").to_string();
+                let theirs = |d: &str| !ix.as_ref().and_then(|ix| ix.get(&name(d))).is_some_and(|e| e.builtin());
+                let out: Vec<String> = defs.iter().map(|d| match theirs(d) {
+                    true if h.shared => format!("* {}: from a model library, its text left out", name(d)),
+                    _ => d.clone(),
+                }).collect();
+                h.library.extend(defs.iter().filter(|d| theirs(d)).cloned());
+                Some(out.join("\n"))
             }
             (None, Some(text)) => h.emitted.insert(m.clone()).then_some(text),
             (None, None) if !includes && !h.emitted.contains(&m) && !h.quiet.contains(&m) => {

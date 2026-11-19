@@ -1060,10 +1060,10 @@ async fn library_text(name: String) -> Option<String> {
 }
 
 /// A swap of the unpacked Micro-Cap library that stopped half-way (the app ended between its two
-/// renames): the previous library back in its place.
+/// renames): the previous library back in its place. `dir`: the library's place (another: nothing).
 fn microcap_put_back(dir: &std::path::Path) {
     let old = dir.with_file_name(".Micro-Cap 12.old");
-    if !dir.exists() && old.exists() {
+    if dir.file_name().is_some_and(|n| n == "Micro-Cap 12") && !dir.exists() && old.exists() {
         let _ = std::fs::rename(&old, dir);
     }
 }
@@ -1106,7 +1106,7 @@ async fn library_unpack_microcap(app: tauri::AppHandle, zip: String) -> Result<V
             // tar's closing summary)
             let said = [&out.stderr, &out.stdout].map(|b| String::from_utf8_lossy(b).into_owned());
             let why = said.iter().flat_map(|t| t.lines()).map(str::trim).find(|l| !l.is_empty() && !l.starts_with('[') && !l.contains("Error exit delayed"));
-            let why = why.map_or_else(|| out.status.to_string(), |l| l.chars().take(200).collect());
+            let why = why.map_or_else(|| if out.status.success() { "the archive has no LIBRARY folder".into() } else { out.status.to_string() }, |l| l.chars().take(200).collect());
             return Err(format!("{}: no LIBRARY folder unpacked ({why}): choose Micro-Cap 12's CD archive, mc12cd.zip", zip.display()));
         }
         let _ = std::fs::remove_dir_all(&old);
@@ -1495,9 +1495,11 @@ fn main() {
                     let _ = std::fs::remove_dir_all(dir.join("mc12-unpack"));
                 });
             }
+            if let Ok(data) = app.path().app_data_dir() {
+                microcap_put_back(&data.join("libraries").join("Micro-Cap 12")); // (before its index is built)
+            }
             // saved library sources (else: detected ones); warm the index in the background
             if let Some(list) = library_config(app.handle()).ok().and_then(|f| std::fs::read(f).ok()).and_then(|b| serde_json::from_slice::<Vec<library::Source>>(&b).ok()) {
-                list.iter().for_each(|s| microcap_put_back(&s.path)); // (before its index is built)
                 library::set_sources(list);
             }
             std::thread::spawn(|| drop(library::index()));
