@@ -847,6 +847,10 @@ pub struct Netlist {
     #[serde(skip)]
     pub steps: Vec<String>,
     pub warnings: Vec<String>,
+    /// The model libraries' definitions in `text`, each as written there (the MCP server leaves
+    /// a library file's out: its text stays on this computer).
+    #[serde(skip)]
+    pub library: Vec<String>,
 }
 
 /// The hierarchical blocks of one netlisting: the sheets being netlisted (outermost first), and
@@ -877,6 +881,8 @@ struct Hier {
     /// includes, in its subcircuit, win there), and the names they define
     models: Vec<String>,
     emitted: HashSet<String>,
+    /// the model libraries' definitions among them (the netlist's `library`)
+    library: Vec<String>,
 
 }
 
@@ -3180,10 +3186,15 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
         // (`opamp` is always ours, drawn or in a netlist's text: LTspice's opamp.sub needs LTspice)
         let lib = if own_used.contains(&m) || m == "opamp" { None } else { crate::library::definitions(&m, &mut h.emitted) };
         let def = match (lib, builtin) {
-            (Some(defs), _) => Some(defs.join("\n")),
+            (Some(defs), _) => {
+                h.library.extend(defs.iter().cloned());
+                Some(defs.join("\n"))
+            }
             (None, Some(text)) => h.emitted.insert(m.clone()).then_some(text),
             (None, None) if !includes && !h.emitted.contains(&m) && !h.quiet.contains(&m) => {
-                nl.warnings.push(format!("`{m}`: no model or subcircuit of that name in the libraries"));
+                // (a library found on this computer is switched off until the user switches it on)
+                let off = crate::library::sources().iter().any(|s| !s.enabled);
+                nl.warnings.push(format!("`{m}`: no model or subcircuit of that name in the libraries{}", if off { " in use (Model Libraries… lists some switched off)" } else { "" }));
                 None
             }
             _ => None,
@@ -3205,6 +3216,7 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
             }
         }
         lines.append(&mut h.models);
+        nl.library = std::mem::take(&mut h.library);
         // a block's instances pass what one of them passes: the sheet's own .param of it where they
         // do not, else their caller's value of it (a .param above it), as LTspice has it
         // (a tagged line: the line, and the parameters it takes from its caller)
@@ -3479,6 +3491,8 @@ mod tests {
         let mut w = vec![];
         prepare("* t\n  D1 a 0\n+ TVS\n.model TVS D(Ron=.5)\n.end\n", None, &mut w);
         assert!(w.iter().any(|w| w.contains("model tvs")), "indented/continued diode line: {w:?}");
+        let _s = SIM.lock(); // (the libraries: those found here, switched on, as their user would)
+        crate::library::set_sources(crate::library::detected().into_iter().map(|s| crate::library::Source { enabled: true, ..s }).collect());
         if let Some(card) = crate::library::definitions("ztx849", &mut HashSet::new()).and_then(|d| d.last().cloned()) {
             assert!(!card.to_lowercase().contains("ako:") && card.to_lowercase().starts_with(".model ztx849 npn("), "{card}");
             assert!(!card.contains(';'), "comment swallowed the overrides: {card}");
@@ -3488,10 +3502,11 @@ mod tests {
 
     #[test]
     fn ltspice_stock_vdmos_is_used() {
+        let _s = SIM.lock();
+        crate::library::set_sources(crate::library::detected().into_iter().map(|s| crate::library::Source { enabled: true, ..s }).collect());
         if crate::library::definitions("bsp89", &mut HashSet::new()).is_none() {
             return; // no local LTspice library
         }
-        let _s = SIM.lock();
         let src = "FLAG 48 0 d\nFLAG 0 80 g\nFLAG 48 96 0\nSYMBOL nmos 0 0 R0\nSYMATTR InstName M1\nSYMATTR Value BSP89\nSYMBOL voltage -100 0 R0\nSYMATTR InstName V1\nSYMATTR Value 5\nFLAG -100 16 g\nFLAG -100 96 0\nSYMBOL voltage 200 0 R0\nSYMATTR InstName V2\nSYMATTR Value 10\nFLAG 200 16 d\nFLAG 200 96 0\nTEXT 0 200 Left 2 !.op\n";
         let nl = netlist(&parse_asc(src), &mut Library::builtin());
         assert!(nl.text.to_lowercase().contains(".model bsp89") && nl.warnings.is_empty(), "{}\n{:?}", nl.text, nl.warnings);

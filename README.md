@@ -53,10 +53,11 @@ files — with a modern UI, ngspice as the engine, a Rust core and a React front
   (magnitude ∠ phase) instead of a plot.
 - **SVG export** for slides and papers (right-click the canvas or the plot): the schematic or the plots as
   shown, in a light print style, readable by Inkscape, browsers, PowerPoint and Keynote.
-- **Model libraries**: the freeware **Micro-Cap 12** library
-  (one click downloads the original package from the Internet Archive; ~45,000 models and
-  subcircuits) and your own folders. Search, preview, place — subcircuits get a generated box symbol;
-  definitions and their dependencies are pulled into the netlist automatically.
+- **Model libraries**: your own folders and the freeware **Micro-Cap 12** library (unpacked from its
+  CD archive, mc12cd.zip; ~45,000 models and subcircuits). Libraries found on the computer are listed
+  switched off: they come with their own terms, you switch them on. Search, preview, place —
+  subcircuits get a generated box symbol; definitions and their dependencies are pulled into the
+  netlist automatically, and stay on your computer (the MCP server passes no library model's text on).
 - **Hierarchy**: a schematic becomes a block of others: mark its port labels (In, Out, BiDir in the
   label's dialog), right-click > *Create block symbol* writes `name.asy` beside it, and placed in a
   schematic of that folder it runs as a subcircuit of `name.asc` (parameters in the block's Value,

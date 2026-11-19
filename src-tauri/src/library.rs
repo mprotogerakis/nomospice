@@ -32,6 +32,13 @@ pub struct Entry {
     end: usize,
 }
 
+impl Entry {
+    /// One of nomospice's own default models (not a library file's).
+    pub fn builtin(&self) -> bool {
+        self.file == Path::new(BUILTIN)
+    }
+}
+
 #[derive(Default)]
 pub struct Index {
     pub entries: Vec<Entry>,
@@ -148,7 +155,7 @@ impl Index {
     /// A file edited since indexing invalidates the index (rebuilt on next use) instead of
     /// returning text from stale offsets.
     pub fn text(&self, e: &Entry) -> Option<String> {
-        if e.file == Path::new(BUILTIN) {
+        if e.builtin() {
             return crate::schematic::builtin_cards().get(e.start..e.end).map(str::to_string);
         }
         if self.stamps.get(&e.file).copied().flatten() != mtime(&e.file) {
@@ -311,7 +318,8 @@ pub fn symbol_for(e: &Entry) -> String {
 
 // ---------------------------------------------------------------- the global index
 
-/// None: never configured (use the detected libraries); Some([]) is a deliberate empty list.
+/// None: never configured (the detected libraries, listed but switched off); Some([]) is a
+/// deliberate empty list.
 static SOURCES: RwLock<Option<Vec<Source>>> = RwLock::new(None);
 static INDEX: RwLock<Option<Index>> = RwLock::new(None);
 /// Bumped whenever the index must be rebuilt (sources changed, a library file was edited);
@@ -327,7 +335,8 @@ fn home() -> String {
     std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).unwrap_or_default()
 }
 
-/// Libraries found on this machine: LTspice's lib/cmp + lib/sub, a Micro-Cap 12 install.
+/// Libraries found on this machine: LTspice's lib/cmp + lib/sub, a Micro-Cap 12 install. Switched
+/// off: they come with their own license terms, so the user switches them on (Model Libraries…).
 pub fn detected() -> Vec<Source> {
     let h = home();
     let lt = crate::schematic::ltspice_lib_dirs().into_iter().flat_map(|l| [("LTspice models", l.join("cmp")), ("LTspice subcircuits", l.join("sub"))]);
@@ -335,7 +344,7 @@ pub fn detected() -> Vec<Source> {
         format!("{h}/MC12/library"), format!("{h}/Documents/MC12/library"), format!("{h}/.wine/drive_c/MC12/library"),
         "C:/MC12/library".into(), "C:/Program Files (x86)/Micro-Cap 12/library".into(), "C:/Program Files/Micro-Cap 12/library".into(),
     ].map(|p| ("Micro-Cap 12", PathBuf::from(p)));
-    lt.chain(mc).filter(|(_, p)| p.is_dir()).map(|(n, p)| Source { name: n.into(), path: p, enabled: true }).collect()
+    lt.chain(mc).filter(|(_, p)| p.is_dir()).map(|(n, p)| Source { name: n.into(), path: p, enabled: false }).collect()
 }
 
 pub fn sources() -> Vec<Source> {

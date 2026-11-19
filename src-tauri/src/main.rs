@@ -1059,35 +1059,27 @@ async fn library_text(name: String) -> Option<String> {
     .ok()?
 }
 
-/// Micro-Cap 12 (freeware since Spectrum Software closed in 2019; redistributable only as the
-/// complete, unmodified package): download the original CD from the Internet Archive and unpack
-/// its LIBRARY folder for local use. Uses the system's curl and tar/unzip; nothing is executed.
+/// Micro-Cap 12 (freeware since Spectrum Software closed in 2019): its LIBRARY folder unpacked from
+/// the CD archive the user chose (mc12cd.zip) for local use. nomospice fetches nothing itself: where
+/// the archive comes from is the user's choice. Uses the system's tar/unzip; nothing is executed.
 #[tauri::command]
-async fn library_fetch_microcap(app: tauri::AppHandle) -> Result<Vec<library::Source>, String> {
+async fn library_unpack_microcap(app: tauri::AppHandle, zip: String) -> Result<Vec<library::Source>, String> {
     use tauri::Manager;
-    const URL: &str = "https://archive.org/download/mc12cd_202110/mc12cd.zip";
     let cache = app.path().app_cache_dir().map_err(|e| e.to_string())?;
     let target = app.path().app_data_dir().map_err(|e| e.to_string())?.join("libraries").join("Micro-Cap 12");
-    static FETCHING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-    if FETCHING.swap(true, std::sync::atomic::Ordering::SeqCst) {
-        return Err("the Micro-Cap 12 library is already being downloaded".into());
+    static UNPACKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if UNPACKING.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return Err("the Micro-Cap 12 library is already being unpacked".into());
     }
     let dir = target.clone();
     let res = tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
-        // Err((ran, message)): `ran` = the tool started (so a failure says something about the input)
         let run = |cmd: &mut std::process::Command, ok: &[i32]| match cmd.status() {
             Ok(s) if s.success() || s.code().is_some_and(|c| ok.contains(&c)) => Ok(()),
-            Ok(s) => Err((true, format!("{cmd:?} failed ({s})"))),
-            Err(e) => Err((false, format!("{cmd:?}: {e}"))),
+            Ok(_) => Err(format!("{zip} holds no LIBRARY folder: choose Micro-Cap 12's CD archive (mc12cd.zip)")),
+            Err(e) => Err(format!("{cmd:?}: {e}")),
         };
         std::fs::create_dir_all(&cache).map_err(|e| e.to_string())?;
-        let zip = cache.join("mc12cd.zip");
-        if !zip.is_file() {
-            let part = cache.join("mc12cd.zip.part");
-            run(git::command("curl").args(["-fsSL", "-o"]).arg(&part).arg(URL), &[]).map_err(|e| e.1)?;
-            std::fs::rename(&part, &zip).map_err(|e| e.to_string())?;
-        }
-        // a damaged download must not be reused forever
+        let zip = std::path::Path::new(&zip);
         let unpack = |zip: &std::path::Path, tmp: &std::path::Path| if cfg!(target_os = "linux") {
             run(git::command("unzip").args(["-q", "-o"]).arg(zip).arg("LIBRARY/*").arg("-d").arg(tmp), &[1]) // 1 = warnings only
         } else {
@@ -1096,18 +1088,13 @@ async fn library_fetch_microcap(app: tauri::AppHandle) -> Result<Vec<library::So
         let tmp = cache.join("mc12-unpack");
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
-        if let Err((ran, e)) = unpack(&zip, &tmp) {
-            if ran {
-                let _ = std::fs::remove_file(&zip); // the archive itself is bad: download again next time
-            }
-            return Err(e);
-        }
+        unpack(zip, &tmp)?; // (the user's archive is left as it is, whatever happens)
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.parent().unwrap()).map_err(|e| e.to_string())?;
         std::fs::rename(tmp.join("LIBRARY"), &dir).map_err(|e| e.to_string())
     })
     .await;
-    FETCHING.store(false, std::sync::atomic::Ordering::SeqCst);
+    UNPACKING.store(false, std::sync::atomic::Ordering::SeqCst);
     res.map_err(|e| e.to_string())??;
     let mut list = library::sources();
     list.retain(|s| s.path != target);
@@ -1459,7 +1446,7 @@ fn main() {
         .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![symbols, examples, path_exists, open_asc, save_asc, block_symbol, export_svg, export_raw, netlist, simulate, root_locus, cancel_locus, folder_symbols, trace, run_id, halt, cli_args, recovery_save, recovery_take, recovery_count, recovery_resolve, recovery_clear,
             new_window, window_count, doc_path, doc_window, quit_answer, quit_waiting, unsaved_windows, scene, scene_shot, scene_log, scene_done,
-            library_sources, library_set_sources, library_search, library_groups, library_list, library_text, model_curve, library_fetch_microcap,
+            library_sources, library_set_sources, library_search, library_groups, library_list, library_text, model_curve, library_unpack_microcap,
             git_status, git_log, git_show, git_commit, git_init])
         .setup(|app| {
             use tauri::Manager;

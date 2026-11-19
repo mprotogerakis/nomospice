@@ -384,8 +384,11 @@ function PartsDialog({ replace, kind0, libraries }: { replace?: number; kind0?: 
       </div>
       {srcs && !srcs.some((s) => s.enabled) && (
         <div className="flex flex-wrap items-center gap-2 rounded-control border border-border bg-surface-panel p-2 text-xs text-text-secondary">
-          <span className="min-w-0 flex-1">No model library in use: besides the symbols, only nomospice's default models (1N4148, 2N3904, 2N3906, switches) are here. An installed LTspice is found by itself.</span>
-          <Button type="button" size="sm" onClick={() => setUp("microcap")}>Get Micro-Cap 12 library</Button>
+          <span className="min-w-0 flex-1">
+            No model library in use: besides the symbols, only nomospice's default models (1N4148, 2N3904, 2N3906, switches) are here.
+            {srcs.length > 0 && ` Listed but switched off: ${[...new Set(srcs.map((s) => s.name))].join(", ")}. Switch them on under Libraries… (their own license terms apply).`}
+          </span>
+          <Button type="button" size="sm" onClick={() => setUp("microcap")}>Micro-Cap 12 from mc12cd.zip…</Button>
           <Button type="button" size="sm" onClick={() => setUp("add")}>Add folder…</Button>
         </div>
       )}
@@ -556,12 +559,15 @@ function Sources({ start }: { start?: "add" | "microcap" }) {
     // (the download, or a detected install switched off)
     const mine = cur.find((s) => /micro-cap/i.test(s.name) && !s.enabled);
     if (mine && (await invoke<boolean>("path_exists", { path: mine.path }))) return save(cur.map((s) => (s === mine ? { ...s, enabled: true } : s)));
-    setBusy("Downloading Micro-Cap 12 (60 MB) from the Internet Archive…");
+    // (the archive the user has: nomospice downloads nothing)
+    const zip = await open({ multiple: false, filters: [{ name: "Micro-Cap 12 CD archive", extensions: ["zip"] }] });
+    if (typeof zip !== "string") return;
+    setBusy("Unpacking the Micro-Cap 12 library…");
     try {
-      setList(await invoke<LibSource[]>("library_fetch_microcap"));
+      setList(await invoke<LibSource[]>("library_unpack_microcap", { zip }));
       setBusy("");
     } catch (e) {
-      setBusy(`Download failed: ${e}`);
+      setBusy(`Unpacking failed: ${e}`);
     }
   };
   const hasMc = list.some((s) => /micro-cap/i.test(s.name));
@@ -584,15 +590,15 @@ function Sources({ start }: { start?: "add" | "microcap" }) {
       </ul>
       <div className="flex flex-wrap gap-2">
         <Button type="button" onClick={add}>Add folder…</Button>
-        {!hasMc && <Button type="button" onClick={microcap} disabled={!!busy && busy.startsWith("Downloading")}>Get Micro-Cap 12 library</Button>}
+        {!hasMc && <Button type="button" onClick={microcap} disabled={!!busy && busy.startsWith("Unpacking the")}>Micro-Cap 12 library from mc12cd.zip…</Button>}
       </div>
       {!hasMc && (
         <p className="text-2xs text-text-tertiary">
-          Micro-Cap 12 is freeware (Spectrum Software, 2019): its original package is downloaded from the Internet Archive and its
-          LIBRARY folder (about 45,000 models and subcircuits) unpacked for local use.
+          Micro-Cap 12 is freeware (Spectrum Software, 2019): choose its CD archive, mc12cd.zip, and its LIBRARY folder (about
+          45,000 models and subcircuits) is unpacked for local use. Its models come with their makers' terms, in the files' headers.
         </p>
       )}
-      {busy && <p className={cn("text-xs", busy.startsWith("Download failed") ? "text-status-danger" : "text-text-secondary")}>{busy}</p>}
+      {busy && <p className={cn("text-xs", busy.startsWith("Unpacking failed") ? "text-status-danger" : "text-text-secondary")}>{busy}</p>}
     </>
   );
 }

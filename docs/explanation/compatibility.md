@@ -20,8 +20,10 @@ Some features of other simulators have no counterpart in ngspice. The log tells 
 Vendors publish SPICE models for their parts. Many of them work in ngspice as they are, some need features ngspice lacks. nomospice can use:
 
 - your own folders of model files;
-- the freeware **Micro-Cap 12** library, downloaded from the Internet Archive on request: about 45,000 models and subcircuits;
-- the libraries of an installed LTspice, which it finds by itself.
+- the freeware **Micro-Cap 12** library, unpacked from its CD archive (mc12cd.zip): about 45,000 models and subcircuits;
+- the libraries of an installed LTspice: nomospice lists them, switched off, and you switch them on.
+
+Model files come with their makers' terms, usually in the file's header. Which of them you use, and how, is up to you; nomospice reads them on your computer and passes none of their text to AI clients.
 
 ## What nomospice ships
 

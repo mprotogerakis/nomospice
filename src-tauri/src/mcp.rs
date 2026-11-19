@@ -48,7 +48,7 @@ fn tools() -> Value {
         },
         {
             "name": "library_get",
-            "description": "The .model/.subckt text of a library part, with the definitions it depends on.",
+            "description": "A library part: its kind, pins and library. The .model/.subckt text only for nomospice's built-in models; a model library's text stays on this computer (vendor, LTspice and Micro-Cap libraries come with their own terms), and nomospice puts it into the netlist itself when the part is simulated.",
             "inputSchema": { "type": "object", "required": ["name"], "properties": { "name": { "type": "string" } } }
         },
         {
@@ -91,6 +91,19 @@ fn schematic_at(base: &Path, args: &Value) -> Result<(Vec<schematic::Item>, Opti
 
 fn downsample(v: &[f64], n: usize) -> Vec<f64> {
     ngspice::even(v.len(), n).into_iter().map(|k| v[k]).collect()
+}
+
+/// The netlist's text as passed to an AI client: a model library file's definitions left out, a
+/// comment line for each (nomospice's built-in models stay).
+fn shareable(nl: &schematic::Netlist) -> String {
+    let ix = library::index();
+    nl.library.iter().fold(nl.text.clone(), |text, d| {
+        let name = d.split_whitespace().nth(1).unwrap_or("?");
+        if ix.as_ref().and_then(|ix| ix.get(name)).is_some_and(|e| e.builtin()) {
+            return text;
+        }
+        text.replacen(d.as_str(), &format!("* {name}: from a model library, its text left out"), 1)
+    })
 }
 
 fn call(base: &Path, name: &str, args: &Value) -> Result<Value, String> {
@@ -149,7 +162,7 @@ fn call(base: &Path, name: &str, args: &Value) -> Result<Value, String> {
         "netlist" => {
             let (items, _) = schematic_of(base, args, &mut lib)?;
             let nl = schematic::netlist(&items, &mut lib);
-            Ok(json!({ "netlist": nl.text, "warnings": nl.warnings, "nets": nl.nets, "instances": nl.insts, "current_probes": nl.probes, "pin_currents": nl.pin_currents }))
+            Ok(json!({ "netlist": shareable(&nl), "warnings": nl.warnings, "nets": nl.nets, "instances": nl.insts, "current_probes": nl.probes, "pin_currents": nl.pin_currents }))
         }
         "read_schematic" => {
             let (items, _) = schematic_of(base, args, &mut lib)?;
@@ -192,8 +205,10 @@ fn call(base: &Path, name: &str, args: &Value) -> Result<Value, String> {
         }
         "library_get" => {
             let name = args["name"].as_str().ok_or("`name` missing")?;
-            let defs = library::definitions(name, &mut Default::default()).ok_or(format!("`{name}` is not in the libraries"))?;
-            Ok(json!(defs.join("\n")))
+            let ix = library::index();
+            let e = ix.as_ref().and_then(|ix| ix.get(name)).ok_or(format!("`{name}` is not in the libraries"))?;
+            let text = if e.builtin() { library::definitions(name, &mut Default::default()).map(|d| d.join("\n")) } else { None };
+            Ok(json!({ "name": e.name, "kind": e.kind, "pins": e.pins, "source": e.source, "symbol": e.symbol, "text": text }))
         }
         "examples" => Ok(json!(schematic::EXAMPLES.iter().map(|(n, s)| json!({ "name": n, "asc": s })).collect::<Vec<_>>())),
         _ => Err(format!("unknown tool {name}")),
@@ -253,6 +268,25 @@ pub fn serve(base: PathBuf) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn library_text_stays_local() {
+        let _s = crate::ngspice::TEST_SIM.lock();
+        // a library folder of the user's: its model in the netlist and library_get without its text;
+        // nomospice's own 2N3904 with it
+        let dir = std::env::temp_dir().join(format!("nomospice-mcp-lib-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("q.lib"), ".model QLOCAL NPN(BF=123)\n").unwrap();
+        library::set_sources(vec![library::Source { name: "test".into(), path: dir.clone(), enabled: true }]);
+        let asc = "SYMBOL npn 0 0 R0\nSYMATTR InstName Q1\nSYMATTR Value QLOCAL\nSYMBOL npn 100 0 R0\nSYMATTR InstName Q2\nSYMATTR Value 2N3904\n";
+        let r = call(&dir, "netlist", &json!({ "asc": asc })).unwrap();
+        let text = r["netlist"].as_str().unwrap();
+        assert!(!text.contains("BF=123") && text.contains("QLOCAL: from a model library") && text.contains(".model 2N3904 NPN("), "{text}");
+        let g = call(&dir, "library_get", &json!({ "name": "QLOCAL" })).unwrap();
+        assert!(g["kind"] == "NPN" && g["text"].is_null(), "{g}");
+        assert!(call(&dir, "library_get", &json!({ "name": "2N3904" })).unwrap()["text"].as_str().unwrap().contains("BF=180"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn protocol_and_tools() {

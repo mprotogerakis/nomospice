@@ -4,14 +4,15 @@ nomospice has its own symbols and a few default models: the diode 1N4148, the tr
 
 ## Add a library
 
-![The Model Libraries view: Add folder and Get Micro-Cap 12 library](../img/model-libraries/02-libraries.png)
+![The Model Libraries view: Add folder and the Micro-Cap 12 library](../img/model-libraries/02-libraries.png)
 
 Press ++cmd+comma++ (nomospice → Model Libraries… on macOS, File → Model Libraries… on Windows), or click *Libraries…* in the component library.
 
 - **Add folder…** adds a folder of your own. Its models and subcircuits become searchable and are pulled into the netlist when a part uses them.
-- **Get Micro-Cap 12 library** downloads the freeware Micro-Cap 12 package from the Internet Archive (about 60 MB) and unpacks its library, about 45,000 models and subcircuits, for local use.
+- **Micro-Cap 12 library from mc12cd.zip…** unpacks the library of the freeware Micro-Cap 12, about 45,000 models and subcircuits, from its CD archive `mc12cd.zip` for local use. nomospice downloads nothing itself: you choose the archive.
+- **Libraries found on this computer**, such as those of an installed LTspice, are listed switched off. Tick one to use it.
 
-When two libraries define the same name, the one listed first wins. Untick a library to switch it off without removing it.
+Model files come with their makers' terms, usually in the file's header; which ones you use is up to you. When two libraries define the same name, the one listed first wins. Untick a library to switch it off without removing it.
 
 ## Find and place a part
 
