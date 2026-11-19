@@ -1059,33 +1059,25 @@ async fn library_text(name: String) -> Option<String> {
     .ok()?
 }
 
-/// A swap of the unpacked Micro-Cap library that stopped half-way (the app ended between its two
-/// renames): the previous library back in its place (`dir`).
-fn microcap_put_back(dir: &std::path::Path) {
-    let old = dir.with_file_name(".Micro-Cap 12.old");
-    if !dir.exists() && old.exists() {
-        let _ = std::fs::rename(&old, dir);
-    }
-}
-
 /// Micro-Cap 12 (freeware since Spectrum Software closed in 2019): its LIBRARY folder unpacked from
 /// the CD archive the user chose (mc12cd.zip) for local use. nomospice fetches nothing itself: where
 /// the archive comes from is the user's choice. Uses the system's tar/unzip; nothing is executed.
 #[tauri::command]
 async fn library_unpack_microcap(app: tauri::AppHandle, zip: String) -> Result<Vec<library::Source>, String> {
     use tauri::Manager;
-    let target = app.path().app_data_dir().map_err(|e| e.to_string())?.join("libraries").join("Micro-Cap 12");
+    let libraries = app.path().app_data_dir().map_err(|e| e.to_string())?.join("libraries");
     static UNPACKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if UNPACKING.swap(true, std::sync::atomic::Ordering::SeqCst) {
         return Err("the Micro-Cap 12 library is already being unpacked".into());
     }
-    let dir = target.clone();
-    let res = tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+    // (the unpacked library's folders: `Micro-Cap 12`, `Micro-Cap 12 (2)` …)
+    let ours = |p: &std::path::Path| p.parent() == Some(libraries.as_path()) && p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("Micro-Cap 12"));
+    let at = libraries.clone();
+    let res = tauri::async_runtime::spawn_blocking(move || -> Result<std::path::PathBuf, String> {
         let zip = std::path::Path::new(&zip);
-        // unpacked beside the library (one file system: renamed into place), the old one kept until then
-        let staging = dir.with_file_name(".Micro-Cap 12.new");
-        let old = dir.with_file_name(".Micro-Cap 12.old");
-        microcap_put_back(&dir);
+        // unpacked beside the library (one file system), then renamed into a folder of its own that
+        // is not there yet: the library in use stays where it is until the sources point at the new one
+        let staging = at.join(".Micro-Cap 12.new");
         let _ = std::fs::remove_dir_all(&staging);
         std::fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
         let mut cmd = if cfg!(target_os = "linux") {
@@ -1109,32 +1101,24 @@ async fn library_unpack_microcap(app: tauri::AppHandle, zip: String) -> Result<V
             let why = why.map_or_else(|| if out.status.success() { "the archive has no LIBRARY folder".into() } else { out.status.to_string() }, |l| l.chars().take(200).collect());
             return Err(format!("{}: no LIBRARY folder unpacked ({why}): choose Micro-Cap 12's CD archive, mc12cd.zip", zip.display()));
         }
-        let _ = std::fs::remove_dir_all(&old);
-        if dir.exists() {
-            if let Err(e) = std::fs::rename(&dir, &old) {
-                let _ = std::fs::remove_dir_all(&staging);
-                return Err(e.to_string());
-            }
-        }
-        if let Err(e) = std::fs::rename(&lib, &dir) {
-            let _ = std::fs::remove_dir_all(&staging);
-            // (the previous library back; else it is kept where it is, put back by the next try)
-            return Err(match std::fs::rename(&old, &dir) {
-                Ok(()) => e.to_string(),
-                Err(_) => format!("{e}; the previous library is at {}", old.display()),
-            });
-        }
-        let _ = std::fs::remove_dir_all(&old);
+        let dir = std::iter::once("Micro-Cap 12".to_string()).chain((2..).map(|k| format!("Micro-Cap 12 ({k})"))).map(|n| at.join(n)).find(|p| !p.exists()).unwrap();
+        let moved = std::fs::rename(&lib, &dir).map_err(|e| e.to_string());
         let _ = std::fs::remove_dir_all(&staging);
-        Ok(())
+        moved.map(|()| dir)
     })
     .await;
     UNPACKING.store(false, std::sync::atomic::Ordering::SeqCst);
-    res.map_err(|e| e.to_string())??;
+    let dir = res.map_err(|e| e.to_string())??;
     let mut list = library::sources();
-    list.retain(|s| s.path != target);
-    list.push(library::Source { name: "Micro-Cap 12".into(), path: target, enabled: true });
+    let was: Vec<std::path::PathBuf> = list.iter().filter(|s| ours(&s.path)).map(|s| s.path.clone()).collect();
+    list.retain(|s| !ours(&s.path));
+    list.push(library::Source { name: "Micro-Cap 12".into(), path: dir.clone(), enabled: true });
     library_set_sources(app, list.clone()).await?;
+    // the earlier unpacked library, now in no source: gone (and one an unpack that stopped left)
+    let gone = std::fs::read_dir(&libraries).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| ours(p) && *p != dir);
+    for p in gone.chain(was.into_iter().filter(|p| *p != dir)) {
+        let _ = std::fs::remove_dir_all(p);
+    }
     Ok(list)
 }
 
@@ -1469,7 +1453,7 @@ fn main() {
     if std::env::args().any(|a| a == "--mcp") {
         // MCP server on stdio instead of the GUI (same libraries as the app)
         if let Some(list) = config_dir().and_then(|d| std::fs::read(d.join("libraries.json")).ok()).and_then(|b| serde_json::from_slice::<Vec<library::Source>>(&b).ok()) {
-            library::set_sources(list); // (a stopped Micro-Cap swap: put right by the app's next start)
+            library::set_sources(list);
         }
         return mcp::serve(started_in);
     }
@@ -1493,9 +1477,6 @@ fn main() {
                     let _ = std::fs::remove_file(dir.join("mc12cd.zip.part"));
                     let _ = std::fs::remove_dir_all(dir.join("mc12-unpack"));
                 });
-            }
-            if let Ok(data) = app.path().app_data_dir() {
-                microcap_put_back(&data.join("libraries").join("Micro-Cap 12")); // (before its index is built)
             }
             // saved library sources (else: detected ones); warm the index in the background
             if let Some(list) = library_config(app.handle()).ok().and_then(|f| std::fs::read(f).ok()).and_then(|b| serde_json::from_slice::<Vec<library::Source>>(&b).ok()) {

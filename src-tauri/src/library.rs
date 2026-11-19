@@ -176,12 +176,18 @@ impl Index {
     /// inside a subckt, nested subckts), each once, dependencies first.
     /// `seen` grows by everything emitted, so shared dependencies are written once per netlist.
     pub fn resolve(&self, name: &str, seen: &mut HashSet<String>) -> Vec<String> {
+        self.resolve_marked(name, seen).into_iter().map(|(d, _)| d).collect()
+    }
+
+    /// [`Index::resolve`], each definition marked whether a model library file's (not one of
+    /// nomospice's built-in models).
+    pub fn resolve_marked(&self, name: &str, seen: &mut HashSet<String>) -> Vec<(String, bool)> {
         let mut out = vec![];
         self.collect(name, seen, &mut out, 0);
         out
     }
 
-    fn collect(&self, name: &str, seen: &mut HashSet<String>, out: &mut Vec<String>, depth: usize) {
+    fn collect(&self, name: &str, seen: &mut HashSet<String>, out: &mut Vec<(String, bool)>, depth: usize) {
         if depth > 8 || !seen.insert(name.to_lowercase()) {
             return;
         }
@@ -202,7 +208,7 @@ impl Index {
                 }
             }
         }
-        out.push(if e.kind == "SUBCKT" { subckt_header(&text) } else { self.ako(&text, depth).unwrap_or(text) });
+        out.push((if e.kind == "SUBCKT" { subckt_header(&text) } else { self.ako(&text, depth).unwrap_or(text) }, !e.builtin()));
     }
 
     /// LTspice `ako:` ("a kind of"): `.model ZTX849 ako:FZT849 NPN(overrides)`; ngspice has no
@@ -391,6 +397,7 @@ pub fn index() -> RwLockReadGuard<'static, Option<Index>> {
 static BUILT: AtomicU64 = AtomicU64::new(u64::MAX);
 
 /// Library definitions a netlist needs for `name` (with its dependencies), or None.
+#[cfg(test)]
 pub fn definitions(name: &str, seen: &mut HashSet<String>) -> Option<Vec<String>> {
     definitions_marked(name, seen).map(|defs| defs.into_iter().map(|(d, _)| d).collect())
 }
@@ -401,13 +408,12 @@ pub fn definitions_marked(name: &str, seen: &mut HashSet<String>) -> Option<Vec<
     let ix = index();
     let ix = ix.as_ref()?;
     ix.get(name)?;
-    let defs = ix.resolve(name, seen);
+    let defs = ix.resolve_marked(name, seen);
     if defs.is_empty() {
         seen.remove(&name.to_lowercase()); // unreadable (file edited since indexing): let the caller fall back / warn
         return None;
     }
-    let theirs = |d: &str| !d.split_whitespace().nth(1).and_then(|n| ix.get(n)).is_some_and(Entry::builtin);
-    Some(defs.into_iter().map(|d| { let t = theirs(&d); (d, t) }).collect())
+    Some(defs)
 }
 
 /// A box symbol for a library subckt: pins left and right, in .subckt order, with labels.

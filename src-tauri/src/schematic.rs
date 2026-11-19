@@ -847,8 +847,9 @@ pub struct Netlist {
     #[serde(skip)]
     pub steps: Vec<String>,
     pub warnings: Vec<String>,
-    /// The model library files' definitions in the deck (not nomospice's built-in models): the MCP
-    /// server passes none of their text on (`netlist_shared`, no log of a deck holding them).
+    /// The names of the model library files' definitions in the deck (not nomospice's built-in
+    /// models): the MCP server passes none of their text on (`netlist_shared`, no log of a deck
+    /// holding them).
     #[serde(skip)]
     pub library: Vec<String>,
 }
@@ -881,7 +882,7 @@ struct Hier {
     /// includes, in its subcircuit, win there), and the names they define
     models: Vec<String>,
     emitted: HashSet<String>,
-    /// the model library files' definitions among them (the netlist's `library`)
+    /// the names of the model library files' definitions among them (the netlist's `library`)
     library: Vec<String>,
     /// those left out (`netlist_shared`)
     shared: bool,
@@ -3219,8 +3220,9 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
                     if !theirs {
                         return d;
                     }
-                    let shown = if h.shared { format!("* {}: from a model library, its text left out", d.split_whitespace().nth(1).unwrap_or("?")) } else { d.clone() };
-                    h.library.push(d);
+                    let name = d.split_whitespace().nth(1).unwrap_or("?").to_string();
+                    let shown = if h.shared { format!("* {name}: from a model library, its text left out") } else { d };
+                    h.library.push(name);
                     shown
                 }).collect();
                 Some(out.join("\n"))
