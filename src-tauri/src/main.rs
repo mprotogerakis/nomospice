@@ -1059,6 +1059,15 @@ async fn library_text(name: String) -> Option<String> {
     .ok()?
 }
 
+/// A swap of the unpacked Micro-Cap library that stopped half-way (the app ended between its two
+/// renames): the previous library back in its place.
+fn microcap_put_back(dir: &std::path::Path) {
+    let old = dir.with_file_name(".Micro-Cap 12.old");
+    if !dir.exists() && old.exists() {
+        let _ = std::fs::rename(&old, dir);
+    }
+}
+
 /// Micro-Cap 12 (freeware since Spectrum Software closed in 2019): its LIBRARY folder unpacked from
 /// the CD archive the user chose (mc12cd.zip) for local use. nomospice fetches nothing itself: where
 /// the archive comes from is the user's choice. Uses the system's tar/unzip; nothing is executed.
@@ -1076,9 +1085,7 @@ async fn library_unpack_microcap(app: tauri::AppHandle, zip: String) -> Result<V
         // unpacked beside the library (one file system: renamed into place), the old one kept until then
         let staging = dir.with_file_name(".Micro-Cap 12.new");
         let old = dir.with_file_name(".Micro-Cap 12.old");
-        if !dir.exists() && old.exists() {
-            let _ = std::fs::rename(&old, &dir); // (an earlier swap that stopped half-way: its library back first)
-        }
+        microcap_put_back(&dir);
         let _ = std::fs::remove_dir_all(&staging);
         std::fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
         let mut cmd = if cfg!(target_os = "linux") {
@@ -1095,8 +1102,9 @@ async fn library_unpack_microcap(app: tauri::AppHandle, zip: String) -> Result<V
         // (unzip's 1: warnings only)
         if !(out.status.success() || cfg!(target_os = "linux") && out.status.code() == Some(1)) || !lib.is_dir() {
             let _ = std::fs::remove_dir_all(&staging);
-            let first = |b: &[u8]| String::from_utf8_lossy(b).lines().map(str::trim).find(|l| !l.is_empty()).map(str::to_string);
-            let why = first(&out.stderr).or_else(|| first(&out.stdout)).unwrap_or_else(|| out.status.to_string()); // (unzip says it on stdout)
+            // (all the tool said, short: unzip names the archive first, tar ends with a summary)
+            let said: Vec<String> = [&out.stderr, &out.stdout].iter().flat_map(|b| String::from_utf8_lossy(b).lines().map(|l| l.trim().to_string()).collect::<Vec<_>>()).filter(|l| !l.is_empty()).collect();
+            let why = if said.is_empty() { out.status.to_string() } else { said.join(" ").chars().take(240).collect() };
             return Err(format!("{}: no LIBRARY folder unpacked ({why}): choose Micro-Cap 12's CD archive, mc12cd.zip", zip.display()));
         }
         let _ = std::fs::remove_dir_all(&old);
@@ -1476,12 +1484,20 @@ fn main() {
         .setup(|app| {
             use tauri::Manager;
             if let Ok(dir) = app.path().app_cache_dir() {
-                // (earlier versions downloaded the Micro-Cap CD archive here: 60 MB not needed any more)
-                let _ = std::fs::remove_file(dir.join("mc12cd.zip"));
-                let _ = std::fs::remove_file(dir.join("mc12cd.zip.part"));
-                let _ = std::fs::remove_dir_all(dir.join("mc12-unpack"));
                 ngspice::set_scratch_dir(dir);
             }
+            let (cache, data) = (app.path().app_cache_dir().ok(), app.path().app_data_dir().ok());
+            std::thread::spawn(move || {
+                // (earlier versions downloaded the Micro-Cap CD archive and unpacked it here: not needed any more)
+                if let Some(c) = cache {
+                    let _ = std::fs::remove_file(c.join("mc12cd.zip"));
+                    let _ = std::fs::remove_file(c.join("mc12cd.zip.part"));
+                    let _ = std::fs::remove_dir_all(c.join("mc12-unpack"));
+                }
+                if let Some(d) = data {
+                    microcap_put_back(&d.join("libraries").join("Micro-Cap 12"));
+                }
+            });
             // saved library sources (else: detected ones); warm the index in the background
             if let Some(list) = library_config(app.handle()).ok().and_then(|f| std::fs::read(f).ok()).and_then(|b| serde_json::from_slice(&b).ok()) {
                 library::set_sources(list);
