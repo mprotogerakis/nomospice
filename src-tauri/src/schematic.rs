@@ -2070,9 +2070,9 @@ pub fn prepare(text: &str, dir: Option<&std::path::Path>, warnings: &mut Vec<Str
 
 /// [`prepare`], and `read`: whether a file (.include/.lib) was read into the deck.
 fn prepare_reading(text: &str, dir: Option<&std::path::Path>, warnings: &mut Vec<String>, read: &mut bool) -> Prepared {
-    let mut x = Expander { warnings, out: String::new(), seen: HashSet::new(), scope: (None, 0), read: true, diode: None, behavioural: vec![] };
+    let mut x = Expander { warnings, out: String::new(), seen: HashSet::new(), scope: (None, 0), read: true, diode: None, behavioural: vec![], read_any: false };
     x.expand(text, dir, None, 0);
-    *read = !x.seen.is_empty(); // (a file is in `seen` once it is to be read)
+    *read = x.read_any;
     x.warn_behavioural();
     // (also in included files; Laplace first: a random call there is said by its own name)
     let out = crate::laplace::rewrite(&x.out, x.warnings);
@@ -2358,7 +2358,7 @@ fn random_calls(s: &str, all: bool, own: &[String], warnings: &mut Vec<String>) 
 /// The warnings `prepare` would give for the schematic's own lines, without reading any
 /// included file (cheap enough for every edit).
 pub fn prepare_warnings(text: &str, dir: Option<&std::path::Path>, warnings: &mut Vec<String>) {
-    let mut x = Expander { warnings, out: String::new(), seen: HashSet::new(), scope: (None, 0), read: false, diode: None, behavioural: vec![] };
+    let mut x = Expander { warnings, out: String::new(), seen: HashSet::new(), scope: (None, 0), read: false, diode: None, behavioural: vec![], read_any: false };
     x.expand(text, dir, None, 0);
     x.warn_behavioural();
     let expanded = crate::laplace::rewrite(&std::mem::take(&mut x.out), x.warnings);
@@ -2406,6 +2406,8 @@ struct Expander<'a> {
     diode: Option<String>,
     /// behavioural diode models seen; warned about only if a diode uses them
     behavioural: Vec<String>,
+    /// a file (.include/.lib) was read into the deck
+    read_any: bool,
 }
 
 impl Expander<'_> {
@@ -2525,7 +2527,10 @@ impl Expander<'_> {
                     return; // already inlined (or an include cycle)
                 }
                 match std::fs::read(&path) {
-                    Ok(bytes) => self.expand(&decode(&bytes), path.parent(), sec, depth + 1),
+                    Ok(bytes) => {
+                        self.read_any = true;
+                        self.expand(&decode(&bytes), path.parent(), sec, depth + 1)
+                    }
                     Err(e) => self.warnings.push(format!("{}: {e}", path.display())),
                 }
             }
@@ -3206,18 +3211,18 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
         }
         let builtin = BUILTIN_MODELS.iter().find(|(n, _)| *n == m).map(|(_, t)| t.to_string());
         // (`opamp` is always ours, drawn or in a netlist's text: LTspice's opamp.sub needs LTspice)
-        let lib = if own_used.contains(&m) || m == "opamp" { None } else { crate::library::definitions(&m, &mut h.emitted) };
+        let lib = if own_used.contains(&m) || m == "opamp" { None } else { crate::library::definitions_marked(&m, &mut h.emitted) };
         let def = match (lib, builtin) {
             (Some(defs), _) => {
-                // (a library file's, not one of nomospice's built-in models the index lists too)
-                let ix = crate::library::index();
-                let name = |d: &str| d.split_whitespace().nth(1).unwrap_or("?").to_string();
-                let theirs = |d: &str| !ix.as_ref().and_then(|ix| ix.get(&name(d))).is_some_and(|e| e.builtin());
-                let out: Vec<String> = defs.iter().map(|d| match theirs(d) {
-                    true if h.shared => format!("* {}: from a model library, its text left out", name(d)),
-                    _ => d.clone(),
+                // (`theirs`: a library file's, not one of nomospice's built-in models the index lists too)
+                let out: Vec<String> = defs.into_iter().map(|(d, theirs)| {
+                    if !theirs {
+                        return d;
+                    }
+                    let shown = if h.shared { format!("* {}: from a model library, its text left out", d.split_whitespace().nth(1).unwrap_or("?")) } else { d.clone() };
+                    h.library.push(d);
+                    shown
                 }).collect();
-                h.library.extend(defs.iter().filter(|d| theirs(d)).cloned());
                 Some(out.join("\n"))
             }
             (None, Some(text)) => h.emitted.insert(m.clone()).then_some(text),

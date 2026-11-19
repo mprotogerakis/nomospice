@@ -296,7 +296,7 @@ mod tests {
         for r in [fails(asc, ""), fails(&own, &format!("TEXT 0 380 Left 2 !Ω.inc {}\n", dir.join("q.lib").display()))] {
             assert!(r["ok"] == false && r["log"].is_null() && r["warnings"].to_string().contains("log is not passed on"), "{r}");
         }
-        for r in [fails(&own, ""), fails(&own, "TEXT 0 380 Left 2 !.lib opamp.sub\n")] {
+        for r in [fails(&own, ""), fails(&own, "TEXT 0 380 Left 2 !.lib opamp.sub\n"), fails(&own, "TEXT 0 380 Left 2 !.inc nothere.lib\n")] {
             assert!(r["ok"] == false && r["log"].is_array(), "{r}");
         }
         // a definition written in a comment before the library's own: the library's left out all the same

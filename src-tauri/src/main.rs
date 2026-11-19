@@ -1060,10 +1060,10 @@ async fn library_text(name: String) -> Option<String> {
 }
 
 /// A swap of the unpacked Micro-Cap library that stopped half-way (the app ended between its two
-/// renames): the previous library back in its place. `dir`: the library's place (another: nothing).
+/// renames): the previous library back in its place (`dir`).
 fn microcap_put_back(dir: &std::path::Path) {
     let old = dir.with_file_name(".Micro-Cap 12.old");
-    if dir.file_name().is_some_and(|n| n == "Micro-Cap 12") && !dir.exists() && old.exists() {
+    if !dir.exists() && old.exists() {
         let _ = std::fs::rename(&old, dir);
     }
 }
@@ -1469,8 +1469,7 @@ fn main() {
     if std::env::args().any(|a| a == "--mcp") {
         // MCP server on stdio instead of the GUI (same libraries as the app)
         if let Some(list) = config_dir().and_then(|d| std::fs::read(d.join("libraries.json")).ok()).and_then(|b| serde_json::from_slice::<Vec<library::Source>>(&b).ok()) {
-            list.iter().for_each(|s| microcap_put_back(&s.path)); // (before its index is built)
-            library::set_sources(list);
+            library::set_sources(list); // (a stopped Micro-Cap swap: put right by the app's next start)
         }
         return mcp::serve(started_in);
     }

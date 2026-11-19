@@ -392,6 +392,12 @@ static BUILT: AtomicU64 = AtomicU64::new(u64::MAX);
 
 /// Library definitions a netlist needs for `name` (with its dependencies), or None.
 pub fn definitions(name: &str, seen: &mut HashSet<String>) -> Option<Vec<String>> {
+    definitions_marked(name, seen).map(|defs| defs.into_iter().map(|(d, _)| d).collect())
+}
+
+/// [`definitions`], each marked whether a model library file's (not one of nomospice's built-in
+/// models), as the index that resolved them has it.
+pub fn definitions_marked(name: &str, seen: &mut HashSet<String>) -> Option<Vec<(String, bool)>> {
     let ix = index();
     let ix = ix.as_ref()?;
     ix.get(name)?;
@@ -400,7 +406,8 @@ pub fn definitions(name: &str, seen: &mut HashSet<String>) -> Option<Vec<String>
         seen.remove(&name.to_lowercase()); // unreadable (file edited since indexing): let the caller fall back / warn
         return None;
     }
-    Some(defs)
+    let theirs = |d: &str| !d.split_whitespace().nth(1).and_then(|n| ix.get(n)).is_some_and(Entry::builtin);
+    Some(defs.into_iter().map(|d| { let t = theirs(&d); (d, t) }).collect())
 }
 
 /// A box symbol for a library subckt: pins left and right, in .subckt order, with labels.
