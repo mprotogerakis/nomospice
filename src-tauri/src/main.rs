@@ -1078,8 +1078,8 @@ async fn library_unpack_microcap(app: tauri::AppHandle, zip: String) -> Result<V
 /// `library_unpack_microcap` into `dir`, its one place: one there already is replaced only if no
 /// source uses it (an earlier unpack whose source was removed); nothing else is touched.
 async fn unpack_microcap(app: tauri::AppHandle, zip: String, dir: std::path::PathBuf) -> Result<Vec<library::Source>, String> {
-    // (a source in it or around it uses it too)
-    let in_use = |dir: &std::path::Path| library::sources().iter().any(|s| s.path.starts_with(dir) || dir.starts_with(&s.path));
+    // (a source of it or of a folder in it; not one of a folder around it, the home folder say)
+    let in_use = |dir: &std::path::Path| library::sources().iter().any(|s| s.path.starts_with(dir));
     const IN_USE: &str = "the Micro-Cap 12 library is unpacked already (listed under Model Libraries; to unpack it anew, remove it there first)";
     if in_use(&dir) {
         return Err(IN_USE.into());
@@ -1128,7 +1128,6 @@ async fn unpack_microcap(app: tauri::AppHandle, zip: String, dir: std::path::Pat
     .await
     .map_err(|e| e.to_string())??;
     let mut list = library::sources();
-    list.retain(|s| s.path != dir);
     list.push(library::Source { name: "Micro-Cap 12".into(), path: dir, enabled: true });
     library_set_sources(app, list.clone()).await?;
     Ok(list)

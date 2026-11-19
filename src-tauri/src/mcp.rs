@@ -308,7 +308,7 @@ mod tests {
         let text = n["netlist"].as_str().unwrap();
         assert!(text.contains("QLOCAL: from a model library") && !text.contains("BF=123"), "{n}");
         let r = call(&dir, "simulate", &json!({ "path": "top.asc" })).unwrap();
-        assert!(r["ok"] == false && r["log"].is_null(), "{r}");
+        assert!(r["ok"] == false && r["log"].is_null() && r["warnings"].to_string().contains("log is not passed on"), "{r}");
         // a definition written in a comment before the library's own: the library's left out all the same
         let r = call(&dir, "netlist", &json!({ "asc": format!("{asc}TEXT 0 300 Left 2 !* .model QLOCAL NPN(BF=123\n") })).unwrap();
         assert_eq!(r["netlist"].as_str().unwrap().matches("BF=123").count(), 1, "{r}");
