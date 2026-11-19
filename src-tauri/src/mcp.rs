@@ -15,7 +15,7 @@ fn tools() -> Value {
     json!([
         {
             "name": "simulate",
-            "description": "Simulate a schematic with ngspice. Returns the analysis (plot, scale), all vector names, operating-point/result values, .meas results (LTspice syntax works), netlist warnings, the ngspice log tail on failure, and the requested traces downsampled to `points` samples. A .step run lists its steps; each trace then comes as {steps: [{step, x, re, im}]}, one curve per step, `points` shared by them. Trace expressions use ngspice syntax plus part currents by name: v(\"net\"), v(\"a\")-v(\"b\"), I(R1) for the current into R1's pin 1, Ic(Q1)/Ib(Q1)/Ie(Q1), Id(M1)/Ig(M1)/Is(M1), Ix(U1:OUT) for a subcircuit's pin (the netlist tool lists them per part as pin_currents), i(v1) for sources, db(v(\"out\")).",
+            "description": "Simulate a schematic with ngspice. Returns the analysis (plot, scale), all vector names, operating-point/result values, .meas results (LTspice syntax works), netlist warnings, the ngspice log tail on failure (not when the circuit uses a model library's text, which stays on this computer), and the requested traces downsampled to `points` samples. A .step run lists its steps; each trace then comes as {steps: [{step, x, re, im}]}, one curve per step, `points` shared by them. Trace expressions use ngspice syntax plus part currents by name: v(\"net\"), v(\"a\")-v(\"b\"), I(R1) for the current into R1's pin 1, Ic(Q1)/Ib(Q1)/Ie(Q1), Id(M1)/Ig(M1)/Is(M1), Ix(U1:OUT) for a subcircuit's pin (the netlist tool lists them per part as pin_currents), i(v1) for sources, db(v(\"out\")).",
             "inputSchema": { "type": "object", "properties": {
                 "path": path, "asc": asc,
                 "traces": { "type": "array", "items": { "type": "string" }, "description": "ngspice expressions to return as waveforms" },
@@ -109,16 +109,10 @@ fn shareable(nl: &schematic::Netlist) -> Option<String> {
     })
 }
 
-/// ngspice's log as passed to an AI client: a line quoting a model library's definition left out
-/// (ngspice echoes a line it rejects, often lowercased, at the end of its message; a short line,
-/// `+ bf=1`, only there, so that a `+` or `.ends` elsewhere does not count).
-fn shareable_log(log: &[String], nl: &schematic::Netlist) -> Vec<String> {
-    let lines: Vec<String> = library_defs(nl).iter().flat_map(|d| d.lines()).map(|l| l.trim().to_lowercase()).filter(|l| !l.trim_start_matches('+').trim().is_empty()).collect();
-    log.iter().map(|l| {
-        let low = l.trim_end().to_lowercase();
-        let quotes = |d: &String| if d.len() >= 8 { low.contains(d.as_str()) } else { low.ends_with(d.as_str()) };
-        if lines.iter().any(quotes) { "(a line of a model library, left out)".to_string() } else { l.clone() }
-    }).collect()
+/// ngspice's log as passed to an AI client: none when the deck holds a model library's text (ngspice
+/// echoes lines it rejects, rewritten: no line of its log can be told free of that text).
+fn shareable_log(log: &[String], nl: &schematic::Netlist) -> Option<Vec<String>> {
+    library_defs(nl).is_empty().then(|| log.to_vec())
 }
 
 fn call(base: &Path, name: &str, args: &Value) -> Result<Value, String> {
@@ -135,7 +129,13 @@ fn call(base: &Path, name: &str, args: &Value) -> Result<Value, String> {
             // and no root locus share this engine, so the run and its traces below cannot be interleaved
             let run = match ngspice::run(&prepared) {
                 Ok(run) => run,
-                Err(log) => return Ok(json!({ "ok": false, "warnings": warnings, "log": shareable_log(&log[log.len().saturating_sub(40)..], &sim) })),
+                Err(log) => {
+                    let log = shareable_log(&log[log.len().saturating_sub(40)..], &sim);
+                    if log.is_none() {
+                        warnings.push("ngspice's log is not passed on: the circuit uses a model library's text (nomospice shows the log)".into());
+                    }
+                    return Ok(json!({ "ok": false, "warnings": warnings, "log": log }));
+                }
             };
             let points = args["points"].as_u64().unwrap_or(200).clamp(2, 5000) as usize;
             let mut traces = serde_json::Map::new();
@@ -226,9 +226,10 @@ fn call(base: &Path, name: &str, args: &Value) -> Result<Value, String> {
         "library_get" => {
             let name = args["name"].as_str().ok_or("`name` missing")?;
             let ix = library::index();
-            let e = ix.as_ref().and_then(|ix| ix.get(name)).ok_or(format!("`{name}` is not in the libraries"))?;
+            let ix = ix.as_ref().ok_or(format!("`{name}` is not in the libraries"))?;
+            let e = ix.get(name).ok_or(format!("`{name}` is not in the libraries"))?;
             // (resolved on the index held: another index() here could wait on itself)
-            let text = e.builtin().then(|| ix.as_ref().map(|ix| ix.resolve(name, &mut Default::default()).join("\n"))).flatten();
+            let text = e.builtin().then(|| ix.resolve(name, &mut Default::default()).join("\n")).filter(|t| !t.is_empty());
             Ok(json!({ "name": e.name, "kind": e.kind, "pins": e.pins, "source": e.source, "symbol": e.symbol, "text": text }))
         }
         "examples" => Ok(json!(schematic::EXAMPLES.iter().map(|(n, s)| json!({ "name": n, "asc": s })).collect::<Vec<_>>())),
@@ -306,10 +307,11 @@ mod tests {
         let g = call(&dir, "library_get", &json!({ "name": "QLOCAL" })).unwrap();
         assert!(g["kind"] == "NPN" && g["text"].is_null(), "{g}");
         assert!(call(&dir, "library_get", &json!({ "name": "2N3904" })).unwrap()["text"].as_str().unwrap().contains("BF=180"));
-        // ngspice's log quoting the library's line (lowercased): left out, the rest kept
+        // ngspice's log: none with a library's text in the deck, all of it without
         let nl = schematic::netlist(&schematic::parse_asc(asc), &mut schematic::Library::builtin());
-        let log = shareable_log(&["Error on line 3 : .model qlocal npn(bf=123".into(), "Error on line 4 : + va=9)".into(), "Error: no such vector + 2".into()], &nl);
-        assert!(!log[0].contains("bf=123") && !log[1].contains("va=9") && log[2] == "Error: no such vector + 2", "{log:?}");
+        assert!(shareable_log(&["Error on line 3 : .model qlocal npn(bf=123".into()], &nl).is_none());
+        let own = schematic::netlist(&schematic::parse_asc(&asc.replace("QLOCAL", "2N3904")), &mut schematic::Library::builtin());
+        assert_eq!(shareable_log(&["Error: x".into()], &own), Some(vec!["Error: x".to_string()]));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -388,7 +388,7 @@ function PartsDialog({ replace, kind0, libraries }: { replace?: number; kind0?: 
             No model library in use: besides the symbols, only nomospice's default models (1N4148, 2N3904, 2N3906, switches) are here.
             {srcs.length > 0 && ` Listed but switched off: ${[...new Set(srcs.map((s) => s.name))].join(", ")}. Switch them on under Libraries… (their own license terms apply).`}
           </span>
-          <Button type="button" size="sm" onClick={() => setUp("microcap")}>Micro-Cap 12 from mc12cd.zip…</Button>
+          {!srcs.some((s) => /micro-cap/i.test(s.name)) && <Button type="button" size="sm" onClick={() => setUp("microcap")}>Micro-Cap 12 from mc12cd.zip…</Button>}
           <Button type="button" size="sm" onClick={() => setUp("add")}>Add folder…</Button>
         </div>
       )}
