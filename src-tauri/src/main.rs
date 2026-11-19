@@ -1078,8 +1078,11 @@ async fn library_unpack_microcap(app: tauri::AppHandle, zip: String) -> Result<V
 /// `library_unpack_microcap` into `dir`, its one place: one there already is replaced only if no
 /// source uses it (an earlier unpack whose source was removed); nothing else is touched.
 async fn unpack_microcap(app: tauri::AppHandle, zip: String, dir: std::path::PathBuf) -> Result<Vec<library::Source>, String> {
-    if library::sources().iter().any(|s| s.path == dir) {
-        return Err("the Micro-Cap 12 library is unpacked already: tick it in the list".into());
+    // (a source in it or around it uses it too)
+    let in_use = |dir: &std::path::Path| library::sources().iter().any(|s| s.path.starts_with(dir) || dir.starts_with(&s.path));
+    const IN_USE: &str = "the Micro-Cap 12 library is unpacked already (listed under Model Libraries; to unpack it anew, remove it there first)";
+    if in_use(&dir) {
+        return Err(IN_USE.into());
     }
     let at = dir.clone();
     tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
@@ -1109,7 +1112,15 @@ async fn unpack_microcap(app: tauri::AppHandle, zip: String, dir: std::path::Pat
             let why = why.map_or_else(|| if out.status.success() { "the archive has no LIBRARY folder".into() } else { out.status.to_string() }, |l| l.chars().take(200).collect());
             return Err(format!("{}: no LIBRARY folder unpacked ({why}): choose Micro-Cap 12's CD archive, mc12cd.zip", zip.display()));
         }
-        let _ = std::fs::remove_dir_all(&at); // (an earlier unpack no source uses)
+        // (an earlier unpack no source uses, asked again: the list may have changed meanwhile)
+        if in_use(&at) {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(IN_USE.into());
+        }
+        if let Err(e) = std::fs::remove_dir_all(&at).or_else(|e| if at.exists() { Err(e) } else { Ok(()) }) {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(format!("the earlier unpacked library at {} could not be replaced: {e}", at.display()));
+        }
         let moved = std::fs::rename(&lib, &at).map_err(|e| e.to_string());
         let _ = std::fs::remove_dir_all(&staging);
         moved
@@ -1117,6 +1128,7 @@ async fn unpack_microcap(app: tauri::AppHandle, zip: String, dir: std::path::Pat
     .await
     .map_err(|e| e.to_string())??;
     let mut list = library::sources();
+    list.retain(|s| s.path != dir);
     list.push(library::Source { name: "Micro-Cap 12".into(), path: dir, enabled: true });
     library_set_sources(app, list.clone()).await?;
     Ok(list)

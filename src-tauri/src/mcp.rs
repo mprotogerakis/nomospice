@@ -299,6 +299,16 @@ mod tests {
         for r in [fails(&own, ""), fails(&own, "TEXT 0 380 Left 2 !.lib opamp.sub\n"), fails(&own, "TEXT 0 380 Left 2 !.inc nothere.lib\n")] {
             assert!(r["ok"] == false && r["log"].is_array(), "{r}");
         }
+        // a library model used only inside a block: left out, and the deck known to hold it
+        let sheet = "Version 4\nSHEET 1 880 680\nFLAG 16 16 in\nIOPIN 16 16 In\nFLAG 16 96 out\nIOPIN 16 96 Out\nSYMBOL res 0 0 R0\nSYMATTR InstName R1\nSYMATTR Value 1k\nSYMBOL npn 200 0 R0\nSYMATTR InstName Q1\nSYMATTR Value QLOCAL\n";
+        std::fs::write(dir.join("blk.asc"), sheet).unwrap();
+        std::fs::write(dir.join("blk.asy"), schematic::block_asy(&schematic::parse_asc(sheet)).unwrap()).unwrap();
+        std::fs::write(dir.join("top.asc"), "Version 4\nSHEET 1 880 680\nSYMBOL blk 0 0 R0\nSYMATTR InstName X1\nTEXT 0 300 Left 2 !.tran 1m\nTEXT 0 340 Left 2 !XU1 a b nosuchsubckt\n").unwrap();
+        let n = call(&dir, "netlist", &json!({ "path": "top.asc" })).unwrap();
+        let text = n["netlist"].as_str().unwrap();
+        assert!(text.contains("QLOCAL: from a model library") && !text.contains("BF=123"), "{n}");
+        let r = call(&dir, "simulate", &json!({ "path": "top.asc" })).unwrap();
+        assert!(r["ok"] == false && r["log"].is_null(), "{r}");
         // a definition written in a comment before the library's own: the library's left out all the same
         let r = call(&dir, "netlist", &json!({ "asc": format!("{asc}TEXT 0 300 Left 2 !* .model QLOCAL NPN(BF=123\n") })).unwrap();
         assert_eq!(r["netlist"].as_str().unwrap().matches("BF=123").count(), 1, "{r}");

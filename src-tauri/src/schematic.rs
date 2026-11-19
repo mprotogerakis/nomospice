@@ -3215,9 +3215,10 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
         let lib = if own_used.contains(&m) || m == "opamp" { None } else { crate::library::definitions_marked(&m, &mut h.emitted) };
         let def = match (lib, builtin) {
             (Some(defs), _) => {
-                // (`theirs`: a library file's, not one of nomospice's built-in models the index lists too)
-                let out: Vec<String> = defs.into_iter().map(|(d, theirs)| {
-                    let Some(name) = theirs else { return d };
+                // (`lib_name`: a library file's definition's name; None: one of nomospice's built-in
+                // models, which the index lists too)
+                let out: Vec<String> = defs.into_iter().map(|(d, lib_name)| {
+                    let Some(name) = lib_name else { return d };
                     let shown = if h.shared { format!("* {name}: from a model library, its text left out") } else { d };
                     h.library.push(name);
                     shown
