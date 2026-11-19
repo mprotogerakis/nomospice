@@ -351,6 +351,13 @@ pub fn sources() -> Vec<Source> {
     SOURCES.read().ok().and_then(|s| s.clone()).unwrap_or_else(detected)
 }
 
+/// Tests: the libraries found on this computer, switched on (as their user would). Set by each
+/// test that looks them up, under the simulator's test lock: tests set the sources each their own.
+#[cfg(test)]
+pub fn use_detected() {
+    set_sources(detected().into_iter().map(|s| Source { enabled: true, ..s }).collect());
+}
+
 /// New source list: the index is rebuilt on its next use.
 pub fn set_sources(list: Vec<Source>) {
     if let Ok(mut s) = SOURCES.write() {

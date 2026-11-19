@@ -1065,7 +1065,6 @@ async fn library_text(name: String) -> Option<String> {
 #[tauri::command]
 async fn library_unpack_microcap(app: tauri::AppHandle, zip: String) -> Result<Vec<library::Source>, String> {
     use tauri::Manager;
-    let cache = app.path().app_cache_dir().map_err(|e| e.to_string())?;
     let target = app.path().app_data_dir().map_err(|e| e.to_string())?.join("libraries").join("Micro-Cap 12");
     static UNPACKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if UNPACKING.swap(true, std::sync::atomic::Ordering::SeqCst) {
@@ -1073,25 +1072,40 @@ async fn library_unpack_microcap(app: tauri::AppHandle, zip: String) -> Result<V
     }
     let dir = target.clone();
     let res = tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
-        let run = |cmd: &mut std::process::Command, ok: &[i32]| match cmd.status() {
-            Ok(s) if s.success() || s.code().is_some_and(|c| ok.contains(&c)) => Ok(()),
-            Ok(_) => Err(format!("{zip} holds no LIBRARY folder: choose Micro-Cap 12's CD archive (mc12cd.zip)")),
-            Err(e) => Err(format!("{cmd:?}: {e}")),
-        };
-        std::fs::create_dir_all(&cache).map_err(|e| e.to_string())?;
         let zip = std::path::Path::new(&zip);
-        let unpack = |zip: &std::path::Path, tmp: &std::path::Path| if cfg!(target_os = "linux") {
-            run(git::command("unzip").args(["-q", "-o"]).arg(zip).arg("LIBRARY/*").arg("-d").arg(tmp), &[1]) // 1 = warnings only
+        // unpacked beside the library (one file system: renamed into place), the old one kept until then
+        let staging = dir.with_file_name(".Micro-Cap 12.new");
+        let old = dir.with_file_name(".Micro-Cap 12.old");
+        let _ = std::fs::remove_dir_all(&staging);
+        std::fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
+        let mut cmd = if cfg!(target_os = "linux") {
+            let mut c = git::command("unzip");
+            c.args(["-q", "-o"]).arg(zip).arg("LIBRARY/*").arg("-d").arg(&staging);
+            c
         } else {
-            run(git::command("tar").arg("-xf").arg(zip).arg("-C").arg(tmp).arg("LIBRARY"), &[]) // bsdtar reads zip
+            let mut c = git::command("tar"); // (bsdtar reads zip)
+            c.arg("-xf").arg(zip).arg("-C").arg(&staging).arg("LIBRARY");
+            c
         };
-        let tmp = cache.join("mc12-unpack");
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
-        unpack(zip, &tmp)?; // (the user's archive is left as it is, whatever happens)
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(dir.parent().unwrap()).map_err(|e| e.to_string())?;
-        std::fs::rename(tmp.join("LIBRARY"), &dir).map_err(|e| e.to_string())
+        let out = cmd.output().map_err(|e| format!("{cmd:?}: {e}"))?;
+        let lib = staging.join("LIBRARY");
+        // (unzip's 1: warnings only)
+        if !(out.status.success() || cfg!(target_os = "linux") && out.status.code() == Some(1)) || !lib.is_dir() {
+            let _ = std::fs::remove_dir_all(&staging);
+            let why = String::from_utf8_lossy(&out.stderr).lines().find(|l| !l.trim().is_empty()).unwrap_or_default().to_string();
+            return Err(format!("{}: no LIBRARY folder unpacked ({why}): choose Micro-Cap 12's CD archive, mc12cd.zip", zip.display()));
+        }
+        let _ = std::fs::remove_dir_all(&old);
+        if dir.exists() {
+            std::fs::rename(&dir, &old).map_err(|e| e.to_string())?;
+        }
+        if let Err(e) = std::fs::rename(&lib, &dir) {
+            let _ = std::fs::rename(&old, &dir); // (the previous library back)
+            return Err(e.to_string());
+        }
+        let _ = std::fs::remove_dir_all(&old);
+        let _ = std::fs::remove_dir_all(&staging);
+        Ok(())
     })
     .await;
     UNPACKING.store(false, std::sync::atomic::Ordering::SeqCst);
@@ -1451,6 +1465,9 @@ fn main() {
         .setup(|app| {
             use tauri::Manager;
             if let Ok(dir) = app.path().app_cache_dir() {
+                // (earlier versions downloaded the Micro-Cap CD archive here: 60 MB not needed any more)
+                let _ = std::fs::remove_file(dir.join("mc12cd.zip"));
+                let _ = std::fs::remove_file(dir.join("mc12cd.zip.part"));
                 ngspice::set_scratch_dir(dir);
             }
             // saved library sources (else: detected ones); warm the index in the background

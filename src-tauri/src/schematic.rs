@@ -3178,6 +3178,8 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
     // the libraries (LTspice's stock models as LTspice loads them implicitly, Micro-Cap 12, user
     // folders; with their dependencies), else ours. `opamp` is always ours: the symbol's model.
     // (one set for the whole hierarchy: a sheet's go to the top, global, each definition once)
+    // (a library found on this computer is switched off until the user switches it on; asked once)
+    let mut off = None;
     for m in used_models {
         if h.emitted.contains(&m) {
             continue;
@@ -3192,8 +3194,7 @@ fn build_netlist(items: &[Item], lib: &mut Library, sense: bool, h: &mut Hier) -
             }
             (None, Some(text)) => h.emitted.insert(m.clone()).then_some(text),
             (None, None) if !includes && !h.emitted.contains(&m) && !h.quiet.contains(&m) => {
-                // (a library found on this computer is switched off until the user switches it on)
-                let off = crate::library::sources().iter().any(|s| !s.enabled);
+                let off = *off.get_or_insert_with(|| crate::library::sources().iter().any(|s| !s.enabled));
                 nl.warnings.push(format!("`{m}`: no model or subcircuit of that name in the libraries{}", if off { " in use (Model Libraries… lists some switched off)" } else { "" }));
                 None
             }
@@ -3491,8 +3492,8 @@ mod tests {
         let mut w = vec![];
         prepare("* t\n  D1 a 0\n+ TVS\n.model TVS D(Ron=.5)\n.end\n", None, &mut w);
         assert!(w.iter().any(|w| w.contains("model tvs")), "indented/continued diode line: {w:?}");
-        let _s = SIM.lock(); // (the libraries: those found here, switched on, as their user would)
-        crate::library::set_sources(crate::library::detected().into_iter().map(|s| crate::library::Source { enabled: true, ..s }).collect());
+        let _s = SIM.lock();
+        crate::library::use_detected();
         if let Some(card) = crate::library::definitions("ztx849", &mut HashSet::new()).and_then(|d| d.last().cloned()) {
             assert!(!card.to_lowercase().contains("ako:") && card.to_lowercase().starts_with(".model ztx849 npn("), "{card}");
             assert!(!card.contains(';'), "comment swallowed the overrides: {card}");
@@ -3503,7 +3504,7 @@ mod tests {
     #[test]
     fn ltspice_stock_vdmos_is_used() {
         let _s = SIM.lock();
-        crate::library::set_sources(crate::library::detected().into_iter().map(|s| crate::library::Source { enabled: true, ..s }).collect());
+        crate::library::use_detected();
         if crate::library::definitions("bsp89", &mut HashSet::new()).is_none() {
             return; // no local LTspice library
         }
@@ -4603,6 +4604,7 @@ SYMBOL half 400 300 R0\nSYMATTR InstName U4\nSYMATTR Value R=3k\nFLAG 352 300 a\
     #[test]
     fn builtin_models_and_opamp_follower() {
         let _s = SIM.lock();
+        crate::library::use_detected();
         let mut items = parse_asc(RC);
         items.push(Item::Sym { sym: "npn".into(), x: 600, y: 0, rot: "R0".into(), attrs: BTreeMap::new(), extra: vec![] });
         items.push(Item::Sym { sym: "nmos".into(), x: 800, y: 0, rot: "R0".into(), attrs: BTreeMap::new(), extra: vec![] });

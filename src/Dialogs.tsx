@@ -533,7 +533,7 @@ function SymbolPreview({ name, hi }: { name: string; hi: number | null }) {
   );
 }
 
-/** Library folders: detected (LTspice, Micro-Cap 12), added by the user, or downloaded. */
+/** Library folders: found on this computer (LTspice, Micro-Cap 12; listed switched off), added by the user, or unpacked from Micro-Cap 12's CD archive. */
 function Sources({ start }: { start?: "add" | "microcap" }) {
   const [list, setList] = useState<LibSource[]>([]);
   const [busy, setBusy] = useState("");
@@ -554,12 +554,7 @@ function Sources({ start }: { start?: "add" | "microcap" }) {
     if (typeof dir === "string") await save([...(await invoke<LibSource[]>("library_sources")), { name: dir.split(/[\\/]/).pop() || dir, path: dir, enabled: true }]);
   };
   const microcap = async () => {
-    // already downloaded (still on disk), only switched off: switch it on again instead of fetching 60 MB
-    const cur = await invoke<LibSource[]>("library_sources");
-    // (the download, or a detected install switched off)
-    const mine = cur.find((s) => /micro-cap/i.test(s.name) && !s.enabled);
-    if (mine && (await invoke<boolean>("path_exists", { path: mine.path }))) return save(cur.map((s) => (s === mine ? { ...s, enabled: true } : s)));
-    // (the archive the user has: nomospice downloads nothing)
+    // (the archive the user has: nomospice downloads nothing; one listed already is ticked there)
     const zip = await open({ multiple: false, filters: [{ name: "Micro-Cap 12 CD archive", extensions: ["zip"] }] });
     if (typeof zip !== "string") return;
     setBusy("Unpacking the Micro-Cap 12 library…");

@@ -93,17 +93,30 @@ fn downsample(v: &[f64], n: usize) -> Vec<f64> {
     ngspice::even(v.len(), n).into_iter().map(|k| v[k]).collect()
 }
 
-/// The netlist's text as passed to an AI client: a model library file's definitions left out, a
-/// comment line for each (nomospice's built-in models stay).
-fn shareable(nl: &schematic::Netlist) -> String {
+/// A model library file's definitions in the netlist (nomospice's built-in models are not among them).
+fn library_defs(nl: &schematic::Netlist) -> Vec<&str> {
     let ix = library::index();
-    nl.library.iter().fold(nl.text.clone(), |text, d| {
+    let ours = |d: &str| d.split_whitespace().nth(1).is_some_and(|n| ix.as_ref().and_then(|ix| ix.get(n)).is_some_and(|e| e.builtin()));
+    nl.library.iter().map(String::as_str).filter(|d| !ours(d)).collect()
+}
+
+/// The netlist's text as passed to an AI client: a model library file's definitions left out, a
+/// comment line for each; None if one is not found as written (then nothing of it is passed on).
+fn shareable(nl: &schematic::Netlist) -> Option<String> {
+    library_defs(nl).into_iter().try_fold(nl.text.clone(), |text, d| {
         let name = d.split_whitespace().nth(1).unwrap_or("?");
-        if ix.as_ref().and_then(|ix| ix.get(name)).is_some_and(|e| e.builtin()) {
-            return text;
-        }
-        text.replacen(d.as_str(), &format!("* {name}: from a model library, its text left out"), 1)
+        text.contains(d).then(|| text.replacen(d, &format!("* {name}: from a model library, its text left out"), 1))
     })
+}
+
+/// ngspice's log as passed to an AI client: a line quoting a model library's definition left out
+/// (ngspice echoes a line it rejects, often lowercased).
+fn shareable_log(log: &[String], nl: &schematic::Netlist) -> Vec<String> {
+    let lines: Vec<String> = library_defs(nl).iter().flat_map(|d| d.lines()).map(|l| l.trim().to_lowercase()).filter(|l| l.len() >= 8).collect();
+    log.iter().map(|l| {
+        let low = l.to_lowercase();
+        if lines.iter().any(|d| low.contains(d.as_str())) { "(a line of a model library, left out)".to_string() } else { l.clone() }
+    }).collect()
 }
 
 fn call(base: &Path, name: &str, args: &Value) -> Result<Value, String> {
@@ -120,7 +133,7 @@ fn call(base: &Path, name: &str, args: &Value) -> Result<Value, String> {
             // and no root locus share this engine, so the run and its traces below cannot be interleaved
             let run = match ngspice::run(&prepared) {
                 Ok(run) => run,
-                Err(log) => return Ok(json!({ "ok": false, "warnings": warnings, "log": log.iter().rev().take(40).rev().collect::<Vec<_>>() })),
+                Err(log) => return Ok(json!({ "ok": false, "warnings": warnings, "log": shareable_log(&log[log.len().saturating_sub(40)..], &sim) })),
             };
             let points = args["points"].as_u64().unwrap_or(200).clamp(2, 5000) as usize;
             let mut traces = serde_json::Map::new();
@@ -162,7 +175,12 @@ fn call(base: &Path, name: &str, args: &Value) -> Result<Value, String> {
         "netlist" => {
             let (items, _) = schematic_of(base, args, &mut lib)?;
             let nl = schematic::netlist(&items, &mut lib);
-            Ok(json!({ "netlist": shareable(&nl), "warnings": nl.warnings, "nets": nl.nets, "instances": nl.insts, "current_probes": nl.probes, "pin_currents": nl.pin_currents }))
+            let mut warnings = nl.warnings.clone();
+            let text = shareable(&nl);
+            if text.is_none() {
+                warnings.push("the netlist is not passed on: a model library's text could not be left out of it".into());
+            }
+            Ok(json!({ "netlist": text, "warnings": warnings, "nets": nl.nets, "instances": nl.insts, "current_probes": nl.probes, "pin_currents": nl.pin_currents }))
         }
         "read_schematic" => {
             let (items, _) = schematic_of(base, args, &mut lib)?;
@@ -207,7 +225,8 @@ fn call(base: &Path, name: &str, args: &Value) -> Result<Value, String> {
             let name = args["name"].as_str().ok_or("`name` missing")?;
             let ix = library::index();
             let e = ix.as_ref().and_then(|ix| ix.get(name)).ok_or(format!("`{name}` is not in the libraries"))?;
-            let text = if e.builtin() { library::definitions(name, &mut Default::default()).map(|d| d.join("\n")) } else { None };
+            // (resolved on the index held: another index() here could wait on itself)
+            let text = e.builtin().then(|| ix.as_ref().map(|ix| ix.resolve(name, &mut Default::default()).join("\n"))).flatten();
             Ok(json!({ "name": e.name, "kind": e.kind, "pins": e.pins, "source": e.source, "symbol": e.symbol, "text": text }))
         }
         "examples" => Ok(json!(schematic::EXAMPLES.iter().map(|(n, s)| json!({ "name": n, "asc": s })).collect::<Vec<_>>())),
@@ -285,6 +304,10 @@ mod tests {
         let g = call(&dir, "library_get", &json!({ "name": "QLOCAL" })).unwrap();
         assert!(g["kind"] == "NPN" && g["text"].is_null(), "{g}");
         assert!(call(&dir, "library_get", &json!({ "name": "2N3904" })).unwrap()["text"].as_str().unwrap().contains("BF=180"));
+        // ngspice's log quoting the library's line (lowercased): left out, the rest kept
+        let nl = schematic::netlist(&schematic::parse_asc(asc), &mut schematic::Library::builtin());
+        let log = shareable_log(&["Error on line 3 : .model qlocal npn(bf=123)".into(), "Error: no such vector".into()], &nl);
+        assert!(!log[0].contains("bf=123") && log[1] == "Error: no such vector", "{log:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
