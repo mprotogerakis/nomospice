@@ -110,12 +110,14 @@ fn shareable(nl: &schematic::Netlist) -> Option<String> {
 }
 
 /// ngspice's log as passed to an AI client: a line quoting a model library's definition left out
-/// (ngspice echoes a line it rejects, often lowercased).
+/// (ngspice echoes a line it rejects, often lowercased, at the end of its message; a short line,
+/// `+ bf=1`, only there, so that a `+` or `.ends` elsewhere does not count).
 fn shareable_log(log: &[String], nl: &schematic::Netlist) -> Vec<String> {
-    let lines: Vec<String> = library_defs(nl).iter().flat_map(|d| d.lines()).map(|l| l.trim().to_lowercase()).filter(|l| l.len() >= 8).collect();
+    let lines: Vec<String> = library_defs(nl).iter().flat_map(|d| d.lines()).map(|l| l.trim().to_lowercase()).filter(|l| !l.trim_start_matches('+').trim().is_empty()).collect();
     log.iter().map(|l| {
-        let low = l.to_lowercase();
-        if lines.iter().any(|d| low.contains(d.as_str())) { "(a line of a model library, left out)".to_string() } else { l.clone() }
+        let low = l.trim_end().to_lowercase();
+        let quotes = |d: &String| if d.len() >= 8 { low.contains(d.as_str()) } else { low.ends_with(d.as_str()) };
+        if lines.iter().any(quotes) { "(a line of a model library, left out)".to_string() } else { l.clone() }
     }).collect()
 }
 
@@ -295,7 +297,7 @@ mod tests {
         // nomospice's own 2N3904 with it
         let dir = std::env::temp_dir().join(format!("nomospice-mcp-lib-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("q.lib"), ".model QLOCAL NPN(BF=123)\n").unwrap();
+        std::fs::write(dir.join("q.lib"), ".model QLOCAL NPN(BF=123\n+ VA=9)\n").unwrap();
         library::set_sources(vec![library::Source { name: "test".into(), path: dir.clone(), enabled: true }]);
         let asc = "SYMBOL npn 0 0 R0\nSYMATTR InstName Q1\nSYMATTR Value QLOCAL\nSYMBOL npn 100 0 R0\nSYMATTR InstName Q2\nSYMATTR Value 2N3904\n";
         let r = call(&dir, "netlist", &json!({ "asc": asc })).unwrap();
@@ -306,8 +308,8 @@ mod tests {
         assert!(call(&dir, "library_get", &json!({ "name": "2N3904" })).unwrap()["text"].as_str().unwrap().contains("BF=180"));
         // ngspice's log quoting the library's line (lowercased): left out, the rest kept
         let nl = schematic::netlist(&schematic::parse_asc(asc), &mut schematic::Library::builtin());
-        let log = shareable_log(&["Error on line 3 : .model qlocal npn(bf=123)".into(), "Error: no such vector".into()], &nl);
-        assert!(!log[0].contains("bf=123") && log[1] == "Error: no such vector", "{log:?}");
+        let log = shareable_log(&["Error on line 3 : .model qlocal npn(bf=123".into(), "Error on line 4 : + va=9)".into(), "Error: no such vector + 2".into()], &nl);
+        assert!(!log[0].contains("bf=123") && !log[1].contains("va=9") && log[2] == "Error: no such vector + 2", "{log:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
