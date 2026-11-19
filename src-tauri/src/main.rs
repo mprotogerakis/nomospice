@@ -1102,9 +1102,11 @@ async fn library_unpack_microcap(app: tauri::AppHandle, zip: String) -> Result<V
         // (unzip's 1: warnings only)
         if !(out.status.success() || cfg!(target_os = "linux") && out.status.code() == Some(1)) || !lib.is_dir() {
             let _ = std::fs::remove_dir_all(&staging);
-            // (all the tool said, short: unzip names the archive first, tar ends with a summary)
-            let said: Vec<String> = [&out.stderr, &out.stdout].iter().flat_map(|b| String::from_utf8_lossy(b).lines().map(|l| l.trim().to_string()).collect::<Vec<_>>()).filter(|l| !l.is_empty()).collect();
-            let why = if said.is_empty() { out.status.to_string() } else { said.join(" ").chars().take(240).collect() };
+            // (the tool's reason: its first line that gives one; not unzip's `[archive]` heading, not
+            // tar's closing summary)
+            let said = [&out.stderr, &out.stdout].map(|b| String::from_utf8_lossy(b).into_owned());
+            let why = said.iter().flat_map(|t| t.lines()).map(str::trim).find(|l| !l.is_empty() && !l.starts_with('[') && !l.contains("Error exit delayed"));
+            let why = why.map_or_else(|| out.status.to_string(), |l| l.chars().take(200).collect());
             return Err(format!("{}: no LIBRARY folder unpacked ({why}): choose Micro-Cap 12's CD archive, mc12cd.zip", zip.display()));
         }
         let _ = std::fs::remove_dir_all(&old);
@@ -1466,7 +1468,8 @@ fn main() {
     }
     if std::env::args().any(|a| a == "--mcp") {
         // MCP server on stdio instead of the GUI (same libraries as the app)
-        if let Some(list) = config_dir().and_then(|d| std::fs::read(d.join("libraries.json")).ok()).and_then(|b| serde_json::from_slice(&b).ok()) {
+        if let Some(list) = config_dir().and_then(|d| std::fs::read(d.join("libraries.json")).ok()).and_then(|b| serde_json::from_slice::<Vec<library::Source>>(&b).ok()) {
+            list.iter().for_each(|s| microcap_put_back(&s.path)); // (before its index is built)
             library::set_sources(list);
         }
         return mcp::serve(started_in);
@@ -1484,22 +1487,17 @@ fn main() {
         .setup(|app| {
             use tauri::Manager;
             if let Ok(dir) = app.path().app_cache_dir() {
-                ngspice::set_scratch_dir(dir);
-            }
-            let (cache, data) = (app.path().app_cache_dir().ok(), app.path().app_data_dir().ok());
-            std::thread::spawn(move || {
+                ngspice::set_scratch_dir(dir.clone());
                 // (earlier versions downloaded the Micro-Cap CD archive and unpacked it here: not needed any more)
-                if let Some(c) = cache {
-                    let _ = std::fs::remove_file(c.join("mc12cd.zip"));
-                    let _ = std::fs::remove_file(c.join("mc12cd.zip.part"));
-                    let _ = std::fs::remove_dir_all(c.join("mc12-unpack"));
-                }
-                if let Some(d) = data {
-                    microcap_put_back(&d.join("libraries").join("Micro-Cap 12"));
-                }
-            });
+                std::thread::spawn(move || {
+                    let _ = std::fs::remove_file(dir.join("mc12cd.zip"));
+                    let _ = std::fs::remove_file(dir.join("mc12cd.zip.part"));
+                    let _ = std::fs::remove_dir_all(dir.join("mc12-unpack"));
+                });
+            }
             // saved library sources (else: detected ones); warm the index in the background
-            if let Some(list) = library_config(app.handle()).ok().and_then(|f| std::fs::read(f).ok()).and_then(|b| serde_json::from_slice(&b).ok()) {
+            if let Some(list) = library_config(app.handle()).ok().and_then(|f| std::fs::read(f).ok()).and_then(|b| serde_json::from_slice::<Vec<library::Source>>(&b).ok()) {
+                list.iter().for_each(|s| microcap_put_back(&s.path)); // (before its index is built)
                 library::set_sources(list);
             }
             std::thread::spawn(|| drop(library::index()));

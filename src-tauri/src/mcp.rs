@@ -113,12 +113,8 @@ fn shareable(nl: &schematic::Netlist) -> Option<String> {
 /// includes (.include/.lib, inlined when it runs). Then ngspice's log and the warnings about the deck
 /// are not passed to an AI client: ngspice echoes lines it rejects, rewritten, and a warning may quote
 /// a statement, so no line of them can be told free of that text.
-fn holds_library_text(nl: &schematic::Netlist) -> bool {
-    let include = |l: &str| {
-        let l = l.trim_start().to_ascii_lowercase();
-        l.starts_with(".inc") || l.starts_with(".lib")
-    };
-    !library_defs(nl).is_empty() || nl.text.lines().any(include)
+fn holds_library_text(nl: &schematic::Netlist, dir: Option<&Path>) -> bool {
+    !library_defs(nl).is_empty() || schematic::includes_files(&nl.text, dir)
 }
 
 fn call(base: &Path, name: &str, args: &Value) -> Result<Value, String> {
@@ -132,7 +128,7 @@ fn call(base: &Path, name: &str, args: &Value) -> Result<Value, String> {
             let dir = path.as_ref().and_then(|p| p.parent().map(Path::to_path_buf));
             let mut about_deck = vec![];
             let prepared = sim.prepared(dir.as_deref(), &mut about_deck);
-            let private = holds_library_text(&sim);
+            let private = holds_library_text(&sim, dir.as_deref());
             if private && !about_deck.is_empty() {
                 warnings.push(format!("{} warnings about the deck are not passed on: it holds a model library's text (nomospice shows them)", about_deck.len()));
             } else {
@@ -320,9 +316,14 @@ mod tests {
         assert!(g["kind"] == "NPN" && g["text"].is_null(), "{g}");
         assert!(call(&dir, "library_get", &json!({ "name": "2N3904" })).unwrap()["text"].as_str().unwrap().contains("BF=180"));
         // the deck holds a library's text: a library's model, an included file; nomospice's own: not
-        let deck = |asc: &str| holds_library_text(&schematic::netlist(&schematic::parse_asc(asc), &mut schematic::Library::builtin()));
-        assert!(deck(asc) && !deck(&asc.replace("QLOCAL", "2N3904")));
-        assert!(deck(&format!("{}TEXT 0 300 Left 2 !.inc mine.lib\n", asc.replace("QLOCAL", "2N3904"))));
+        let deck = |asc: &str| holds_library_text(&schematic::netlist(&schematic::parse_asc(asc), &mut schematic::Library::builtin()), Some(&dir));
+        let own = asc.replace("QLOCAL", "2N3904");
+        assert!(deck(asc) && !deck(&own));
+        assert!(deck(&format!("{own}TEXT 0 300 Left 2 !.inc q.lib\n")), "a file there");
+        assert!(!deck(&format!("{own}TEXT 0 300 Left 2 !.inc nothere.lib\n")) && !deck(&format!("{own}TEXT 0 300 Left 2 !.lib opamp.sub\n")), "none read");
+        // a failed run of such a deck: no log, said why
+        let r = call(&dir, "simulate", &json!({ "asc": format!("{asc}TEXT 0 300 Left 2 !.tran 1m\nTEXT 0 340 Left 2 !XU1 a b nosuchsubckt\n") })).unwrap();
+        assert!(r["ok"] == false && r["log"].is_null() && r["warnings"].to_string().contains("log is not passed on"), "{r}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

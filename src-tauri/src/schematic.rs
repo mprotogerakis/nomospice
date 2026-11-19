@@ -2369,6 +2369,21 @@ fn include_args(t: &str) -> (String, Option<&str>) {
     (file.replace('\\', "/"), uncommented(tail).split_whitespace().next())
 }
 
+/// LTspice's own opamp.sub needs LTspice semantics: the built-in `opamp` subckt replaces it (unless
+/// the schematic's folder has one of its own).
+fn ours_for(file: &str, dir: Option<&std::path::Path>) -> bool {
+    file.eq_ignore_ascii_case("opamp.sub") && !dir.is_some_and(|d| d.join(file).is_file())
+}
+
+/// Whether `text` includes a file that is there (`.include`/`.lib`, as the deck's expansion finds
+/// them): its text is inlined into the deck when it runs.
+pub(crate) fn includes_files(text: &str, dir: Option<&std::path::Path>) -> bool {
+    text.lines().skip(1).filter(|l| opens_file(l)).any(|l| {
+        let (file, _) = include_args(l.trim());
+        !ours_for(&file, dir) && resolve(&file, dir).is_some()
+    })
+}
+
 fn resolve(file: &str, dir: Option<&std::path::Path>) -> Option<std::path::PathBuf> {
     let p = std::path::Path::new(file);
     if p.is_absolute() {
@@ -2497,8 +2512,7 @@ impl Expander<'_> {
     fn include(&mut self, t: &str, l: &str, dir: Option<&std::path::Path>, depth: usize) {
         let (file, sec) = include_args(t);
         let sec = sec.filter(|_| l.starts_with(".lib"));
-        // LTspice's own opamp.sub needs LTspice semantics; the built-in `opamp` subckt replaces it
-        if file.eq_ignore_ascii_case("opamp.sub") && !dir.is_some_and(|d| d.join(&file).is_file()) {
+        if ours_for(&file, dir) {
             self.warnings.push("`opamp.sub`: using nomospice's built-in opamp model".into());
             return;
         }
