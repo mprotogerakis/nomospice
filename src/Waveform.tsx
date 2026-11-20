@@ -1,6 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { useSize } from "./lib/useSize";
 import uPlot from "uplot";
+import { wide, yRange as yRangeOf } from "./plotRange";
 import { create } from "zustand";
 import { Plus, X } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
@@ -318,17 +319,17 @@ export const Waveform = memo(function Waveform() {
       const twin = pane.series.some((s) => scaleOf(pane, s) === "y2");
       // dB/phase: at least `span` tall, so 0.1 dB of ripple does not fill the pane like a resonance;
       // a spectrum: at most 140 dB below its peak (rounding's floor at -300 dB is no signal)
-      const rangeOf = (span: number) => (span ? { range: (_u: uPlot, lo: number | null, hi: number | null): uPlot.Range.MinMax => {
+      // (any other: never ends its ticks cannot tell apart, see yRange)
+      const rangeOf = (span: number) => ({ range: (_u: uPlot, lo: number | null, hi: number | null): uPlot.Range.MinMax => {
         if (lo == null || hi == null) return [lo, hi];
-        if (spec && hi - lo > 140) lo = hi - 140;
-        if (hi - lo < span) [lo, hi] = [(lo + hi - span) / 2, (lo + hi + span) / 2];
-        return uPlot.rangeNum(lo, hi, 0.05, true);
-      } } : {});
+        if (spec && span && hi - lo > 140) lo = hi - 140;
+        return yRangeOf(lo, hi, span, span ? 0.05 : 0.1);
+      } });
       const yRange = rangeOf(span);
       // the left axis as set: log, a fixed range (on a log axis, only one above 0)
       const ax = yAxes[axisKey(pane.key ?? pane.unit, spec)] ?? {}; // (a pane of its own: its own settings)
       const logY = !!ax.log && !span && positive(pane); // (nothing above 0: linear)
-      const fixed = ax.lo != null && ax.hi != null && (!logY || ax.lo > 0) ? { range: (): uPlot.Range.MinMax => [ax.lo!, ax.hi!] } : {};
+      const fixed = ax.lo != null && ax.hi != null && ax.lo < ax.hi && (!logY || ax.lo > 0) ? { range: (): uPlot.Range.MinMax => wide(ax.lo!, ax.hi!) } : {};
       // (a log axis hands the ticks it does not label over as null)
       const values = (unit: string) => (_u: uPlot, v: (number | null)[], _i: number, _s: number, incr: number) =>
         v.map((y) => (y == null ? "" : unit === "dB" || unit === "°" ? `${+y.toFixed(Math.max(0, Math.ceil(-Math.log10(incr))))}${unit}` : si(y, unit, 3)));
@@ -340,8 +341,8 @@ export const Waveform = memo(function Waveform() {
         cursor: { sync: { key: "nomospice" }, drag: { x: true, y: false, setScale: true, dist: CLICK_DIST, click: () => {} }, points: { size: 6 } },
         scales: {
           // exactly the data: a log axis would otherwise round up to whole decades (1 MHz data -> 10 MHz)
-          x: { time: false, distr: logX ? 3 : 1, ...(logX ? { range: (_u, lo, hi): uPlot.Range.MinMax => (lo < hi ? [lo, hi] : [lo / 2, hi * 2]) } : {}) },
-          y: { ...yRange, ...(logY ? { distr: 3, log: 10 } : {}), ...fixed },
+          x: { time: false, distr: logX ? 3 : 1, range: (_u, lo, hi): uPlot.Range.MinMax => (lo == null || hi == null ? [lo, hi] : lo === hi ? (logX ? [lo / 2, hi * 2] : [lo, hi]) : wide(lo, hi)) },
+          y: { ...(logY ? { distr: 3, log: 10 } : yRange), ...fixed }, // (a log axis: uPlot's own range, whole decades; rangeNum would reach down to 0)
           ...(twin ? { y2: rangeOf(spanOf(pane.unit2)) } : {}),
         },
         axes: [
