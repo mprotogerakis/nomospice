@@ -1450,7 +1450,14 @@ fn main() {
         let _ = std::env::set_current_dir(home);
     }
     // a terminal's question, not a file to open: answered without a window
-    match std::env::args().nth(1).as_deref() {
+    let ask = std::env::args().nth(1).filter(|a| ["--version", "-V", "--help", "-h"].contains(&a.as_str()));
+    #[cfg(windows)]
+    if ask.is_some() {
+        // (a release build has no console of its own: the one it was started from, else the text is lost)
+        extern "system" { fn AttachConsole(pid: u32) -> i32; }
+        unsafe { AttachConsole(u32::MAX) }; // ATTACH_PARENT_PROCESS
+    }
+    match ask.as_deref() {
         Some("--version" | "-V") => return println!("nomospice {}", env!("CARGO_PKG_VERSION")),
         Some("--help" | "-h") => return println!("nomospice {}\nusage: nomospice [file] [--run]  open a schematic (and run its analysis)\n       nomospice --mcp           MCP server on standard input and output\n       nomospice --version", env!("CARGO_PKG_VERSION")),
         _ => {}

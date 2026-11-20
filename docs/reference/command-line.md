@@ -5,7 +5,8 @@
 ```sh
 nomospice [file] [--run]
 nomospice --mcp
-nomospice --version | --help
+nomospice --version
+nomospice --help
 ```
 
 | Argument | Does |
