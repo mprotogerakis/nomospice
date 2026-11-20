@@ -1460,7 +1460,7 @@ fn main() {
             if matches!(GetStdHandle(-11i32 as u32), 0 | -1) { AttachConsole(u32::MAX); } // STD_OUTPUT_HANDLE, ATTACH_PARENT_PROCESS
         }
         use std::io::Write as _;
-        const USAGE: &str = "\nusage: nomospice [file] [--run]  open a schematic (and run its analysis)\n       nomospice --mcp           MCP server on standard input and output\n       nomospice --version";
+        const USAGE: &str = "\nusage: nomospice [file] [--run]  open a schematic (and run its analysis)\n       nomospice --mcp           MCP server on standard input and output\n       nomospice -V | --version\n       nomospice -h | --help";
         // (a reader gone already: nothing to say, no panic)
         let _ = writeln!(std::io::stdout(), "nomospice {}{}", env!("CARGO_PKG_VERSION"), if matches!(a.as_str(), "--help" | "-h") { USAGE } else { "" });
         return;

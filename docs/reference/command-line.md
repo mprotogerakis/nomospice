@@ -14,7 +14,7 @@ nomospice --help
 | `file` | opens an `.asc`, `.asy` or netlist file at start |
 | `--run` | runs the file's analysis once it is open |
 | `--mcp` | starts the MCP server on standard input and output instead of the app |
-| `--version`, `--help` | print the version or a short usage and exit, without a window |
+| `--version` (`-V`), `--help` (`-h`) | print the version or a short usage and exit, without a window |
 
 On macOS the program is `nomospice.app/Contents/MacOS/nomospice`.
 
