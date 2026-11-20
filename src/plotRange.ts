@@ -30,7 +30,13 @@ export function wide(lo: number, hi: number): [number, number] {
   return [c - w, c + w];
 }
 
-/** A tick label's significant digits: as many as its step needs, 3 at least, 6 at most (what the
- *  axis has room for). Zoomed in on 5 V, its ticks read 5.0004 V, 5.0008 V, not 5 V each. */
-export const tickDigits = (v: number, incr: number) =>
-  Math.min(6, Math.max(3, Math.floor(Math.log10(Math.abs(v))) - Math.floor(Math.log10(incr)) + 1));
+/** The place of a tick step's last digit: uPlot steps by 1, 2, 2.5 and 5 × 10^k, so 2.5e-4 → -5. */
+const lastPlace = (incr: number) => {
+  const e = Math.floor(Math.log10(incr)), m = incr / 10 ** e;
+  return e - (Math.abs(m - Math.round(m)) > 1e-9 ? 1 : 0);
+};
+/** A tick label's significant digits: as many as its step needs, 3 at least. Zoomed in on 5 V, its
+ *  ticks read 5.00025 V, 5.0005 V, not 5 V each. */
+export const tickDigits = (v: number, incr: number) => Math.min(12, Math.max(3, Math.floor(Math.log10(Math.abs(v))) - lastPlace(incr) + 1));
+/** A tick label's decimals (dB, degrees): 2.5 → 1, 0.25 → 2, 20 → 0. */
+export const tickDecimals = (incr: number) => Math.max(0, -lastPlace(incr));

@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { useSize } from "./lib/useSize";
 import uPlot from "uplot";
-import { tickDigits, wide, yRange as yRangeOf } from "./plotRange";
+import { tickDecimals, tickDigits, wide, yRange as yRangeOf } from "./plotRange";
 import { create } from "zustand";
 import { Plus, X } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
@@ -165,6 +165,13 @@ function applyZoom(u: uPlot | undefined, logX: boolean) {
   const xd = u.data[0], [lo, hi] = z ?? [xd[0], xd[xd.length - 1]];
   u.setScale("x", { min: lo, max: hi });
 }
+
+/** A tick's label with the digits its step needs, if it fits in `room` characters (a y axis: 8 of
+ *  its 72 px); else 3, one label for several ticks rather than a sign cut off or a value rounded wrong. */
+const tick = (v: number, incr: number, unit: string, room: number) => {
+  const s = si(v, unit, tickDigits(v, incr));
+  return s.length <= room ? s : si(v, unit, 3);
+};
 
 /** Linear interpolation of ys at x; NaN outside the data (a cursor from a longer previous run). */
 export const Waveform = memo(function Waveform() {
@@ -332,7 +339,7 @@ export const Waveform = memo(function Waveform() {
       const fixed = ax.lo != null && ax.hi != null && ax.lo < ax.hi && (!logY || ax.lo > 0) ? { range: (): uPlot.Range.MinMax => wide(ax.lo!, ax.hi!) } : {};
       // (a log axis hands the ticks it does not label over as null)
       const values = (unit: string) => (_u: uPlot, v: (number | null)[], _i: number, _s: number, incr: number) =>
-        v.map((y) => (y == null ? "" : unit === "dB" || unit === "°" ? `${+y.toFixed(Math.max(0, Math.ceil(-Math.log10(incr))))}${unit}` : si(y, unit, tickDigits(y, incr))));
+        v.map((y) => (y == null ? "" : unit === "dB" || unit === "°" ? `${+y.toFixed(tickDecimals(incr))}${unit}` : tick(y, incr, unit, 8)));
       const opts: uPlot.Options = {
         width: size.w, height: h,
         legend: { show: false },
@@ -346,7 +353,7 @@ export const Waveform = memo(function Waveform() {
           ...(twin ? { y2: rangeOf(spanOf(pane.unit2)) } : {}),
         },
         axes: [
-          { stroke: text, grid: { stroke: grid, width: 1 }, ticks: { stroke: grid, width: 1 }, size: last ? 36 : 8, values: last ? (_u, v, _i, _s, incr) => v.map((x) => (x == null ? "" : si(x, xUnit, tickDigits(x, incr)))) : () => [], space: (_u, _i, lo, hi) => ((hi - lo) * 10 < Math.max(Math.abs(lo), Math.abs(hi)) ? 70 : 50) /* (zoomed in: longer labels, as far apart) */, font: "11px IBM Plex Mono" },
+          { stroke: text, grid: { stroke: grid, width: 1 }, ticks: { stroke: grid, width: 1 }, size: last ? 36 : 8, values: last ? (_u, v, _i, _s, incr) => v.map((x) => (x == null ? "" : tick(x, incr, xUnit, 10))) : () => [], space: (_u, _i, lo, hi) => ((hi - lo) * 10 < Math.max(Math.abs(lo), Math.abs(hi)) ? 70 : 50) /* (zoomed in: longer labels, as far apart) */, font: "11px IBM Plex Mono" },
           { stroke: text, grid: { stroke: grid, width: 1 }, ticks: { stroke: grid, width: 1 }, size: 72, values: values(pane.unit), font: "11px IBM Plex Mono", label: pane.unit === "" ? "expr" : undefined },
           // the right axis: its traces' own scale, in the color of its trace when it has one
           ...(!twin && anyTwin ? [{ side: 1, size: 72, values: () => [], grid: { show: false }, ticks: { show: false }, stroke: "transparent" }] : []),
