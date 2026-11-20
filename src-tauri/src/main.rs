@@ -1449,6 +1449,12 @@ fn main() {
     if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
         let _ = std::env::set_current_dir(home);
     }
+    // a terminal's question, not a file to open: answered without a window
+    match std::env::args().nth(1).as_deref() {
+        Some("--version" | "-V") => return println!("nomospice {}", env!("CARGO_PKG_VERSION")),
+        Some("--help" | "-h") => return println!("nomospice {}\nusage: nomospice [file] [--run]  open a schematic (and run its analysis)\n       nomospice --mcp           MCP server on standard input and output\n       nomospice --version", env!("CARGO_PKG_VERSION")),
+        _ => {}
+    }
     if std::env::args().any(|a| a == "--curve") {
         // a model's curves for the component library (curves.rs): its request on stdin, JSON out,
         // in a process of its own so the app's ngspice and its results stay as they are
