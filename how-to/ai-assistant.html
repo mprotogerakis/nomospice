@@ -1392,7 +1392,7 @@
 </tr>
 <tr>
 <td><code>library_get</code></td>
-<td>the <code>.model</code> or <code>.subckt</code> text of a part, with what it depends on</td>
+<td>a library part's kind, pins and library; the <code>.model</code> text only of nomospice's own default models</td>
 </tr>
 <tr>
 <td><code>examples</code></td>
@@ -1400,6 +1400,7 @@
 </tr>
 </tbody>
 </table>
+<p>A model library's text stays on your computer: model files come with their makers' terms. The netlist the assistant gets has a comment line in place of each library definition, and when a circuit uses one (or a file it includes), a failed run's ngspice log and the warnings about the deck are not passed on; nomospice shows them.</p>
 <p>Open a schematic the assistant wrote in nomospice to see it, and save it from there.</p>
 
 

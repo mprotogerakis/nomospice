@@ -1406,9 +1406,10 @@
 <p>Vendors publish SPICE models for their parts. Many of them work in ngspice as they are, some need features ngspice lacks. nomospice can use:</p>
 <ul>
 <li>your own folders of model files;</li>
-<li>the freeware <strong>Micro-Cap 12</strong> library, downloaded from the Internet Archive on request: about 45,000 models and subcircuits;</li>
-<li>the libraries of an installed LTspice, which it finds by itself.</li>
+<li>the freeware <strong>Micro-Cap 12</strong> library, unpacked from its CD archive (mc12cd.zip): about 45,000 models and subcircuits;</li>
+<li>the libraries of an installed LTspice: nomospice lists them, switched off, and you switch them on.</li>
 </ul>
+<p>Model files come with their makers' terms, usually in the file's header. Which of them you use, and how, is up to you; nomospice reads them on your computer and passes none of their text to AI clients.</p>
 <h2 id="what-nomospice-ships">What nomospice ships<a class="headerlink" href="#what-nomospice-ships" title="Permanent link">&para;</a></h2>
 <p>nomospice is free software under the AGPL-3.0-or-later and contains code from OpenPCB. It ships ngspice and its own symbols and default models, and none of the files of other simulators or of the Micro-Cap package: they are used where they are installed or downloaded by you. The licenses of everything included are listed under About (ⓘ in the toolbar).</p>
 <p>LTspice is a trademark of Analog Devices, Inc.; Micro-Cap is a trademark of Spectrum Software. nomospice is an independent project, not affiliated with or endorsed by them.</p>

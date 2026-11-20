@@ -1375,13 +1375,14 @@
 <h1 id="use-model-libraries">Use model libraries<a class="headerlink" href="#use-model-libraries" title="Permanent link">&para;</a></h1>
 <p>nomospice has its own symbols and a few default models: the diode 1N4148, the transistors 2N3904 and 2N3906, and switches. For other parts, add a model library: a folder of <code>.lib</code>, <code>.sub</code> and similar files with <code>.model</code> and <code>.subckt</code> definitions.</p>
 <h2 id="add-a-library">Add a library<a class="headerlink" href="#add-a-library" title="Permanent link">&para;</a></h2>
-<p><img alt="The Model Libraries view: Add folder and Get Micro-Cap 12 library" src="../img/model-libraries/02-libraries.png" /></p>
+<p><img alt="The Model Libraries view: Add folder and the Micro-Cap 12 library" src="../img/model-libraries/02-libraries.png" /></p>
 <p>Press <span class="keys"><kbd class="key-command">Cmd</kbd><span>+</span><kbd class="key-comma">,</kbd></span> (nomospice → Model Libraries… on macOS, File → Model Libraries… on Windows), or click <em>Libraries…</em> in the component library.</p>
 <ul>
 <li><strong>Add folder…</strong> adds a folder of your own. Its models and subcircuits become searchable and are pulled into the netlist when a part uses them.</li>
-<li><strong>Get Micro-Cap 12 library</strong> downloads the freeware Micro-Cap 12 package from the Internet Archive (about 60 MB) and unpacks its library, about 45,000 models and subcircuits, for local use.</li>
+<li><strong>Micro-Cap 12 library from mc12cd.zip…</strong> unpacks the library of the freeware Micro-Cap 12, about 45,000 models and subcircuits, from its CD archive <code>mc12cd.zip</code> for local use. nomospice downloads nothing itself: you choose the archive.</li>
+<li><strong>Libraries found on this computer</strong>, such as those of an installed LTspice, are listed switched off. Tick one to use it.</li>
 </ul>
-<p>When two libraries define the same name, the one listed first wins. Untick a library to switch it off without removing it.</p>
+<p>Model files come with their makers' terms, usually in the file's header; which ones you use is up to you. When two libraries define the same name, the one listed first wins. Untick a library to switch it off without removing it.</p>
 <h2 id="find-and-place-a-part">Find and place a part<a class="headerlink" href="#find-and-place-a-part" title="Permanent link">&para;</a></h2>
 <p><img alt="The component library searching for 2N3904" src="../img/model-libraries/01-search.png" /></p>
 <p>Press <span class="keys"><kbd class="key-p">P</kbd></span> (or <span class="keys"><kbd class="key-f2">F2</kbd></span>, <span class="keys"><kbd class="key-command">Cmd</kbd><span>+</span><kbd class="key-k">K</kbd></span>) for the component library and type a name, or browse its tree: nomospice's own parts by what they are, the schematic folder's symbols and blocks, the libraries' models by kind and library, and the parts you used last. The right side draws the selected part as it will be placed, with its pins; for a diode, transistor or JFET model it also draws the characteristic curves (a diode's current over its voltage, a transistor's output curves per base current or gate voltage). Click <em>Place</em>, or double-click the part, and put it down like any other.</p>

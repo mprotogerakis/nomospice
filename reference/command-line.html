@@ -1454,7 +1454,7 @@ nomospice<span class="w"> </span>--mcp
 <tr>
 <td><code>library_get</code></td>
 <td><code>name</code></td>
-<td>the <code>.model</code>/<code>.subckt</code> text with its dependencies</td>
+<td>the part's kind, pins, library and symbol; the <code>.model</code> text only of nomospice's built-in models (a model library's text stays on the computer: in the netlist a comment line stands in its place, and for a circuit using one, or a file it includes, <code>simulate</code> passes on neither ngspice's log nor the warnings about the deck)</td>
 </tr>
 <tr>
 <td><code>examples</code></td>
