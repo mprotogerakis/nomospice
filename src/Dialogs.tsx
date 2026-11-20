@@ -702,7 +702,7 @@ function YRangeDialog({ pane, unit, log }: { pane: string; unit: string; log: bo
   const y = useS((s) => s.plot.y[pane]);
   const [lo, setLo] = useState(y?.lo == null ? "" : String(y.lo)), [hi, setHi] = useState(y?.hi == null ? "" : String(y.hi));
   const [a, b] = [spiceNum(lo.replace("°", "")), spiceNum(hi.replace("°", ""))], empty = !lo.trim() && !hi.trim(); // (spiceNum knows units of letters only)
-  const bad = empty ? null : a == null || b == null ? "two numbers" : !(a < b) ? "the first the smaller" : log && a <= 0 ? "above 0 (a log axis)" : null;
+  const bad = empty ? null : a == null || b == null || !Number.isFinite(a) || !Number.isFinite(b) ? "two numbers" : !(a < b) ? "the first the smaller" : log && a <= 0 ? "above 0 (a log axis)" : null;
   const submit = () => {
     if (bad) return;
     close();

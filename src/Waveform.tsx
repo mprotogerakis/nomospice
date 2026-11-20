@@ -341,7 +341,7 @@ export const Waveform = memo(function Waveform() {
         cursor: { sync: { key: "nomospice" }, drag: { x: true, y: false, setScale: true, dist: CLICK_DIST, click: () => {} }, points: { size: 6 } },
         scales: {
           // exactly the data: a log axis would otherwise round up to whole decades (1 MHz data -> 10 MHz)
-          x: { time: false, distr: logX ? 3 : 1, range: (_u, lo, hi): uPlot.Range.MinMax => (lo == null || hi == null ? [lo, hi] : logX && lo === hi ? [lo / 2, hi * 2] : wide(lo, hi)) },
+          x: { time: false, distr: logX ? 3 : 1, range: (_u, lo, hi): uPlot.Range.MinMax => (lo == null || hi == null ? [lo, hi] : lo === hi ? (logX ? [lo / 2, hi * 2] : uPlot.rangeNum(lo, hi, 0.1, true)) : wide(lo, hi)) },
           y: { ...(logY ? { distr: 3, log: 10 } : yRange), ...fixed }, // (a log axis: uPlot's own range, whole decades; rangeNum would reach down to 0)
           ...(twin ? { y2: rangeOf(spanOf(pane.unit2)) } : {}),
         },

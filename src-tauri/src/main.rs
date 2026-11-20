@@ -1451,16 +1451,19 @@ fn main() {
     }
     // a terminal's question, not a file to open: answered without a window
     let ask = std::env::args().nth(1).filter(|a| ["--version", "-V", "--help", "-h"].contains(&a.as_str()));
-    #[cfg(windows)]
-    if ask.is_some() {
-        // (a release build has no console of its own: the one it was started from, else the text is lost)
-        extern "system" { fn AttachConsole(pid: u32) -> i32; }
-        unsafe { AttachConsole(u32::MAX) }; // ATTACH_PARENT_PROCESS
-    }
-    match ask.as_deref() {
-        Some("--version" | "-V") => return println!("nomospice {}", env!("CARGO_PKG_VERSION")),
-        Some("--help" | "-h") => return println!("nomospice {}\nusage: nomospice [file] [--run]  open a schematic (and run its analysis)\n       nomospice --mcp           MCP server on standard input and output\n       nomospice --version", env!("CARGO_PKG_VERSION")),
-        _ => {}
+    if let Some(a) = ask {
+        // (a Windows release build has no console of its own: the one it was started from, unless
+        // its output goes to a file or pipe)
+        #[cfg(windows)]
+        unsafe {
+            extern "system" { fn AttachConsole(pid: u32) -> i32; fn GetStdHandle(n: u32) -> isize; }
+            if matches!(GetStdHandle(-11i32 as u32), 0 | -1) { AttachConsole(u32::MAX); } // STD_OUTPUT_HANDLE, ATTACH_PARENT_PROCESS
+        }
+        use std::io::Write as _;
+        const USAGE: &str = "\nusage: nomospice [file] [--run]  open a schematic (and run its analysis)\n       nomospice --mcp           MCP server on standard input and output\n       nomospice --version";
+        // (a reader gone already: nothing to say, no panic)
+        let _ = writeln!(std::io::stdout(), "nomospice {}{}", env!("CARGO_PKG_VERSION"), if matches!(a.as_str(), "--help" | "-h") { USAGE } else { "" });
+        return;
     }
     if std::env::args().any(|a| a == "--curve") {
         // a model's curves for the component library (curves.rs): its request on stdin, JSON out,
