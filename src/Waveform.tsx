@@ -166,13 +166,15 @@ function applyZoom(u: uPlot | undefined, logX: boolean) {
   u.setScale("x", { min: lo, max: hi });
 }
 
-/** An axis's tick labels with the digits its step needs, if all fit in `room` characters (a y axis:
- *  8 of its 72 px); else all with 3, else without the unit: one label for several ticks rather than
- *  a sign cut off or a value rounded wrong. dB and degrees: decimals, as the step needs. */
+/** A y axis's width: 9 characters of its labels (11 px Plex Mono: 6.6 px each) beside its ticks. */
+const Y_AXIS = 80;
+/** An axis's tick labels with the digits its step needs, if all fit in `room` characters; else all
+ *  with 3, else without the unit: one label for several ticks rather than a sign cut off or a value
+ *  rounded wrong. dB and degrees: decimals, as the step needs (else without the unit). */
 const ticks = (v: (number | null)[], incr: number, unit: string, room: number) => {
   const deg = unit === "dB" || unit === "°";
   const tries = deg
-    ? [(y: number) => `${+y.toFixed(tickDecimals(incr))}${unit}`, (y: number) => `${+y.toFixed(Math.max(0, tickDecimals(incr) - 1))}${unit}`]
+    ? [(y: number) => `${+y.toFixed(tickDecimals(incr))}${unit}`, (y: number) => `${+y.toFixed(tickDecimals(incr))}`]
     : [(y: number) => si(y, unit, tickDigits(y, incr)), (y: number) => si(y, unit, 3), (y: number) => si(y, "", 3)];
   for (const [k, f] of tries.entries()) {
     const out = v.map((y) => (y == null ? "" : f(y)));
@@ -346,7 +348,7 @@ export const Waveform = memo(function Waveform() {
       const logY = !!ax.log && !span && positive(pane); // (nothing above 0: linear)
       const fixed = ax.lo != null && ax.hi != null && ax.lo < ax.hi && (!logY || ax.lo > 0) ? { range: (): uPlot.Range.MinMax => wide(ax.lo!, ax.hi!) } : {};
       // (a log axis hands the ticks it does not label over as null)
-      const values = (unit: string) => (_u: uPlot, v: (number | null)[], _i: number, _s: number, incr: number) => ticks(v, incr, unit, 8);
+      const values = (unit: string) => (_u: uPlot, v: (number | null)[], _i: number, _s: number, incr: number) => ticks(v, incr, unit, 9);
       const opts: uPlot.Options = {
         width: size.w, height: h,
         legend: { show: false },
@@ -360,11 +362,11 @@ export const Waveform = memo(function Waveform() {
           ...(twin ? { y2: rangeOf(spanOf(pane.unit2)) } : {}),
         },
         axes: [
-          { stroke: text, grid: { stroke: grid, width: 1 }, ticks: { stroke: grid, width: 1 }, size: last ? 36 : 8, values: last ? (_u, v, _i, _s, incr) => ticks(v, incr, xUnit, 10) : () => [], space: (_u, _i, lo, hi) => ((hi - lo) * 10 < Math.max(Math.abs(lo), Math.abs(hi)) ? 70 : 50) /* (zoomed in: longer labels, as far apart) */, font: "11px IBM Plex Mono" },
-          { stroke: text, grid: { stroke: grid, width: 1 }, ticks: { stroke: grid, width: 1 }, size: 72, values: values(pane.unit), font: "11px IBM Plex Mono", label: pane.unit === "" ? "expr" : undefined },
+          { stroke: text, grid: { stroke: grid, width: 1 }, ticks: { stroke: grid, width: 1 }, size: last ? 36 : 8, values: last ? (_u, v, _i, space, incr) => ticks(v, incr, xUnit, Math.floor(space / 6.6)) : () => [], space: (_u, _i, lo, hi, dim) => (tickDigits(Math.max(Math.abs(lo), Math.abs(hi)), ((hi - lo) * 50) / dim) > 3 ? 70 : 50) /* (labels of more digits: ticks further apart) */, font: "11px IBM Plex Mono" },
+          { stroke: text, grid: { stroke: grid, width: 1 }, ticks: { stroke: grid, width: 1 }, size: Y_AXIS, values: values(pane.unit), font: "11px IBM Plex Mono", label: pane.unit === "" ? "expr" : undefined },
           // the right axis: its traces' own scale, in the color of its trace when it has one
-          ...(!twin && anyTwin ? [{ side: 1, size: 72, values: () => [], grid: { show: false }, ticks: { show: false }, stroke: "transparent" }] : []),
-          ...(twin ? [{ scale: "y2", side: 1, stroke: (() => { const r = pane.series.filter((s) => scaleOf(pane, s) === "y2"); return new Set(r.map((s) => s.t)).size === 1 ? color(r[0].t.slot) : text; })() /* (a .dc family: one trace, several series) */, grid: { show: false }, ticks: { stroke: grid, width: 1 }, size: 72, values: values(pane.unit2), font: "11px IBM Plex Mono" }] : []),
+          ...(!twin && anyTwin ? [{ side: 1, size: Y_AXIS, values: () => [], grid: { show: false }, ticks: { show: false }, stroke: "transparent" }] : []),
+          ...(twin ? [{ scale: "y2", side: 1, stroke: (() => { const r = pane.series.filter((s) => scaleOf(pane, s) === "y2"); return new Set(r.map((s) => s.t)).size === 1 ? color(r[0].t.slot) : text; })() /* (a .dc family: one trace, several series) */, grid: { show: false }, ticks: { stroke: grid, width: 1 }, size: Y_AXIS, values: values(pane.unit2), font: "11px IBM Plex Mono" }] : []),
         ],
         series: [{}, ...pane.series.map((s) => ({ label: s.t.label, scale: scaleOf(pane, s), stroke: color(s.t.slot), width: 2, points: points ? { show: (u: uPlot, _s: number, i0: number, i1: number) => i1 - i0 < u.bbox.width / devicePixelRatio / 3, size: 4, fill: color(s.t.slot) } : { show: false } }))], // (marked where they lie apart: zoom in on a long run)
         hooks: {
