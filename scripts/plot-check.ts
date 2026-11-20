@@ -24,8 +24,10 @@ assert.deepEqual([4.17e-5, 2.5, 0.3, 1, 7e3].map(niceStep), [5e-5, 2.5, 0.5, 1, 
 assert.equal(tickDigits(1e-3, niceStep(1e-3 * 50 / 1200)), 3, ".tran 1m on 1200 px: 3 digits, ticks 50 px apart");
 // x ticks: their labels (sign, digits, point, prefix, "s") fit the space uPlot steps them by
 assert.equal(xTickSpace(0, 3e-3, 1000, "s"), 50, "an ordinary axis: as dense as uPlot's own");
-for (const [lo, hi, dim] of [[4.995e-3, 5e-3, 1000], [-5.00444e-3, -5e-3, 1200], [9.995e-3, 1e-2, 1000], [0.9995, 1, 1000], [2e-3, 2.0004e-3, 1100], [-0.27370202, -0.27369933, 732], [4.9e-4, 4.9001e-4, 1200]]) {
-  const space = xTickSpace(lo, hi, dim, "s"), step = niceStep(((hi - lo) * space) / dim);
-  assert.ok(tickDigits(Math.max(Math.abs(lo), Math.abs(hi)), step) + 4 <= Math.round(space / 6.6) - 1, `x ${lo} to ${hi} at ${dim} px: labels fit ${space} px`);
+assert.equal(xTickSpace(0, 10e-3, 2400, "s"), 50, "a wide one too (10.25ms fits 50 px)");
+for (const [lo, hi, dim, unit] of [[4.995e-3, 5e-3, 1000, "s"], [-5.00444e-3, -5e-3, 1200, "s"], [9.995e-3, 1e-2, 1000, "s"], [0.9995, 1, 1000, "s"], [2e-3, 2.0004e-3, 1100, "s"], [-0.27370202, -0.27369933, 732, "s"], [4.9e-4, 4.9001e-4, 1200, "s"], [999.5, 1000.5, 800, "Hz"]] as const) {
+  const space = xTickSpace(lo, hi, dim, unit), step = niceStep(((hi - lo) * space) / dim);
+  const label = tickDigits(Math.max(Math.abs(lo), Math.abs(hi)), step) + 2 + unit.length + (lo < 0 ? 1 : 0);
+  assert.ok(label <= Math.min(12, Math.round(space / 6.6) - 1), `x ${lo} to ${hi} at ${dim} px: ${label} characters fit ${space} px`);
 }
 console.log("plot-check: ok");

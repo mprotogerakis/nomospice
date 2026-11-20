@@ -354,10 +354,10 @@ export const Waveform = memo(function Waveform() {
       const opts: uPlot.Options = {
         width: size.w, height: h,
         legend: { show: false },
-        // dist: a click with 1-2 px of jitter stays a click (places a cursor) instead of a micro-zoom
-        // click: no-op so uPlot does not swallow slightly-moved clicks; our handler decides (3 px rule)
         // (room on the right for a long x label at the edge, 12 characters; the same in every pane)
         padding: [null, anyTwin ? null : 40, null, null],
+        // dist: a click with 1-2 px of jitter stays a click (places a cursor) instead of a micro-zoom
+        // click: no-op so uPlot does not swallow slightly-moved clicks; our handler decides (3 px rule)
         cursor: { sync: { key: "nomospice" }, drag: { x: true, y: false, setScale: true, dist: CLICK_DIST, click: () => {} }, points: { size: 6 } },
         scales: {
           // exactly the data: a log axis would otherwise round up to whole decades (1 MHz data -> 10 MHz)
@@ -366,7 +366,7 @@ export const Waveform = memo(function Waveform() {
           ...(twin ? { y2: rangeOf(spanOf(pane.unit2)) } : {}),
         },
         axes: [
-          { stroke: text, grid: { stroke: grid, width: 1 }, ticks: { stroke: grid, width: 1 }, size: last ? 36 : 8, values: last ? (_u, v, _i, space, incr) => ticks(v, incr, xUnit, Math.min(12, Math.round(space / 6.6) - 1)) : () => [], space: xSpace, font: "11px IBM Plex Mono" },
+          { stroke: text, grid: { stroke: grid, width: 1 }, ticks: { stroke: grid, width: 1 }, size: last ? 36 : 8, values: last ? (_u, v, _i, space, incr) => (logX ? v.map((x) => (x == null ? "" : si(x, xUnit, 3))) /* (decades: no linear step) */ : ticks(v, incr, xUnit, Math.min(12, Math.round(space / 6.6) - 1))) : () => [], space: xSpace, font: "11px IBM Plex Mono" },
           { stroke: text, grid: { stroke: grid, width: 1 }, ticks: { stroke: grid, width: 1 }, size: Y_AXIS, values: values(pane.unit), font: "11px IBM Plex Mono", label: pane.unit === "" ? "expr" : undefined },
           // the right axis: its traces' own scale, in the color of its trace when it has one
           ...(!twin && anyTwin ? [{ side: 1, size: Y_AXIS, values: () => [], grid: { show: false }, ticks: { show: false }, stroke: "transparent" }] : []),

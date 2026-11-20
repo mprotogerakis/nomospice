@@ -43,14 +43,15 @@ export const niceStep = (x: number) => {
   const p = 10 ** Math.floor(Math.log10(x));
   return [1, 2, 2.5, 5, 10].map((m) => m * p).find((s) => s >= x * (1 - 1e-12)) ?? x;
 };
-/** How far apart x ticks go (px): 50, as uPlot's own, while 3 digits do; else as far as their labels
- *  are long. Counted, not formatted (a round value's label drops its zeros): sign, the digits the
- *  step at 50 px needs and one more (uPlot may step by 2.5 at the wider space), point, prefix, unit,
- *  a character between them; 11 px Plex Mono, 6.6 px a character. */
+/** How far apart x ticks go (px): 50, as uPlot's own, while their labels fit there (7 characters);
+ *  else as far as they are long, up to 13 characters. Counted, not formatted (a round value's label
+ *  drops its zeros): the digits the step at 50 px needs and one more (uPlot may step by 2.5 at the
+ *  wider space), point, prefix, unit, a sign below 0, a character between; 6.6 px a character. */
 export const xTickSpace = (lo: number, hi: number, dim: number, unit: string) => {
   if (!(hi > lo) || !(dim > 0)) return 50;
   const d = tickDigits(Math.max(Math.abs(lo), Math.abs(hi)), niceStep(((hi - lo) * 50) / dim));
-  return d <= 3 ? 50 : (d + 5 + unit.length) * 6.6;
+  const chars = d + 2 + unit.length + (lo < 0 ? 1 : 0);
+  return chars <= 7 ? 50 : Math.min(chars + 2, 13) * 6.6;
 };
 /** A tick label's decimals (dB, degrees): 2.5 → 1, 0.25 → 2, 20 → 0. */
 export const tickDecimals = (incr: number) => Math.max(0, -lastPlace(incr));
