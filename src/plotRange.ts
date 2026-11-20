@@ -30,9 +30,11 @@ export function wide(lo: number, hi: number): [number, number] {
   return [c - w, c + w];
 }
 
+/** 10^e exactly: `10 ** -5` is 9.999999999999999e-6 in some engines (Node 22). */
+const pow10 = (e: number) => Number(`1e${e}`);
 /** The place of a tick step's last digit: uPlot steps by 1, 2, 2.5 and 5 × 10^k, so 2.5e-4 → -5. */
 const lastPlace = (incr: number) => {
-  const e = Math.floor(Math.log10(incr)), m = incr / 10 ** e;
+  const e = Math.floor(Math.log10(incr)), m = incr / pow10(e);
   return e - (Math.abs(m - Math.round(m)) > 1e-9 ? 1 : 0);
 };
 /** A tick label's significant digits: as many as its step needs, 3 at least. Zoomed in on 5 V, its
@@ -40,7 +42,7 @@ const lastPlace = (incr: number) => {
 export const tickDigits = (v: number, incr: number) => Math.min(12, Math.max(3, Math.floor(Math.log10(Math.abs(v))) - lastPlace(incr) + 1));
 /** The tick step uPlot takes for at least `x`: 1, 2, 2.5 or 5 × 10^k (4.2e-5 → 5e-5). */
 export const niceStep = (x: number) => {
-  const p = 10 ** Math.floor(Math.log10(x));
+  const p = pow10(Math.floor(Math.log10(x)));
   return [1, 2, 2.5, 5, 10].map((m) => m * p).find((s) => s >= x * (1 - 1e-12)) ?? x;
 };
 /** How far apart x ticks go (px): 50, as uPlot's own, while their labels fit there (7 characters);
