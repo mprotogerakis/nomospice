@@ -9,13 +9,14 @@ export function yRange(lo: number, hi: number, span = 0, pad = 0.1): [number, nu
   const least = span || Math.max(Math.abs(lo), Math.abs(hi)) * 1e-9;
   // (all but constant, below a billionth: drawn as a constant, whose range rangeNum never rounds
   // together; dB, phase: its span about it)
-  if (!span && hi - lo < least) lo = hi = (lo + hi) / 2;
+  if (!span && hi - lo < least) lo = hi = lo / 2 + hi / 2; // (halves: no overflow near 1e308)
   else if (span && hi >= lo && hi - lo < span) [lo, hi] = [(lo + hi - span) / 2, (lo + hi + span) / 2];
   const [a, b] = uPlot.rangeNum(lo, hi, pad, true);
-  if (a != null && b != null && a <= lo && b >= hi && b - a >= Math.max(hi - lo, least)) return [a, b];
+  // (about the data, but for rangeNum's own rounding: -0 for a soft zero, data below 1e-24)
+  if (a != null && b != null && Number.isFinite(a) && Number.isFinite(b) && b > a && b - a >= Math.max(hi - lo, least) && a <= lo + (b - a) * 1e-6 && b >= hi - (b - a) * 1e-6) return [a, b];
   // (rounded together, or not about the data: the data's own, a least height about them)
   const d = Math.max(hi - lo, least) || 1;
-  return [(lo + hi) / 2 - d, (lo + hi) / 2 + d];
+  return [lo / 2 + hi / 2 - d, lo / 2 + hi / 2 + d];
 }
 
 /** Whether an axis's ends are far enough apart for its ticks: a billionth of their size. */
@@ -25,6 +26,6 @@ export const apart = (lo: number, hi: number) => hi > lo && hi - lo >= 1e-9 * Ma
  *  past a billionth of where it is, it stays that wide about its middle. */
 export function wide(lo: number, hi: number): [number, number] {
   if (apart(lo, hi)) return [lo, hi];
-  const c = (lo + hi) / 2, w = 1e-9 * Math.max(Math.abs(lo), Math.abs(hi)) || 1e-9;
+  const c = lo / 2 + hi / 2, w = 1e-9 * Math.max(Math.abs(lo), Math.abs(hi)) || 1e-9;
   return [c - w, c + w];
 }
