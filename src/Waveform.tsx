@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { useSize } from "./lib/useSize";
 import uPlot from "uplot";
-import { niceStep, tickDecimals, tickDigits, wide, yRange as yRangeOf } from "./plotRange";
+import { tickDecimals, tickDigits, wide, xTickSpace, yRange as yRangeOf } from "./plotRange";
 import { create } from "zustand";
 import { Plus, X } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
@@ -349,13 +349,8 @@ export const Waveform = memo(function Waveform() {
       const fixed = ax.lo != null && ax.hi != null && ax.lo < ax.hi && (!logY || ax.lo > 0) ? { range: (): uPlot.Range.MinMax => wide(ax.lo!, ax.hi!) } : {};
       // (a log axis hands the ticks it does not label over as null)
       const values = (unit: string) => (_u: uPlot, v: (number | null)[], _i: number, _s: number, incr: number) => ticks(v, incr, unit, 9);
-      // (x ticks as far apart as their labels are long, a character between them: the step uPlot
-      // takes at 50 px, and the digits it needs; a log axis: its decades, as uPlot spaces them)
-      const xSpace = (_u: uPlot, _i: number, lo: number, hi: number, dim: number) => {
-        if (logX || !(hi > lo) || !(dim > 0)) return 50;
-        const v = Math.max(Math.abs(lo), Math.abs(hi));
-        return Math.max(50, (si(-v, xUnit, tickDigits(v, niceStep(((hi - lo) * 50) / dim))).length + 1) * 6.6);
-      };
+      // (a log axis: its decades, as uPlot spaces them)
+      const xSpace = (_u: uPlot, _i: number, lo: number, hi: number, dim: number) => (logX ? 50 : xTickSpace(lo, hi, dim, xUnit));
       const opts: uPlot.Options = {
         width: size.w, height: h,
         legend: { show: false },
@@ -371,7 +366,7 @@ export const Waveform = memo(function Waveform() {
           ...(twin ? { y2: rangeOf(spanOf(pane.unit2)) } : {}),
         },
         axes: [
-          { stroke: text, grid: { stroke: grid, width: 1 }, ticks: { stroke: grid, width: 1 }, size: last ? 36 : 8, values: last ? (_u, v, _i, space, incr) => ticks(v, incr, xUnit, Math.round(space / 6.6) - 1) : () => [], space: xSpace, font: "11px IBM Plex Mono" },
+          { stroke: text, grid: { stroke: grid, width: 1 }, ticks: { stroke: grid, width: 1 }, size: last ? 36 : 8, values: last ? (_u, v, _i, space, incr) => ticks(v, incr, xUnit, Math.min(12, Math.round(space / 6.6) - 1)) : () => [], space: xSpace, font: "11px IBM Plex Mono" },
           { stroke: text, grid: { stroke: grid, width: 1 }, ticks: { stroke: grid, width: 1 }, size: Y_AXIS, values: values(pane.unit), font: "11px IBM Plex Mono", label: pane.unit === "" ? "expr" : undefined },
           // the right axis: its traces' own scale, in the color of its trace when it has one
           ...(!twin && anyTwin ? [{ side: 1, size: Y_AXIS, values: () => [], grid: { show: false }, ticks: { show: false }, stroke: "transparent" }] : []),

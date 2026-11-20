@@ -1,7 +1,7 @@
 // Self-check of src/plotRange.ts (a plot's y range): node scripts/plot-check.ts (pnpm check runs it)
 // Never two ends uPlot's ticks cannot tell apart: its loop over them would not end.
 import assert from "node:assert/strict";
-import { apart, niceStep, tickDecimals, tickDigits, wide, yRange } from "../src/plotRange.ts";
+import { apart, niceStep, tickDecimals, tickDigits, wide, xTickSpace, yRange } from "../src/plotRange.ts";
 
 for (const v of [-3e5, -1, 1e-6, 0.4345556386526741, 1, 70, 1e5, 1e9]) for (let e = -17; e <= 0; e++) {
   const [lo, hi] = [Math.min(v, v + Math.abs(v) * 10 ** e), Math.max(v, v + Math.abs(v) * 10 ** e)], [a, b] = yRange(lo, hi);
@@ -22,4 +22,10 @@ assert.deepEqual([tickDigits(5.00025, 2.5e-4), tickDigits(5.0005, 5e-4), tickDig
 assert.deepEqual([2.5, 0.25, 5, 20, 0.5].map(tickDecimals), [1, 2, 0, 0, 1], "dB and degrees: decimals as the step needs");
 assert.deepEqual([4.17e-5, 2.5, 0.3, 1, 7e3].map(niceStep), [5e-5, 2.5, 0.5, 1, 1e4], "uPlot's steps: 1, 2, 2.5, 5 × 10^k");
 assert.equal(tickDigits(1e-3, niceStep(1e-3 * 50 / 1200)), 3, ".tran 1m on 1200 px: 3 digits, ticks 50 px apart");
+// x ticks: their labels (sign, digits, point, prefix, "s") fit the space uPlot steps them by
+assert.equal(xTickSpace(0, 3e-3, 1000, "s"), 50, "an ordinary axis: as dense as uPlot's own");
+for (const [lo, hi, dim] of [[4.995e-3, 5e-3, 1000], [-5.00444e-3, -5e-3, 1200], [9.995e-3, 1e-2, 1000], [0.9995, 1, 1000], [2e-3, 2.0004e-3, 1100], [-0.27370202, -0.27369933, 732], [4.9e-4, 4.9001e-4, 1200]]) {
+  const space = xTickSpace(lo, hi, dim, "s"), step = niceStep(((hi - lo) * space) / dim);
+  assert.ok(tickDigits(Math.max(Math.abs(lo), Math.abs(hi)), step) + 4 <= Math.round(space / 6.6) - 1, `x ${lo} to ${hi} at ${dim} px: labels fit ${space} px`);
+}
 console.log("plot-check: ok");
