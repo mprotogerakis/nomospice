@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { useSize } from "./lib/useSize";
 import uPlot from "uplot";
-import { wide, yRange as yRangeOf } from "./plotRange";
+import { tickDigits, wide, yRange as yRangeOf } from "./plotRange";
 import { create } from "zustand";
 import { Plus, X } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
@@ -332,7 +332,7 @@ export const Waveform = memo(function Waveform() {
       const fixed = ax.lo != null && ax.hi != null && ax.lo < ax.hi && (!logY || ax.lo > 0) ? { range: (): uPlot.Range.MinMax => wide(ax.lo!, ax.hi!) } : {};
       // (a log axis hands the ticks it does not label over as null)
       const values = (unit: string) => (_u: uPlot, v: (number | null)[], _i: number, _s: number, incr: number) =>
-        v.map((y) => (y == null ? "" : unit === "dB" || unit === "°" ? `${+y.toFixed(Math.max(0, Math.ceil(-Math.log10(incr))))}${unit}` : si(y, unit, 3)));
+        v.map((y) => (y == null ? "" : unit === "dB" || unit === "°" ? `${+y.toFixed(Math.max(0, Math.ceil(-Math.log10(incr))))}${unit}` : si(y, unit, tickDigits(y, incr))));
       const opts: uPlot.Options = {
         width: size.w, height: h,
         legend: { show: false },
@@ -346,7 +346,7 @@ export const Waveform = memo(function Waveform() {
           ...(twin ? { y2: rangeOf(spanOf(pane.unit2)) } : {}),
         },
         axes: [
-          { stroke: text, grid: { stroke: grid, width: 1 }, ticks: { stroke: grid, width: 1 }, size: last ? 36 : 8, values: last ? (_u, v) => v.map((x) => (x == null ? "" : si(x, xUnit, 3))) : () => [], font: "11px IBM Plex Mono" },
+          { stroke: text, grid: { stroke: grid, width: 1 }, ticks: { stroke: grid, width: 1 }, size: last ? 36 : 8, values: last ? (_u, v, _i, _s, incr) => v.map((x) => (x == null ? "" : si(x, xUnit, tickDigits(x, incr)))) : () => [], space: (_u, _i, lo, hi) => ((hi - lo) * 10 < Math.max(Math.abs(lo), Math.abs(hi)) ? 70 : 50) /* (zoomed in: longer labels, as far apart) */, font: "11px IBM Plex Mono" },
           { stroke: text, grid: { stroke: grid, width: 1 }, ticks: { stroke: grid, width: 1 }, size: 72, values: values(pane.unit), font: "11px IBM Plex Mono", label: pane.unit === "" ? "expr" : undefined },
           // the right axis: its traces' own scale, in the color of its trace when it has one
           ...(!twin && anyTwin ? [{ side: 1, size: 72, values: () => [], grid: { show: false }, ticks: { show: false }, stroke: "transparent" }] : []),

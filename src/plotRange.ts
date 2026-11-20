@@ -29,3 +29,8 @@ export function wide(lo: number, hi: number): [number, number] {
   const c = lo / 2 + hi / 2, w = 1e-9 * Math.max(Math.abs(lo), Math.abs(hi)) || 1e-9;
   return [c - w, c + w];
 }
+
+/** A tick label's significant digits: as many as its step needs, 3 at least, 6 at most (what the
+ *  axis has room for). Zoomed in on 5 V, its ticks read 5.0004 V, 5.0008 V, not 5 V each. */
+export const tickDigits = (v: number, incr: number) =>
+  Math.min(6, Math.max(3, Math.floor(Math.log10(Math.abs(v))) - Math.floor(Math.log10(incr)) + 1));
