@@ -261,7 +261,7 @@ export function schematicSvg(items: Item[], lib: Record<string, SymbolDef>): str
     const svg = host.querySelector("svg")!;
     // <use> → copies of the symbol graphics: not every program follows href into <defs>
     for (const use of [...svg.querySelectorAll("use")]) {
-      const ref = svg.querySelector(use.getAttribute("href")!);
+      const ref = svg.querySelector(`#${CSS.escape(use.getAttribute("href")!.slice(1))}`); // (a name with dots or a colon is no selector as it is)
       if (!ref) continue;
       const g = ref.cloneNode(true) as SVGGElement;
       g.removeAttribute("id");
