@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { useSize } from "./lib/useSize";
 import uPlot from "uplot";
-import { tickDecimals, tickDigits, wide, yRange as yRangeOf } from "./plotRange";
+import { niceStep, tickDecimals, tickDigits, wide, yRange as yRangeOf } from "./plotRange";
 import { create } from "zustand";
 import { Plus, X } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
@@ -168,14 +168,14 @@ function applyZoom(u: uPlot | undefined, logX: boolean) {
 
 /** A y axis's width: 9 characters of its labels (11 px Plex Mono: 6.6 px each) beside its ticks. */
 const Y_AXIS = 80;
-/** An axis's tick labels with the digits its step needs, if all fit in `room` characters; else all
- *  with 3, else without the unit: one label for several ticks rather than a sign cut off or a value
- *  rounded wrong. dB and degrees: decimals, as the step needs (else without the unit). */
+/** An axis's tick labels with the digits its step needs, if all fit in `room` characters; else the
+ *  same without the unit (the trace says it), else 3 digits: one label for several ticks rather
+ *  than a sign cut off or a value rounded wrong. dB and degrees: decimals, as the step needs. */
 const ticks = (v: (number | null)[], incr: number, unit: string, room: number) => {
   const deg = unit === "dB" || unit === "°";
   const tries = deg
-    ? [(y: number) => `${+y.toFixed(tickDecimals(incr))}${unit}`, (y: number) => `${+y.toFixed(tickDecimals(incr))}`]
-    : [(y: number) => si(y, unit, tickDigits(y, incr)), (y: number) => si(y, unit, 3), (y: number) => si(y, "", 3)];
+    ? [(y: number) => `${+y.toFixed(tickDecimals(incr))}${unit}`, (y: number) => `${+y.toFixed(tickDecimals(incr))}`, (y: number) => `${Math.round(y)}`]
+    : [(y: number) => si(y, unit, tickDigits(y, incr)), (y: number) => si(y, "", tickDigits(y, incr)), (y: number) => si(y, unit, 3), (y: number) => si(y, "", 3)];
   for (const [k, f] of tries.entries()) {
     const out = v.map((y) => (y == null ? "" : f(y)));
     if (k === tries.length - 1 || out.every((s) => s.length <= room)) return out;
@@ -349,11 +349,20 @@ export const Waveform = memo(function Waveform() {
       const fixed = ax.lo != null && ax.hi != null && ax.lo < ax.hi && (!logY || ax.lo > 0) ? { range: (): uPlot.Range.MinMax => wide(ax.lo!, ax.hi!) } : {};
       // (a log axis hands the ticks it does not label over as null)
       const values = (unit: string) => (_u: uPlot, v: (number | null)[], _i: number, _s: number, incr: number) => ticks(v, incr, unit, 9);
+      // (x ticks as far apart as their labels are long, a character between them: the step uPlot
+      // takes at 50 px, and the digits it needs; a log axis: its decades, as uPlot spaces them)
+      const xSpace = (_u: uPlot, _i: number, lo: number, hi: number, dim: number) => {
+        if (logX || !(hi > lo) || !(dim > 0)) return 50;
+        const v = Math.max(Math.abs(lo), Math.abs(hi));
+        return Math.max(50, (si(-v, xUnit, tickDigits(v, niceStep(((hi - lo) * 50) / dim))).length + 1) * 6.6);
+      };
       const opts: uPlot.Options = {
         width: size.w, height: h,
         legend: { show: false },
         // dist: a click with 1-2 px of jitter stays a click (places a cursor) instead of a micro-zoom
         // click: no-op so uPlot does not swallow slightly-moved clicks; our handler decides (3 px rule)
+        // (room on the right for a long x label at the edge, 12 characters; the same in every pane)
+        padding: [null, anyTwin ? null : 40, null, null],
         cursor: { sync: { key: "nomospice" }, drag: { x: true, y: false, setScale: true, dist: CLICK_DIST, click: () => {} }, points: { size: 6 } },
         scales: {
           // exactly the data: a log axis would otherwise round up to whole decades (1 MHz data -> 10 MHz)
@@ -362,7 +371,7 @@ export const Waveform = memo(function Waveform() {
           ...(twin ? { y2: rangeOf(spanOf(pane.unit2)) } : {}),
         },
         axes: [
-          { stroke: text, grid: { stroke: grid, width: 1 }, ticks: { stroke: grid, width: 1 }, size: last ? 36 : 8, values: last ? (_u, v, _i, space, incr) => ticks(v, incr, xUnit, Math.floor(space / 6.6)) : () => [], space: (_u, _i, lo, hi, dim) => (tickDigits(Math.max(Math.abs(lo), Math.abs(hi)), ((hi - lo) * 50) / dim) > 3 ? 70 : 50) /* (labels of more digits: ticks further apart) */, font: "11px IBM Plex Mono" },
+          { stroke: text, grid: { stroke: grid, width: 1 }, ticks: { stroke: grid, width: 1 }, size: last ? 36 : 8, values: last ? (_u, v, _i, space, incr) => ticks(v, incr, xUnit, Math.round(space / 6.6) - 1) : () => [], space: xSpace, font: "11px IBM Plex Mono" },
           { stroke: text, grid: { stroke: grid, width: 1 }, ticks: { stroke: grid, width: 1 }, size: Y_AXIS, values: values(pane.unit), font: "11px IBM Plex Mono", label: pane.unit === "" ? "expr" : undefined },
           // the right axis: its traces' own scale, in the color of its trace when it has one
           ...(!twin && anyTwin ? [{ side: 1, size: Y_AXIS, values: () => [], grid: { show: false }, ticks: { show: false }, stroke: "transparent" }] : []),

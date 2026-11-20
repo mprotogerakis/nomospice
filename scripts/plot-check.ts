@@ -1,7 +1,7 @@
 // Self-check of src/plotRange.ts (a plot's y range): node scripts/plot-check.ts (pnpm check runs it)
 // Never two ends uPlot's ticks cannot tell apart: its loop over them would not end.
 import assert from "node:assert/strict";
-import { apart, tickDecimals, tickDigits, wide, yRange } from "../src/plotRange.ts";
+import { apart, niceStep, tickDecimals, tickDigits, wide, yRange } from "../src/plotRange.ts";
 
 for (const v of [-3e5, -1, 1e-6, 0.4345556386526741, 1, 70, 1e5, 1e9]) for (let e = -17; e <= 0; e++) {
   const [lo, hi] = [Math.min(v, v + Math.abs(v) * 10 ** e), Math.max(v, v + Math.abs(v) * 10 ** e)], [a, b] = yRange(lo, hi);
@@ -20,4 +20,6 @@ assert.ok(!apart(70, 70.00000000000001) && !apart(1, 1) && apart(-1, 1));
 // (uPlot's steps: 1, 2, 2.5, 5 × 10^k)
 assert.deepEqual([tickDigits(5.00025, 2.5e-4), tickDigits(5.0005, 5e-4), tickDigits(10.25, 0.25), tickDigits(2.5e-4, 2.5e-4), tickDigits(0, 1), tickDigits(1.2e-3, 2e-4), tickDigits(2.00001e-3, 1e-8), tickDigits(5.000001e-3, 1e-9)], [6, 5, 4, 3, 3, 3, 6, 7], "tick digits: as the step needs, 3 at least");
 assert.deepEqual([2.5, 0.25, 5, 20, 0.5].map(tickDecimals), [1, 2, 0, 0, 1], "dB and degrees: decimals as the step needs");
+assert.deepEqual([4.17e-5, 2.5, 0.3, 1, 7e3].map(niceStep), [5e-5, 2.5, 0.5, 1, 1e4], "uPlot's steps: 1, 2, 2.5, 5 × 10^k");
+assert.equal(tickDigits(1e-3, niceStep(1e-3 * 50 / 1200)), 3, ".tran 1m on 1200 px: 3 digits, ticks 50 px apart");
 console.log("plot-check: ok");

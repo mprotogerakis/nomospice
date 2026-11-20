@@ -38,5 +38,10 @@ const lastPlace = (incr: number) => {
 /** A tick label's significant digits: as many as its step needs, 3 at least. Zoomed in on 5 V, its
  *  ticks read 5.00025 V, 5.0005 V, not 5 V each. */
 export const tickDigits = (v: number, incr: number) => Math.min(12, Math.max(3, Math.floor(Math.log10(Math.abs(v))) - lastPlace(incr) + 1));
+/** The tick step uPlot takes for at least `x`: 1, 2, 2.5 or 5 × 10^k (4.2e-5 → 5e-5). */
+export const niceStep = (x: number) => {
+  const p = 10 ** Math.floor(Math.log10(x));
+  return [1, 2, 2.5, 5, 10].map((m) => m * p).find((s) => s >= x * (1 - 1e-12)) ?? x;
+};
 /** A tick label's decimals (dB, degrees): 2.5 → 1, 0.25 → 2, 20 → 0. */
 export const tickDecimals = (incr: number) => Math.max(0, -lastPlace(incr));
