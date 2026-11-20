@@ -293,7 +293,7 @@ mod tests {
         // reads, written with an Ω the deck's reading drops too), the log without
         let own = asc.replace("QLOCAL", "2N3904");
         let fails = |asc: &str, more: &str| call(&dir, "simulate", &json!({ "asc": format!("{asc}TEXT 0 300 Left 2 !.tran 1m\nTEXT 0 340 Left 2 !XU1 a b nosuchsubckt\n{more}") })).unwrap();
-        for r in [fails(asc, ""), fails(&own, &format!("TEXT 0 380 Left 2 !Ω.inc {}\n", dir.join("q.lib").display()))] {
+        for r in [fails(asc, ""), fails(&own, &format!("TEXT 0 380 Left 2 !Ω.inc {}\n", dir.join("q.lib").display().to_string().replace('\\', "/")))] {
             assert!(r["ok"] == false && r["log"].is_null() && r["warnings"].to_string().contains("log is not passed on"), "{r}");
         }
         for r in [fails(&own, ""), fails(&own, "TEXT 0 380 Left 2 !.lib opamp.sub\n"), fails(&own, "TEXT 0 380 Left 2 !.inc nothere.lib\n")] {
