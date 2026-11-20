@@ -420,7 +420,7 @@ function deckDefs(text: string) {
   let depth = 0;
   // (a line's `;` or `$` comment is not of its body; a statement continued on + lines is one line,
   // comment lines between them skipped, as SPICE does)
-  const kept = text.split("\n").filter((l) => { const t = l.trim().toLowerCase(); depth = Math.max(0, depth + (t.startsWith(".subckt") ? 1 : t.startsWith(".ends") ? -1 : 0)); return depth === 0; }).map((l) => l.split(/;|\/\/|(?<![^\s])\$/)[0]);
+  const kept = text.split("\n").filter((l) => { const t = l.trim().toLowerCase(); depth = Math.max(0, depth + (t.startsWith(".subckt") ? 1 : t.startsWith(".ends") ? -1 : 0)); return depth === 0; }).map((l) => l.split(/;|\/\/|(?:^|\s)\$/)[0]);
   const joined: string[] = [];
   let last = -1;
   for (const l of kept) {
@@ -516,7 +516,7 @@ export function twoPortIn(expr: string, nl: Netlist): string {
   let depth = 0, control = false;
   const logical: [string[], number][] = [];
   for (const raw of lines) {
-    const l = raw.split(/;|\/\/|(?<![^\s])\$/)[0].trim();
+    const l = raw.split(/;|\/\/|(?:^|\s)\$/)[0].trim();
     control = (control || /^\.control\b/i.test(l)) && !/^\.endc\b/i.test(l);
     if (!l || /^[*#]/.test(l) || control || /^\.endc\b/i.test(l)) continue;
     const w = (x: string) => x.split(/[\s=,]+/).filter(Boolean);
